@@ -55,7 +55,7 @@ pub(super) struct SwPart {
 }
 
 /// A Starconflict piece's state.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct StarConflict {
     /// 16ths a bar (the section's usual) and a beat, the meter's name
     pub(super) bar_steps: u32,
@@ -801,6 +801,9 @@ fn sw_sounds(r: &mut Rng, s: &mut Synth, style: u8) {
     s.fx.wind_to = 0.0;
     s.fx.rain_to = 0.0;
     s.m.gain = 1.6;
+    // the highs down: an orchestra in a hall keeps a twentieth of its energy
+    // above 2 kHz, against our brass's and cymbals' tenth
+    s.m.set_tilt(0.0, -4.0);
     s.m.target = 0.2;
 }
 

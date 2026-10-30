@@ -1,14 +1,15 @@
 //! The window: what is playing, a live equalizer of what the speakers play
-//! (LED bars with peak markers over a frequency scale), and the genre
-//! selector, a grid of the genres to write the music and one of the
-//! drummers, with the music's keys as buttons below. Drawn on the CPU into a
-//! small picture that SDL scales up by a whole number.
+//! (LED bars with peak markers over a frequency scale), the transport (stop,
+//! replay, next song) with the songs' length on a slider and in a field to
+//! type it into, and the genre selector, a grid of the genres to write the
+//! music and one of the drummers, with the window's keys as buttons below.
+//! Drawn on the CPU into a small picture that SDL scales up by a whole number.
 
 use crate::font::{self, ADVANCE};
 use crate::sdl::{self, Window};
 use crate::spectrum::{self, Spectrum};
 use crate::tap::{Now, Tap};
-use crate::{Action, State, music};
+use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, clock, music, parse_length, show_length};
 
 const BG: u32 = 0x0E1116;
 const PANEL: u32 = 0x141A21;
@@ -39,6 +40,20 @@ pub struct Gui {
     mouse: Option<(i32, i32)>,
     buttons: Vec<Button>,
     title: usize,
+    /// the length slider's track and the length field, as last drawn (x0, y0, x1, y1)
+    slider: Option<(i32, i32, i32, i32)>,
+    field: Option<(i32, i32, i32, i32)>,
+    /// the slider held, and the length it last set
+    drag: Option<f64>,
+    /// a length being typed into the field (T, or a click on it), the T's
+    /// own text still to come, and a word about the last one typed
+    edit: Option<String>,
+    eat_t: bool,
+    note: Option<(String, std::time::Instant)>,
+}
+
+fn inside(r: Option<(i32, i32, i32, i32)>, (x, y): (i32, i32)) -> bool {
+    r.is_some_and(|(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
 }
 
 impl Gui {
@@ -53,11 +68,50 @@ impl Gui {
             mouse: None,
             buttons: Vec::new(),
             title: usize::MAX,
+            slider: None,
+            field: None,
+            drag: None,
+            edit: None,
+            eat_t: false,
+            note: None,
         })
     }
 
     pub fn fullscreen(&mut self) {
         self.win.toggle_fullscreen();
+    }
+
+    /// The length at `x` on the slider: 0:30 to 10:00, in steps of 15 s.
+    fn slider_length(&self, x: i32) -> f64 {
+        let Some((x0, _, x1, _)) = self.slider else { return 0.0 };
+        let f = ((x - x0) as f64 / (x1 - x0 - 1).max(1) as f64).clamp(0.0, 1.0);
+        ((MIN_LENGTH + f * (SLIDER_LENGTH - MIN_LENGTH)) / 15.0).round() * 15.0
+    }
+
+    /// Where a length sits on the slider.
+    fn slider_x(&self, secs: f64) -> i32 {
+        let Some((x0, _, x1, _)) = self.slider else { return 0 };
+        let f = ((secs - MIN_LENGTH) / (SLIDER_LENGTH - MIN_LENGTH)).clamp(0.0, 1.0);
+        x0 + (f * (x1 - x0 - 1) as f64).round() as i32
+    }
+
+    /// A key while a length is typed: Enter sets it, Esc forgets it.
+    fn edit_key(&mut self, k: i32, v: &mut Vec<Action>) {
+        let Some(text) = &mut self.edit else { return };
+        match k {
+            sdl::K_BACKSPACE => {
+                text.pop();
+            }
+            sdl::K_RETURN | sdl::K_KP_ENTER => {
+                match parse_length(text) {
+                    Some(x) => v.push(Action::SetLength(x)),
+                    None => self.note = Some((format!("NOT A LENGTH: {text}"), std::time::Instant::now())),
+                }
+                self.edit = None;
+            }
+            sdl::K_ESCAPE => self.edit = None,
+            _ => {}
+        }
     }
 
     /// The window's keys and clicks, as actions (its close: `Window`, which closes it).
@@ -69,13 +123,51 @@ impl Gui {
                 sdl::SDL_WINDOWEVENT if e.window_event() == sdl::SDL_WINDOWEVENT_LEAVE => self.mouse = None,
                 sdl::SDL_MOUSEMOTION => {
                     let (x, y) = e.mouse_xy();
-                    self.mouse = Some(self.win.to_picture(x, y));
+                    let (x, y) = self.win.to_picture(x, y);
+                    self.mouse = Some((x, y));
+                    if let Some(was) = self.drag {
+                        let l = self.slider_length(x);
+                        if l != was {
+                            self.drag = Some(l);
+                            v.push(Action::SetLength(l));
+                        }
+                    }
+                }
+                sdl::SDL_MOUSEBUTTONUP => self.drag = None,
+                sdl::SDL_MOUSEWHEEL => {
+                    let over = self.mouse.is_some_and(|m| inside(self.slider, m) || inside(self.field, m));
+                    if over && e.wheel() != 0 {
+                        v.push(Action::Longer(e.wheel().signum()));
+                    }
+                }
+                sdl::SDL_TEXTINPUT => {
+                    let t = e.text();
+                    let eat = std::mem::take(&mut self.eat_t) && t.eq_ignore_ascii_case("t");
+                    if let Some(text) = self.edit.as_mut().filter(|_| !eat) {
+                        for c in t.chars().filter(|c| c.is_ascii_graphic()) {
+                            if text.len() < 12 {
+                                text.push(c);
+                            }
+                        }
+                    }
                 }
                 sdl::SDL_MOUSEBUTTONDOWN => {
                     let (x, y) = e.mouse_xy();
                     let (x, y) = self.win.to_picture(x, y);
                     self.mouse = Some((x, y));
-                    if let Some(b) = self.buttons.iter().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1) {
+                    let left = e.button() == sdl::SDL_BUTTON_LEFT;
+                    // a click anywhere else forgets a length half typed
+                    if !inside(self.field, (x, y)) {
+                        self.edit = None;
+                    }
+                    if left && inside(self.slider, (x, y)) {
+                        let l = self.slider_length(x);
+                        self.drag = Some(l);
+                        v.push(Action::SetLength(l));
+                    } else if left && inside(self.field, (x, y)) {
+                        self.edit.get_or_insert_with(String::new);
+                    } else if let Some(b) = self.buttons.iter().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1)
+                    {
                         match e.button() {
                             sdl::SDL_BUTTON_LEFT => v.push(b.left),
                             sdl::SDL_BUTTON_RIGHT => v.extend(b.right),
@@ -83,6 +175,7 @@ impl Gui {
                         }
                     }
                 }
+                sdl::SDL_KEYDOWN if self.edit.is_some() => self.edit_key(e.key(), &mut v),
                 sdl::SDL_KEYDOWN => {
                     let a = match e.key() {
                         sdl::K_RIGHT => Some(Action::Genre(1)),
@@ -93,6 +186,16 @@ impl Gui {
                         sdl::K_F11 => Some(Action::Fullscreen),
                         k => match u8::try_from(k).map(|c| c as char) {
                             Ok(' ' | '\r' | 'y') => Some(Action::Skip),
+                            Ok('s') => Some(Action::Play),
+                            Ok('r') => Some(Action::Replay),
+                            Ok('x') => Some(Action::Export),
+                            Ok('[') => Some(Action::Longer(-1)),
+                            Ok(']') => Some(Action::Longer(1)),
+                            Ok('t') => {
+                                self.edit = Some(String::new());
+                                self.eat_t = true;
+                                None
+                            }
                             Ok('n' | 'l') => Some(Action::Genre(1)),
                             Ok('p' | 'h') => Some(Action::Genre(-1)),
                             Ok('j') => Some(Action::Drums(1)),
@@ -111,7 +214,7 @@ impl Gui {
         v
     }
 
-    pub fn draw(&mut self, tap: &Tap, now: &Now, st: &State, in_piece: f64) {
+    pub fn draw(&mut self, tap: &Tap, now: &Now, st: &State) {
         let (w, h) = self.win.size();
         let (w, h) = (w as i32, h as i32);
         if (w, h) != (self.w, self.h) {
@@ -146,8 +249,13 @@ impl Gui {
             self.text(x, y, " DRUMS", DIM, big);
         }
         y += 7 * big + 6;
-        let line = match &st.msg {
+        if self.note.as_ref().is_some_and(|n| n.1.elapsed().as_secs() >= 4) {
+            self.note = None;
+        }
+        let msg = st.msg.as_ref().or(self.note.as_ref());
+        let line = match msg {
             Some((msg, _)) => msg.clone(),
+            None if st.note.is_some() => st.note.as_ref().expect("a note").0.to_uppercase(),
             None if now.bpm > 0.0 => {
                 let mut s = format!("SONG {}  /  {}  /  {:.0} BPM", now.piece, now.meter, now.bpm);
                 if !now.key.is_empty() {
@@ -158,11 +266,24 @@ impl Gui {
                 if !now.section.is_empty() {
                     s += &format!("  /  {} {} OF {}", now.section, now.bar.max(1), now.bars);
                 }
-                s + &format!("  /  {}:{:02}", in_piece as u64 / 60, in_piece as u64 % 60)
+                s += &format!("  /  {}", clock(now.elapsed));
+                if now.length > 0.0 {
+                    s += &format!(" OF {}", clock(now.length));
+                }
+                if now.stopped {
+                    s += "  /  STOPPED";
+                }
+                s
             }
             None => "STARTING".into(),
         };
-        let color = if st.msg.is_some() { 0xFF6B5F } else { DIM };
+        let color = if msg.is_some() {
+            0xFF6B5F
+        } else if st.note.is_some() {
+            ACCENT
+        } else {
+            DIM
+        };
         self.text(m, y, &line, color, 1);
         if playing != st.id() {
             let next = format!("NEXT: {}", music::name(st.id()));
@@ -177,9 +298,46 @@ impl Gui {
         let bw = (w - 2 * m - (cols - 1) * gap) / cols;
         let rows = |n: i32| (n + cols - 1) / cols;
         let ng = music::GENRES.len() as i32;
-        let height = 2 * 11 + (rows(ng) + rows(ng + 1)) * (bh + gap) + 6 + bh;
+        let height = (bh + 8) + 2 * 11 + (rows(ng) + rows(ng + 1)) * (bh + gap) + 6 + bh;
         let mut y = h - m - height;
-        let bottom = y - 8;
+        let bottom = y - 6;
+
+        // the transport, and the songs' length
+        let mut x = m;
+        let keys: [(&str, &str, Action); 4] = [
+            ("S", if now.stopped { "START" } else { "STOP" }, Action::Play),
+            ("R", "REPLAY", Action::Replay),
+            ("SPACE", "NEXT SONG", Action::Skip),
+            ("X", "EXPORT MP3", Action::Export),
+        ];
+        for (hint, label, a) in keys {
+            let bw = font::width(hint, 1) + font::width(label, 1) + ADVANCE + 8;
+            self.button(x, y, bw, bh, label, hint, (0x30353F, 0x4A5160), None, a, None);
+            x += bw + 6;
+        }
+        x += 6;
+        x += self.text(x, y + 3, "LENGTH", DIM, 1) + 6;
+        let auto = st.length <= 0.0;
+        let aw = font::width("AUTO", 1) + 8;
+        let fill = if auto { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
+        self.button(x, y, aw, bh, "AUTO", "", fill, None, Action::SetLength(0.0), None);
+        x += aw + 8;
+        let fw = font::width("00:00", 1) + 10;
+        let (sx0, sx1) = (x, (w - m - fw - 8).max(x + 40));
+        self.slider = Some((sx0, y, sx1, y + bh));
+        self.slider_track(st, now, sx0, sx1, y, bh);
+        let fx = sx1 + 8;
+        self.field = Some((fx, y, fx + fw, y + bh));
+        let editing = self.edit.is_some();
+        self.rect(fx, y, fw, bh, if editing { ACCENT } else { 0x30353F });
+        self.rect(fx + 1, y + 1, fw - 2, bh - 2, PANEL);
+        let shown = match &self.edit {
+            Some(t) => format!("{}_", t.to_uppercase()),
+            None => show_length(st.length).to_uppercase(),
+        };
+        let tw = font::width(&shown, 1);
+        self.text(fx + (fw - tw).max(4) / 2, y + 3, &shown, if editing { TEXT } else { ACCENT }, 1);
+        y += bh + 8;
 
         self.text(m, y, "MUSIC BY", DIM, 1);
         self.text(m + 9 * ADVANCE, y, "(RIGHT CLICK: DRUMS BY)", 0x5C6573, 1);
@@ -220,12 +378,8 @@ impl Gui {
         }
         y += rows(ng + 1) * (bh + gap) + 4;
         let mut x = m;
-        let keys: [(&str, &str, Action); 4] = [
-            ("SPACE", "NEXT SONG", Action::Skip),
-            ("F", "FULLSCREEN", Action::Fullscreen),
-            ("ESC", "CLOSE", Action::Window),
-            ("Q", "QUIT", Action::Quit),
-        ];
+        let keys: [(&str, &str, Action); 3] =
+            [("F", "FULLSCREEN", Action::Fullscreen), ("ESC", "CLOSE", Action::Window), ("Q", "QUIT", Action::Quit)];
         for (hint, label, a) in keys {
             let bw = font::width(hint, 1) + font::width(label, 1) + ADVANCE + 8;
             self.button(x, y, bw, bh, label, hint, (0x30353F, 0x4A5160), None, a, None);
@@ -237,6 +391,28 @@ impl Gui {
             self.equalizer(tap, m, top, w - m, bottom);
         }
         self.win.present(&self.px);
+    }
+
+    /// The length slider between x0 and x1: a tick a minute, the length
+    /// asked lit up to its handle; at auto, a hollow mark at the piece's own.
+    fn slider_track(&mut self, st: &State, now: &Now, x0: i32, x1: i32, y: i32, h: i32) {
+        let mid = y + h / 2;
+        self.rect(x0, mid - 1, x1 - x0, 3, LED_OFF);
+        for min in 1..=(SLIDER_LENGTH / 60.0) as i32 {
+            let tx = self.slider_x(min as f64 * 60.0);
+            let tall = if min % 5 == 0 { 4 } else { 2 };
+            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, 0x3A4350);
+        }
+        if st.length > 0.0 {
+            let hx = self.slider_x(st.length);
+            self.rect(x0, mid - 1, hx - x0, 3, ACCENT);
+            let over = self.drag.is_some() || self.mouse.is_some_and(|m| inside(self.slider, m));
+            self.rect(hx - 2, y + 1, 5, h - 2, if over { PEAK } else { TEXT });
+        } else if now.planned > 0.0 {
+            let hx = self.slider_x(now.planned);
+            self.rect(hx - 2, y + 1, 5, h - 2, DIM);
+            self.rect(hx - 1, y + 2, 3, h - 4, PANEL);
+        }
     }
 
     /// The bars between x0 and x1, from y0 down to the frequency scale above y1.

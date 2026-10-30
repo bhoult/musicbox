@@ -18,14 +18,20 @@ const SDL_TEXTUREACCESS_STREAMING: c_int = 1;
 
 pub const SDL_WINDOWEVENT: u32 = 0x200;
 pub const SDL_KEYDOWN: u32 = 0x300;
+pub const SDL_TEXTINPUT: u32 = 0x303;
 pub const SDL_MOUSEMOTION: u32 = 0x400;
 pub const SDL_MOUSEBUTTONDOWN: u32 = 0x401;
+pub const SDL_MOUSEBUTTONUP: u32 = 0x402;
+pub const SDL_MOUSEWHEEL: u32 = 0x403;
 pub const SDL_WINDOWEVENT_LEAVE: u8 = 11;
 pub const SDL_WINDOWEVENT_CLOSE: u8 = 14;
 pub const SDL_BUTTON_LEFT: u8 = 1;
 pub const SDL_BUTTON_RIGHT: u8 = 3;
 
+pub const K_BACKSPACE: i32 = 8;
+pub const K_RETURN: i32 = 13;
 pub const K_ESCAPE: i32 = 27;
+pub const K_KP_ENTER: i32 = 0x4000_0058;
 pub const K_RIGHT: i32 = 0x4000_004F;
 pub const K_LEFT: i32 = 0x4000_0050;
 pub const K_DOWN: i32 = 0x4000_0051;
@@ -64,6 +70,16 @@ impl Event {
     /// SDL_MOUSEBUTTONDOWN: which button (1 left, 3 right)
     pub fn button(&self) -> u8 {
         self.raw[16 - 4]
+    }
+    /// SDL_MOUSEWHEEL: the scroll, positive away from the user
+    pub fn wheel(&self) -> i32 {
+        self.i32_at(20)
+    }
+    /// SDL_TEXTINPUT: the text typed (UTF-8)
+    pub fn text(&self) -> String {
+        let t = &self.raw[12 - 4..12 - 4 + 32];
+        let n = t.iter().position(|&c| c == 0).unwrap_or(t.len());
+        String::from_utf8_lossy(&t[..n]).into_owned()
     }
 }
 

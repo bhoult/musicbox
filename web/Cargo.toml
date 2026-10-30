@@ -1,0 +1,17 @@
+[package]
+name = "musicbox-web"
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "musicbox in the browser: the composer and synthesiser as WebAssembly"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

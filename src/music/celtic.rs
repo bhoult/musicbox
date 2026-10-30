@@ -141,7 +141,7 @@ struct CSec {
 }
 
 /// A Celtic piece's state.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Celtic {
     pub(super) bar_steps: u32,
     pub(super) beat_steps: u32,

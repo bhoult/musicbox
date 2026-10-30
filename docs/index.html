@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>musicbox</title>
+<meta name="description" content="Music made up as it plays, without end, in twelve genres and any pair of them: musicbox's composer and synthesiser in the browser.">
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #141a21;
+    --text: #ebeef5;
+    --dim: #8c96a5;
+    --faint: #5c6573;
+    --accent: #5fd3c6;
+    --amber: #f2b544;
+    --button: #30353f;
+    --button-hover: #4a5160;
+    --lit: #2a5fc1;
+    --lit-hover: #3f78e0;
+    --drum: #8a5a12;
+    --drum-hover: #a8701c;
+    --red: #ff6b5f;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 16px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: 3px; color: var(--accent); text-transform: uppercase; }
+  header .right { color: var(--dim); font-size: 13px; }
+  a { color: var(--accent); }
+  .playing { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; margin: 6px 0 2px; min-height: 1.4em; }
+  .playing .drums { color: var(--amber); }
+  .playing .and { color: var(--dim); }
+  .line { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; min-height: 1.4em; }
+  .line.note { color: var(--accent); }
+  .line.error { color: var(--red); }
+  canvas { display: block; width: 100%; height: 240px; background: var(--panel); margin: 10px 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+  button {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--button);
+    border: 0; padding: 5px 10px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+  }
+  button:hover { background: var(--button-hover); }
+  button .key { color: #9aa6b8; margin-right: 6px; }
+  button.lit { background: var(--lit); }
+  button.lit:hover { background: var(--lit-hover); }
+  button.drum { background: var(--drum); }
+  button.drum:hover { background: var(--drum-hover); }
+  button.mark { box-shadow: inset 0 -2px 0 var(--amber); }
+  button.off { background: #1c2027; color: var(--faint); }
+  .length { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: 260px; }
+  .length label { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
+  input[type=text] {
+    width: 74px; font: inherit; color: var(--accent); background: var(--panel);
+    border: 1px solid var(--button); padding: 4px 6px; text-transform: uppercase;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); color: var(--text); }
+  h2 { font-size: 13px; font-weight: normal; color: var(--dim); margin: 14px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
+  h2 span { color: var(--faint); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; }
+  .grid button { padding: 6px 4px; }
+  footer { color: var(--faint); margin-top: 22px; font-size: 13px; }
+  footer p { margin: 6px 0; }
+  #start {
+    position: fixed; inset: 0; background: rgba(14, 17, 22, 0.94);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  #start .box { max-width: 520px; text-align: center; }
+  #start p { color: var(--dim); }
+  #start button { font-size: 20px; padding: 12px 28px; margin-top: 12px; background: var(--lit); }
+  #start button:hover { background: var(--lit-hover); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>musicbox</h1>
+    <div class="right"><span id="seed"></span> · <a href="https://github.com/bhoult/musicbox">source and desktop app</a></div>
+  </header>
+  <div class="playing" id="playing"></div>
+  <div class="line" id="line">starting</div>
+  <canvas id="eq" aria-label="Equalizer: what the speakers are playing, 35 Hz to 16 kHz"></canvas>
+  <div class="row">
+    <button id="play"><span class="key">S</span><span>stop</span></button>
+    <button id="replay"><span class="key">R</span>replay</button>
+    <button id="skip"><span class="key">space</span>next song</button>
+    <button id="export"><span class="key">X</span>export wav</button>
+    <div class="length">
+      <label for="slider">length</label>
+      <button id="auto" class="lit">auto</button>
+      <input type="range" id="slider" min="30" max="600" step="15" value="180" aria-label="Song length">
+      <input type="text" id="typed" value="auto" aria-label="Song length, typed (3:30, 3.5m, 210s or auto)" title="3:30, 3.5m, 210s or auto; Enter sets it">
+    </div>
+  </div>
+  <h2>music by <span>(right click: drums by)</span></h2>
+  <div class="grid" id="genres"></div>
+  <h2>drums by</h2>
+  <div class="grid" id="drummers"></div>
+  <footer>
+    <p>Music made up as it plays, without end, in twelve genres and any pair of them. No AI model makes the sound and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, and a small synthesiser plays it, here as WebAssembly. The desktop app also plays recorded instruments and saves MP3s.</p>
+    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, S stop/start, R replay, [ ] length, T type a length, X export. GPL-3.0.</p>
+  </footer>
+</main>
+<div id="start">
+  <div class="box">
+    <h1>musicbox</h1>
+    <p>Endless music in twelve genres, made up as it plays.</p>
+    <button id="go">▶ play</button>
+  </div>
+</div>
+<script src="app/app.js"></script>
+</body>
+</html>

@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::spectrum::Spectrum;
 use crate::tap::{Now, Tap};
-use crate::{Action, State, music};
+use crate::{Action, State, clock, music, parse_length, show_length};
 
 /// glibc's struct termios on Linux.
 #[repr(C)]
@@ -62,7 +62,10 @@ fn restore() {
 }
 
 pub struct Term {
-    keys: Receiver<Action>,
+    keys: Receiver<Vec<u8>>,
+    /// a length being typed (T), and a word about the last one typed
+    edit: Option<String>,
+    note: Option<(String, Instant)>,
     /// lines drawn last time (the cursor is on the last of them)
     drawn: usize,
     spec: Spectrum,
@@ -96,32 +99,72 @@ impl Term {
             let mut buf = [0u8; 64];
             let mut stdin = std::io::stdin();
             while let Ok(n) = stdin.read(&mut buf) {
-                if n == 0 {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
                     break;
-                }
-                for a in parse_keys(&buf[..n]) {
-                    if tx.send(a).is_err() {
-                        return;
-                    }
                 }
             }
         });
         print!("\x1b[?25l");
-        Some(Term { keys, drawn: 0, spec: Spectrum::new(48000), last: None })
+        Some(Term { keys, edit: None, note: None, drawn: 0, spec: Spectrum::new(48000), last: None })
     }
 
+    /// The keys pressed since last time, as actions; T, and what follows up
+    /// to Enter (or Esc), a length typed.
     pub fn keys(&mut self) -> Vec<Action> {
-        self.keys.try_iter().collect()
+        let b: Vec<u8> = self.keys.try_iter().flatten().collect();
+        let mut v = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            let Some(text) = &mut self.edit else {
+                if matches!(b[i], b't' | b'T') {
+                    self.edit = Some(String::new());
+                    i += 1;
+                } else {
+                    let (a, used) = parse_key(&b[i..]);
+                    v.extend(a);
+                    i += used;
+                }
+                continue;
+            };
+            match b[i] {
+                b'\r' | b'\n' => {
+                    match parse_length(text) {
+                        Some(x) => v.push(Action::SetLength(x)),
+                        None => self.note = Some((format!("not a length: {text}"), Instant::now())),
+                    }
+                    self.edit = None;
+                }
+                // Esc cancels; an arrow's sequence is let by
+                0x1b => {
+                    if b.get(i + 1).is_some_and(|&c| c == b'[' || c == b'O') {
+                        i += 2;
+                    } else {
+                        self.edit = None;
+                    }
+                }
+                0x7f | 0x08 => {
+                    text.pop();
+                }
+                c if c.is_ascii_graphic() && text.len() < 12 => text.push(c as char),
+                _ => {}
+            }
+            i += 1;
+        }
+        v
     }
 
     /// Redraws the lines: at once when they change, at most 30 times a second
     /// while the equalizer moves, else twice a second.
-    pub fn draw(&mut self, tap: &Tap, now: &Now, st: &State, in_piece: f64, window: bool) {
+    pub fn draw(&mut self, tap: &Tap, now: &Now, st: &State, window: bool) {
         let cols = cols().saturating_sub(1).max(20);
         let mut lines: Vec<Line> = Vec::new();
 
         let mut l = Line::new(cols);
-        l.push("♪ ", "36");
+        if !now.stopped {
+            l.push("♪ ", "36")
+        } else {
+            l.push("■ ", "33")
+        }
         l.push("musicbox  ", "1");
         let playing = if now.bpm > 0.0 { now.id } else { st.id() };
         let (p, d) = music::parts(playing);
@@ -140,15 +183,32 @@ impl Term {
         l.right(&right, "2");
         lines.push(l);
 
+        if self.note.as_ref().is_some_and(|n| n.1.elapsed().as_secs() >= 4) {
+            self.note = None;
+        }
         let mut l = Line::new(cols);
         l.push("  ", "");
-        match &st.msg {
-            Some((m, _)) => l.push(m, "31"),
-            None if now.bpm > 0.0 => {
-                l.push(&describe_piece(now), "");
-                l.push(&format!(" · {}:{:02}", in_piece as u64 / 60, in_piece as u64 % 60), "2");
+        match (&self.edit, &st.msg, &self.note) {
+            (Some(text), _, _) => {
+                l.push("length: ", "1");
+                l.push(text, "1;36");
+                l.push("▏", "36");
+                l.push("   3:30, 3.5m, 210s or auto · enter sets it, esc cancels", "2");
             }
-            None => l.push("starting", "2"),
+            (_, Some((m, _)), _) | (_, _, Some((m, _))) => l.push(m, "31"),
+            _ if st.note.is_some() => l.push(&st.note.as_ref().expect("a note").0, "36"),
+            _ if now.bpm > 0.0 => {
+                l.push(&describe_piece(now), "");
+                let mut t = format!(" · {}", clock(now.elapsed));
+                if now.length > 0.0 {
+                    t += &format!(" / {}", clock(now.length));
+                }
+                l.push(&t, "2");
+                if now.stopped {
+                    l.push(" · stopped", "1;33");
+                }
+            }
+            _ => l.push("starting", "2"),
         }
         lines.push(l);
 
@@ -204,9 +264,15 @@ impl Term {
         }
 
         let mut l = Line::new(cols);
-        l.push("  ←/→ genre  ↑/↓ drums  space next song  e equalizer  ", "2");
-        l.push(if window { "g close window  " } else { "g window  " }, "2");
-        l.push("q quit", "2");
+        l.push("  ←/→ genre  ↑/↓ drums  space next song  ", "2");
+        l.push(if !now.stopped { "s stop  " } else { "s start  " }, "2");
+        l.push("r replay  x export mp3  q quit", "2");
+        lines.push(l);
+        let mut l = Line::new(cols);
+        l.push("  [ ] length ", "2");
+        l.push(&show_length(st.length), "36");
+        l.push("  t type a length  e equalizer  ", "2");
+        l.push(if window { "g close window" } else { "g window" }, "2");
         lines.push(l);
 
         let text: String = lines.iter().map(|l| l.out.as_str()).collect::<Vec<_>>().join("\n");
@@ -291,37 +357,47 @@ fn cols() -> usize {
     if ok && w.cols > 0 { w.cols as usize } else { 80 }
 }
 
-/// Keys as they come from a terminal: arrows as escape sequences, a lone
-/// escape as itself.
+/// The key at the start of `b` as it comes from a terminal (arrows as
+/// escape sequences, a lone escape as itself), and the bytes it took.
+fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
+    let a = match b[0] {
+        0x1b if b.get(1).is_some_and(|&c| c == b'[' || c == b'O') => {
+            let a = match b.get(2) {
+                Some(b'C') => Some(Action::Genre(1)),
+                Some(b'D') => Some(Action::Genre(-1)),
+                Some(b'A') => Some(Action::Drums(1)),
+                Some(b'B') => Some(Action::Drums(-1)),
+                _ => None,
+            };
+            return (a, 3.min(b.len()));
+        }
+        0x1b => Some(Action::Quit),
+        b'q' | b'Q' => Some(Action::Quit),
+        b' ' | b'\n' | b'\r' | b'y' | b'Y' => Some(Action::Skip),
+        b'n' | b'l' => Some(Action::Genre(1)),
+        b'N' | b'p' | b'h' => Some(Action::Genre(-1)),
+        b'j' => Some(Action::Drums(1)),
+        b'J' => Some(Action::Drums(-1)),
+        b's' | b'S' => Some(Action::Play),
+        b'r' | b'R' => Some(Action::Replay),
+        b'x' | b'X' => Some(Action::Export),
+        b'[' => Some(Action::Longer(-1)),
+        b']' => Some(Action::Longer(1)),
+        b'e' | b'E' => Some(Action::Eq),
+        b'g' | b'G' => Some(Action::Window),
+        _ => None,
+    };
+    (a, 1)
+}
+
+#[cfg(test)]
 fn parse_keys(b: &[u8]) -> Vec<Action> {
     let mut v = Vec::new();
     let mut i = 0;
     while i < b.len() {
-        let a = match b[i] {
-            0x1b if b.get(i + 1).is_some_and(|&c| c == b'[' || c == b'O') => {
-                let k = b.get(i + 2).copied();
-                i += 2;
-                match k {
-                    Some(b'C') => Some(Action::Genre(1)),
-                    Some(b'D') => Some(Action::Genre(-1)),
-                    Some(b'A') => Some(Action::Drums(1)),
-                    Some(b'B') => Some(Action::Drums(-1)),
-                    _ => None,
-                }
-            }
-            0x1b => Some(Action::Quit),
-            b'q' | b'Q' => Some(Action::Quit),
-            b' ' | b'\n' | b'\r' | b'y' | b'Y' => Some(Action::Skip),
-            b'n' | b'l' => Some(Action::Genre(1)),
-            b'N' | b'p' | b'h' => Some(Action::Genre(-1)),
-            b'j' => Some(Action::Drums(1)),
-            b'J' => Some(Action::Drums(-1)),
-            b'e' | b'E' => Some(Action::Eq),
-            b'g' | b'G' => Some(Action::Window),
-            _ => None,
-        };
+        let (a, used) = parse_key(&b[i..]);
         v.extend(a);
-        i += 1;
+        i += used;
     }
     v
 }
@@ -360,6 +436,7 @@ mod tests {
         assert_eq!(parse_keys(b"\x1b"), vec![Action::Quit]);
         assert_eq!(parse_keys(b"\x1bOA"), vec![Action::Drums(1)]);
         assert_eq!(parse_keys(b"eg"), vec![Action::Eq, Action::Window]);
+        assert_eq!(parse_keys(b"sr[]"), vec![Action::Play, Action::Replay, Action::Longer(-1), Action::Longer(1)]);
     }
 
     #[test]

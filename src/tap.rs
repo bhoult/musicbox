@@ -26,6 +26,19 @@ pub struct Now {
     pub section: &'static str,
     pub bar: u32,
     pub bars: u32,
+    /// stopped (else playing)
+    pub stopped: bool,
+    /// seconds into the piece, the length asked of each piece (0: its own),
+    /// and the piece's own, as planned
+    pub elapsed: f64,
+    pub length: f64,
+    pub planned: f64,
+    /// the seed of the engine playing, and which of its pieces this is (as
+    /// `--export` takes them: the browser's export)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub seed: u64,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub song: usize,
 }
 
 pub struct Tap {
@@ -81,11 +94,6 @@ impl Tap {
         let since = (self.base.elapsed().as_nanos() as u64).saturating_sub(self.stamp.load(Ordering::Relaxed));
         let ahead = (since as f64 * 1e-9 * self.rate as f64) as u64;
         (w + ahead.min(self.latency)).saturating_sub(self.latency)
-    }
-
-    /// Seconds of music played.
-    pub fn seconds(&self) -> f64 {
-        self.playing() as f64 / self.rate as f64
     }
 
     /// The `out.len()` frames up to the one playing, mixed to mono (zeros

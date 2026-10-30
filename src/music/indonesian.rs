@@ -125,7 +125,7 @@ struct ISec {
 }
 
 /// An Indonesian piece's state.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Indonesian {
     pub(super) bar_steps: u32,
     pub(super) beat_steps: u32,
@@ -1752,5 +1752,8 @@ fn sounds_gamelan(r: &mut Rng, s: &mut Synth, style: u8) {
     s.fx.wind_to = 0.0;
     s.fx.rain_to = 0.0;
     s.m.gain = 2.0;
+    // darker, fuller below: gamelan's records keep under a twentieth of
+    // their energy above 2 kHz (the bronze's ring is low and long)
+    s.m.set_tilt(3.0, -6.0);
     s.m.target = 0.22;
 }

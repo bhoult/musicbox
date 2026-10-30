@@ -21,12 +21,15 @@
 
 use std::collections::VecDeque;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::clock;
+use crate::mp3;
 use crate::samples::{self, Bank, SAMPLER, Sampler};
 use crate::tap::{Now, Tap};
 
@@ -69,9 +72,13 @@ const ALIASES: &[(&str, &str)] = &[
 const NG: usize = GENRES.len();
 
 // the later genres, each in a file of its own (src/music/)
+#[path = "music/celtic.rs"]
 mod celtic;
+#[path = "music/indonesian.rs"]
 mod indonesian;
+#[path = "music/starconflict.rs"]
 mod starconflict;
+#[path = "music/western.rs"]
 mod western;
 use celtic::*;
 use indonesian::*;
@@ -1225,12 +1232,14 @@ impl Drum {
 
 // ---------------------------------------------------------------- effects
 
+#[derive(Clone)]
 struct Comb {
     b: Vec<f32>,
     i: usize,
     z: f32,
 }
 
+#[derive(Clone)]
 struct Allpass {
     b: Vec<f32>,
     i: usize,
@@ -1238,6 +1247,7 @@ struct Allpass {
 
 /// Freeverb (Jezar's): eight damped combs and four allpasses a side, its
 /// lengths scaled from 44.1 to 48 kHz and by `size`.
+#[derive(Clone)]
 struct Reverb {
     cl: Vec<Comb>,
     cr: Vec<Comb>,
@@ -1307,6 +1317,7 @@ const DLEN: usize = 1 << 17;
 /// A ping-pong delay (in on the left, crossing sides each repeat) with a
 /// band-pass in the loop so repeats darken and thin; its time glides to a new
 /// tempo rather than jumping.
+#[derive(Clone)]
 struct Delay {
     l: Vec<f32>,
     r: Vec<f32>,
@@ -1362,6 +1373,7 @@ const LOOK: usize = 48;
 /// A lookahead peak limiter: the gain each sample needs, its minimum over the
 /// next millisecond, a release, then a millisecond's moving average, applied
 /// to the signal delayed a millisecond (so it is down before any peak arrives).
+#[derive(Clone)]
 struct Limiter {
     ceil: f32,
     dl: [[f32; 2]; LOOK],
@@ -1416,6 +1428,7 @@ impl Limiter {
 /// The master: an optional low-pass and tape wow (lo-fi), gain, a slow
 /// leveller (half the way to the target loudness, within ±6 dB), a DC
 /// blocker, a soft knee and the limiter.
+#[derive(Clone)]
 struct Master {
     gain: f32,
     target: f32,
@@ -1438,7 +1451,17 @@ struct Master {
     lk: f32,
     lmax: f32,
     lim: Limiter,
+    /// a tilt: shelves below 250 Hz and above 2.5 kHz (linear gains; 1: flat),
+    /// one-pole each, and their filters' state (left, right)
+    lo_g: f32,
+    hi_g: f32,
+    lo_z: [f32; 2],
+    hi_z: [f32; 2],
 }
+
+/// The tilt's shelves' corners' one-pole coefficients (250 Hz, 2.5 kHz).
+const TILT_LO: f32 = 1.0 - 0.96780;
+const TILT_HI: f32 = 1.0 - 0.72093;
 
 impl Master {
     fn new() -> Master {
@@ -1460,7 +1483,19 @@ impl Master {
             lk: 0.5,
             lmax: 2.0,
             lim: Limiter::new(0.89),
+            lo_g: 1.0,
+            hi_g: 1.0,
+            lo_z: [0.0; 2],
+            hi_z: [0.0; 2],
         }
+    }
+
+    /// The tilt: the lows (below 250 Hz) and highs (above 2.5 kHz) up or
+    /// down (dB), the leveller keeping the loudness. A genre's balance of
+    /// low, middle and high against its records' (tools/validate).
+    fn set_tilt(&mut self, lo_db: f32, hi_db: f32) {
+        self.lo_g = 10f32.powf(lo_db / 20.0);
+        self.hi_g = 10f32.powf(hi_db / 20.0);
     }
 
     fn set_lp(&mut self, hz: f32) {
@@ -1475,6 +1510,15 @@ impl Master {
         if self.lp < 19000.0 {
             l = self.f[0].lp(l);
             r = self.f[1].lp(r);
+        }
+        if self.lo_g != 1.0 || self.hi_g != 1.0 {
+            let mut shelf = |x: f32, k: usize| {
+                self.lo_z[k] += (x - self.lo_z[k]) * TILT_LO;
+                self.hi_z[k] += (x - self.hi_z[k]) * TILT_HI;
+                x + (self.lo_g - 1.0) * self.lo_z[k] + (self.hi_g - 1.0) * (x - self.hi_z[k])
+            };
+            l = shelf(l, 0);
+            r = shelf(r, 1);
         }
         if self.wow_to > 0.0 || self.wow > 0.0 {
             self.wow += (self.wow_to - self.wow) * 2e-5;
@@ -1517,6 +1561,7 @@ impl Master {
 
 /// Noise textures: a riser (noise swept up a band-pass), wind (pinkish noise
 /// through a wandering band-pass), vinyl crackle and hiss.
+#[derive(Clone)]
 struct Fx {
     riser_left: u32,
     riser_len: u32,
@@ -1700,6 +1745,7 @@ enum Ev {
     },
 }
 
+#[derive(Clone)]
 struct Channel {
     patch: Patch,
     voices: Vec<Voice>,
@@ -1736,7 +1782,20 @@ struct Channel {
     /// the round robin the next sampled note (0) or hit (by its kind)
     /// takes: each cycles in order (a shaker's strokes down and up)
     rr: [u32; 8],
+    /// a chorus's level (0: none): two delayed copies, their delays swung
+    /// half a cycle apart, one to each side (an 80s polysynth's, a Juno's);
+    /// its line (made when first wanted), where it writes, the swing's phase
+    chorus: f32,
+    cline: Vec<f32>,
+    cw: usize,
+    cph: f32,
 }
+
+/// The chorus's line (21 ms), its delay and swing (s), and the swing's rate (Hz).
+const CHORUS_LEN: usize = 1024;
+const CHORUS_DELAY: f32 = 0.007;
+const CHORUS_DEPTH: f32 = 0.0025;
+const CHORUS_RATE: f32 = 0.6;
 
 impl Channel {
     fn new(voices: usize, drums: usize) -> Channel {
@@ -1767,6 +1826,10 @@ impl Channel {
             width: 1.0,
             buf: [[0.0; 2]; BLOCK],
             rr: [0; 8],
+            chorus: 0.0,
+            cline: Vec::new(),
+            cw: 0,
+            cph: 0.0,
         }
     }
 
@@ -1850,6 +1913,29 @@ impl Channel {
                 *o = [m + d, m - d];
             }
         }
+        if self.chorus > 0.0 {
+            if self.cline.is_empty() {
+                self.cline = vec![0.0; CHORUS_LEN];
+            }
+            let tap = |line: &[f32], w: usize, secs: f32| {
+                let back = secs * SR;
+                let i = back as usize;
+                let fr = back - i as f32;
+                let a = line[(w + CHORUS_LEN - i) % CHORUS_LEN];
+                let b = line[(w + CHORUS_LEN - i - 1) % CHORUS_LEN];
+                a + (b - a) * fr
+            };
+            // the dry a little down, so it is no louder for the copies
+            let dry = 1.0 / (1.0 + 0.5 * self.chorus);
+            for o in self.buf[..n].iter_mut() {
+                self.cline[self.cw] = 0.5 * (o[0] + o[1]);
+                self.cph = wrap(self.cph + CHORUS_RATE / SR);
+                let l = tap(&self.cline, self.cw, CHORUS_DELAY + CHORUS_DEPTH * sin01(self.cph));
+                let r = tap(&self.cline, self.cw, CHORUS_DELAY + CHORUS_DEPTH * sin01(self.cph + 0.5));
+                *o = [(o[0] + self.chorus * l) * dry, (o[1] + self.chorus * r) * dry];
+                self.cw = (self.cw + 1) % CHORUS_LEN;
+            }
+        }
         self.gain_s += (self.gain - self.gain_s) * 0.05;
         let mut g = self.gain_s;
         if self.swell_s > 1e-4 {
@@ -1876,6 +1962,7 @@ const R2_OFF: u8 = 0;
 const R2_GATE: u8 = 1;
 const R2_RUMBLE: u8 = 2;
 
+#[derive(Clone)]
 struct Synth {
     ch: Vec<Channel>,
     rev: Reverb,
@@ -1898,6 +1985,9 @@ struct Synth {
     fx: Fx,
     m: Master,
     noise: Noise,
+    /// the channels heard (bit k: channel k; 0: all): `MUSICBOX_SOLO`, for
+    /// tools/validate to hear an instrument alone
+    solo: u32,
     dry: [[f32; 2]; BLOCK],
     rs: [f32; BLOCK],
     ds: [f32; BLOCK],
@@ -1905,7 +1995,45 @@ struct Synth {
     scb: [f32; BLOCK],
 }
 
+/// `MUSICBOX_SOLO`'s channels (names, comma-separated: kick, snare, hat,
+/// perc, cym, bass, pad, arp, lead, bell, keys, drone, fx) as a mask; 0
+/// (all heard) when it is unset.
+fn solo_mask() -> u32 {
+    const NAMES: [&str; NCH] =
+        ["kick", "snare", "hat", "perc", "cym", "bass", "pad", "arp", "lead", "bell", "keys", "drone", "fx"];
+    let Ok(v) = std::env::var("MUSICBOX_SOLO") else { return 0 };
+    v.split(',').filter_map(|n| NAMES.iter().position(|&x| x == n.trim())).fold(0, |m, k| m | 1 << k)
+}
+
 impl Synth {
+    /// Silences whatever rings (the voices, the drums, the reverbs' and the
+    /// delay's tails), the settings kept: a piece to start on its own.
+    fn hush(&mut self) {
+        for c in &mut self.ch {
+            for v in &mut c.voices {
+                v.on = false;
+                v.amp.stage = IDLE;
+                v.amp.level = 0.0;
+            }
+            for d in &mut c.dv {
+                d.on = false;
+            }
+        }
+        for r in [&mut self.rev, &mut self.rev2] {
+            for c in r.cl.iter_mut().chain(r.cr.iter_mut()) {
+                c.b.fill(0.0);
+                c.z = 0.0;
+            }
+            for a in r.al.iter_mut().chain(r.ar.iter_mut()) {
+                a.b.fill(0.0);
+            }
+        }
+        self.dly.l.fill(0.0);
+        self.dly.r.fill(0.0);
+        self.dly.lz = [0.0; 2];
+        self.dly.hz = [0.0; 2];
+    }
+
     fn new(genre: usize) -> Synth {
         // voices per channel (tonal, drums)
         const POOL: [(usize, usize); NCH] =
@@ -1954,6 +2082,7 @@ impl Synth {
             fx: Fx::new(),
             m: Master::new(),
             noise: Noise(0x9E37_79B9),
+            solo: solo_mask(),
             dry: [[0.0; 2]; BLOCK],
             rs: [0.0; BLOCK],
             ds: [0.0; BLOCK],
@@ -2019,14 +2148,14 @@ impl Synth {
         self.rs[..n].fill(0.0);
         self.ds[..n].fill(0.0);
         self.r2s[..n].fill(0.0);
-        let Synth { ch, fx, dry, rs, ds, r2s, scb, .. } = self;
+        let Synth { ch, fx, dry, rs, ds, r2s, scb, solo, .. } = self;
         let bank = samples::bank();
         for (ci, c) in ch.iter_mut().enumerate() {
             let mut any = c.render(n, bank);
             if ci == CH_FX {
                 any |= fx.render(&mut c.buf[..n]);
             }
-            if any {
+            if any && (*solo == 0 || *solo >> ci & 1 == 1) {
                 c.mix(n, &scb[..n], &mut dry[..n], &mut rs[..n], &mut ds[..n], &mut r2s[..n]);
             }
         }
@@ -2634,6 +2763,7 @@ const END_MIN_PIECE: f64 = 45.0;
 /// The last bar's tempo at most this much slower (an ending's ritardando).
 const RIT_MAX: f64 = 0.35;
 
+#[derive(Clone)]
 struct Song {
     genre: usize,
     rng: Rng,
@@ -2718,6 +2848,11 @@ struct Song {
     wn: Western,
     /// where the music is to end (`--ending natural`), else None: it goes on
     end: Option<End>,
+    /// how long each piece is to be (seconds; 0: as long as it was written),
+    /// where this one began (samples), and a piece just begun
+    length: f64,
+    piece_t0: f64,
+    fresh: bool,
     /// a mix's drummer (the genre `genre` writes for), a synthesiser its
     /// drums are made on, and its patterns
     guest: Option<usize>,
@@ -2795,6 +2930,9 @@ impl Song {
             ce: Celtic::default(),
             wn: Western::default(),
             end: None,
+            length: 0.0,
+            piece_t0: 0.0,
+            fresh: false,
             guest,
             scratch: guest.map(|g| Box::new(Synth::new(g))),
             dr: Drummer::default(),
@@ -3003,6 +3141,13 @@ impl Song {
             }
             self.section_start(s);
         }
+        if self.fresh {
+            self.fresh = false;
+            self.piece_t0 = t0;
+        }
+        if self.length > 0.0 && self.end.is_none_or(|e| !e.last) {
+            self.steer_length(s, t0);
+        }
         if self.end.is_some() {
             self.steer_end(s, t0);
         }
@@ -3161,8 +3306,64 @@ impl Song {
         self.steer_end(s, t0);
     }
 
+    /// Whether the next bar begins a new piece.
+    fn piece_over(&self) -> bool {
+        self.sec_bar >= self.plan[self.sec].bars && self.sec + 1 >= self.plan.len()
+    }
+
+    /// At a bar's start, with a length asked of each piece: as `steer_end`
+    /// turns the music to its end, whether to turn to the outro (the piece
+    /// would run long) or back to a main section (it would end short). The
+    /// piece plays its intro and four bars of its first main section first,
+    /// and ends as it always does, the next following.
+    fn steer_length(&mut self, s: &mut Synth, t0: f64) {
+        let last = self.plan.len() - 1;
+        let Some(first) = self.plan.iter().position(|x| x.kind == MAIN) else { return };
+        let sec = self.plan[self.sec];
+        let inner = matches!(sec.kind, MAIN | BREAK);
+        if self.sec < first || (self.sec == first && self.sec_bar < 4) {
+            return;
+        }
+        if self.sec_bar != 0 && !(self.sec_bar.is_multiple_of(2) && inner) {
+            return;
+        }
+        let at = self.piece_t0 + self.length * SR as f64;
+        let bar = self.bar_steps() as f64 * self.step_len();
+        // (as in `steer_end`: star wars's and western's last bar long)
+        let extra = if matches!(self.genre, STARCONFLICT | WESTERN) { 1.0 } else { 0.0 };
+        let outro = (self.plan[last].bars as f64 + extra) * bar;
+        if self.sec == last {
+            // the outro come too early: back to the earliest main section
+            // whose sections up to the outro fit what is left, else the last
+            let left = at - (t0 + outro);
+            if left <= 2.0 * bar {
+                return;
+            }
+            let span = |k: usize| self.plan[k..last].iter().map(|x| x.bars as f64).sum::<f64>() * bar;
+            let mains: Vec<usize> = (first..last).filter(|&k| self.plan[k].kind == MAIN).collect();
+            if let Some(&m) = mains.iter().find(|&&k| span(k) <= left).or(mains.last()) {
+                self.sec = m;
+                self.sec_bar = 0;
+                self.section_start(s);
+            }
+            return;
+        }
+        // on to the next turn while the outro after it still ends in time,
+        // or ends nearer the mark than turning now would
+        let rest = (sec.bars - self.sec_bar) as f64 * bar;
+        let next = if inner { rest.min(2.0 * bar) } else { rest };
+        let (late, early) = (t0 + next + outro - at, at - (t0 + outro));
+        if late <= 0.0 || late < early {
+            return;
+        }
+        self.sec = last;
+        self.sec_bar = 0;
+        self.section_start(s);
+    }
+
     fn new_piece(&mut self, s: &mut Synth) {
         self.piece += 1;
+        self.fresh = true;
         let r = &mut self.rng;
         // the key: at first anywhere, then usually a neighbour on the circle of fifths
         self.root = if self.piece == 1 {
@@ -3173,7 +3374,8 @@ impl Song {
         let w: [f32; 7] = match self.genre {
             AMBIENT => [2.0, 2.0, 0.0, 3.0, 1.0, 2.0, 0.0],
             TECHNO => [0.0, 2.0, 2.0, 0.0, 0.0, 3.0, 0.5],
-            SYNTHWAVE => [1.5, 2.0, 0.0, 0.0, 0.0, 5.0, 1.5],
+            // (major about as often as minor, as synthwave's records are)
+            SYNTHWAVE => [3.5, 1.5, 0.0, 0.5, 0.5, 3.5, 0.5],
             LOFI => [3.0, 3.0, 0.0, 0.5, 1.0, 1.0, 0.0],
             TAVERN => [2.0, 3.0, 0.0, 0.0, 3.0, 2.0, 0.0],
             SKA => [5.0, 1.0, 0.0, 0.0, 1.5, 1.5, 0.5],
@@ -4516,16 +4718,19 @@ impl Song {
             b.note(0.0, 0.0, CH_ARP, t - 8, 0.85, 4.0, false);
             return;
         }
-        // the beats and the off-beats
-        b.hit(0.0, 0.0, CH_KICK, 0, 0.8 + 0.15 * e);
-        b.hit(4.0, 0.0, CH_KICK, 0, 0.7 + 0.15 * e);
-        let roll = last && self.rng.chance(0.75);
+        // the beats and the off-beats: the bass drum light under the tuba's
+        // oom, the one a little heavier (a loud one on every beat reads as a
+        // dance track's four on the floor), a drummer's few ms either way
+        let r = &mut self.rng;
+        b.hit(0.0, r.range(0.0, 0.008), CH_KICK, 0, 0.2 + 0.06 * e);
+        b.hit(4.0, r.range(0.0, 0.008), CH_KICK, 0, 0.14 + 0.06 * e);
+        let roll = last && r.chance(0.75);
         for st in [2.0, 6.0] {
             if !(roll && st == 6.0) {
-                b.hit(st, 0.0, CH_SNARE, 0, 0.35 + 0.35 * e);
+                b.hit(st, r.range(0.0, 0.008), CH_SNARE, 0, 0.35 + 0.35 * e);
             }
             if self.pk.hats && e > 0.75 {
-                b.hit(st, 0.0, CH_HAT, HAT_C, 0.4);
+                b.hit(st, r.range(0.0, 0.008), CH_HAT, HAT_C, 0.4);
             }
         }
         if roll {
@@ -6298,7 +6503,8 @@ impl Song {
             (to.gain, to.pan, to.rev, to.dly, to.rev2) = (from.gain, from.pan, from.rev, from.dly, from.rev2);
             (to.lp_base, to.lp) = (from.lp_base, from.lp);
         }
-        (s.r2mode, s.r2gain, s.rev2.fb, s.rev2.damp, s.gate_hold) = (x.r2mode, x.r2gain, x.rev2.fb, x.rev2.damp, x.gate_hold);
+        (s.r2mode, s.r2gain, s.rev2.fb, s.rev2.damp, s.gate_hold) =
+            (x.r2mode, x.r2gain, x.rev2.fb, x.rev2.damp, x.gate_hold);
         s.sc_rel = x.sc_rel;
         // the leveller more thorough: one genre's levels were set for its own
         // drums (techno's music under ambient's would be 6 dB down)
@@ -6324,9 +6530,15 @@ impl Song {
             AMBIENT => s.rev_wet = (s.rev_wet + 0.15).min(0.5),
             TECHNO => {
                 // everything ducking under the kick
-                for (c, d) in
-                    [(CH_BASS, 0.35), (CH_KEYS, 0.35), (CH_PAD, 0.5), (CH_ARP, 0.25), (CH_LEAD, 0.2), (CH_BELL, 0.2), (CH_DRONE, 0.3)]
-                {
+                for (c, d) in [
+                    (CH_BASS, 0.35),
+                    (CH_KEYS, 0.35),
+                    (CH_PAD, 0.5),
+                    (CH_ARP, 0.25),
+                    (CH_LEAD, 0.2),
+                    (CH_BELL, 0.2),
+                    (CH_DRONE, 0.3),
+                ] {
                     s.ch[c].duck = d;
                 }
             }
@@ -6574,9 +6786,12 @@ impl Song {
         let last = (beats - 1) * beat;
         let roll = fill == 2 && (full || sec.kind == BUILD) && r.chance(0.75);
         if sec.kind != BREAK || m & L_KICK != 0 {
+            // light, under the tuba's oom (as a polka band's drummer plays
+            // it, the one a little heavier): a loud one on every beat reads
+            // as a dance track's four on the floor
             for k in 0..beats {
                 if !(waltz && k > 0) {
-                    let v = if k == 0 { 0.8 } else { 0.7 } + 0.15 * e;
+                    let v = if k == 0 { 0.2 } else { 0.14 } + 0.06 * e;
                     b.hit((k * beat) as f32, r.range(0.0, h), CH_KICK, 0, v);
                 }
             }
@@ -7057,7 +7272,18 @@ impl Song {
                 let tpl = r.pick(mariachi_rhythms(style, bs, three, false, false));
                 let mut dir = if r.bit_chance() { 1 } else { -1 };
                 let leaps = style == MARIACHI_HUAPANGO;
-                mariachi_figure(r, tpl, &chord_at, mode, prev, &mut dir, if three { 4 } else { beat }, false, None, leaps)
+                mariachi_figure(
+                    r,
+                    tpl,
+                    &chord_at,
+                    mode,
+                    prev,
+                    &mut dir,
+                    if three { 4 } else { beat },
+                    false,
+                    None,
+                    leaps,
+                )
             };
             mel.retain(|n| n.step / bs != bar);
             mel.extend(fig.iter().map(|n| PNote { step: n.step + bar * bs, ..*n }));
@@ -7279,7 +7505,16 @@ impl Song {
     /// often doubled an octave up, plucked hard), the second chord's root
     /// where it changes; walking by step into the next chord when `walk` and
     /// it moves. A waltz's bar on a chord held over plays its fifth.
-    fn mariachi_bass(&mut self, b: &mut Bar, chords: [Harm; 2], next: Harm, hemi: bool, vb: bool, walk: bool, held: bool) {
+    fn mariachi_bass(
+        &mut self,
+        b: &mut Bar,
+        chords: [Harm; 2],
+        next: Harm,
+        hemi: bool,
+        vb: bool,
+        walk: bool,
+        held: bool,
+    ) {
         let (bs, style) = (self.mc.bar_steps, self.mc.style);
         // roots in the octave up from C2 (fundamentals of 65-125 Hz), the
         // octave above them doubling
@@ -7290,7 +7525,8 @@ impl Song {
             let f = r0 - 7 + (self.root + c.root + 7 - (r0 - 7)).rem_euclid(12);
             if f < lo { f + 12 } else { f }
         };
-        let (rn, roots, fifths) = (root(next), [root(chords[0]), root(chords[1])], [fifth(chords[0]), fifth(chords[1])]);
+        let (rn, roots, fifths) =
+            (root(next), [root(chords[0]), root(chords[1])], [fifth(chords[0]), fifth(chords[1])]);
         let scale = |p: i32| MODES[self.mode].contains(&(p - self.root).rem_euclid(12));
         // (16th, the fifth rather than the root)
         let pat: &[(u32, bool)] = match style {
@@ -7461,8 +7697,10 @@ impl Song {
                     continue;
                 }
                 let iv = q_iv(c.q);
-                let pcs: Vec<i32> =
-                    [iv[1], *iv.get(3).unwrap_or(&iv[2])].iter().map(|x| (self.root + c.root + x).rem_euclid(12)).collect();
+                let pcs: Vec<i32> = [iv[1], *iv.get(3).unwrap_or(&iv[2])]
+                    .iter()
+                    .map(|x| (self.root + c.root + x).rem_euclid(12))
+                    .collect();
                 let v = voicing_pcs(&pcs, tune - 5, tune + 9, &self.mc.sus_v, false);
                 let len = hold[hh] as f32 * bs as f32 / 2.0 + 0.5;
                 for &p in &v {
@@ -7476,7 +7714,18 @@ impl Song {
     /// A note of a tune on `ch` with its ornament (unless `plain`): a grace
     /// note, a trill or a turn (on the chord-scale's neighbours), a falsete;
     /// slid into on a mono channel (the first violins).
-    fn mariachi_note(&mut self, s: &Synth, b: &mut Bar, ch: usize, n: &PNote, p: i32, vel: f32, legato: f32, h: Harm, plain: bool) {
+    fn mariachi_note(
+        &mut self,
+        s: &Synth,
+        b: &mut Bar,
+        ch: usize,
+        n: &PNote,
+        p: i32,
+        vel: f32,
+        legato: f32,
+        h: Harm,
+        plain: bool,
+    ) {
         let mono = s.ch[ch].mono;
         let st = n.step as f32;
         let len = n.len as f32 * legato;
@@ -7497,8 +7746,22 @@ impl Song {
                 let d = 0.06;
                 let k = if g == MARIACHI_TRILL { ((len * step_s * 0.5) / d).clamp(2.0, 10.0) as usize } else { 3 };
                 for x in 0..k {
-                    let q = if g == MARIACHI_TURN { [up, p, down][x] } else if x % 2 == 0 { p } else { up };
-                    b.note(st, j + d * x as f32, ch, q, vel * if x == 0 { 1.0 } else { 0.85 }, 1.5 * d / step_s, mono && x > 0);
+                    let q = if g == MARIACHI_TURN {
+                        [up, p, down][x]
+                    } else if x % 2 == 0 {
+                        p
+                    } else {
+                        up
+                    };
+                    b.note(
+                        st,
+                        j + d * x as f32,
+                        ch,
+                        q,
+                        vel * if x == 0 { 1.0 } else { 0.85 },
+                        1.5 * d / step_s,
+                        mono && x > 0,
+                    );
                 }
                 let t = d * k as f32;
                 b.note(st, j + t, ch, p, vel, (len - t / step_s).max(0.5), mono);
@@ -7537,12 +7800,24 @@ impl Song {
                 }
             }
             if m & L_LEAD != 0 {
-                let note = PNote { step: st as u16, len: if lastn { bs as u16 - st as u16 } else { q as u16 }, pitch: p, vel: v, grace: 0 };
+                let note = PNote {
+                    step: st as u16,
+                    len: if lastn { bs as u16 - st as u16 } else { q as u16 },
+                    pitch: p,
+                    vel: v,
+                    grace: 0,
+                };
                 self.mariachi_note(s, b, CH_LEAD, &note, tune + 12 + p, v, 0.9, dom, true);
             }
         }
         if m & L_DRONE != 0 {
-            let v = voicing_pcs(&[(self.root + 11).rem_euclid(12), (self.root + 5).rem_euclid(12)], tune - 5, tune + 9, &self.mc.sus_v, false);
+            let v = voicing_pcs(
+                &[(self.root + 11).rem_euclid(12), (self.root + 5).rem_euclid(12)],
+                tune - 5,
+                tune + 9,
+                &self.mc.sus_v,
+                false,
+            );
             for &p in &v {
                 b.note(0.0, 0.0, CH_DRONE, p, 0.5, bs as f32 + 0.5, false);
             }
@@ -7589,7 +7864,13 @@ impl Song {
                 }
             }
             if m & L_LEAD != 0 {
-                let n = PNote { step: st as u16, len: len as u16, pitch: 12, vel: v, grace: if button { 0 } else { MARIACHI_TRILL } };
+                let n = PNote {
+                    step: st as u16,
+                    len: len as u16,
+                    pitch: 12,
+                    vel: v,
+                    grace: if button { 0 } else { MARIACHI_TRILL },
+                };
                 self.mariachi_note(s, b, CH_LEAD, &n, tune + 12, v, 1.0, home, false);
             }
             if m & L_DRONE != 0 {
@@ -7639,7 +7920,13 @@ impl Song {
             if fill == 2 {
                 // a redoble: taps in 16ths, louder to the bar line
                 for st in last + 1..bs {
-                    b.hit(st as f32, r.range(0.0, h), CH_KICK, 1, lift * (0.35 + 0.45 * (st - last) as f32 / acc as f32));
+                    b.hit(
+                        st as f32,
+                        r.range(0.0, h),
+                        CH_KICK,
+                        1,
+                        lift * (0.35 + 0.45 * (st - last) as f32 / acc as f32),
+                    );
                 }
             }
         }
@@ -7715,7 +8002,7 @@ impl Song {
 /// A mix's drummer, this piece: a percussion line (a bar, or two of a
 /// two-beat meter), lo-fi's kicks (A and B: 16ths of four beats, or three)
 /// and which of its snares, whether polka's tambourine plays.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Drummer {
     perc: Vec<f32>,
     perc_kind: u8,
@@ -7751,7 +8038,7 @@ struct Strain {
 }
 
 /// The polka in play.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Polka {
     strains: Vec<Strain>,
     /// per section: the strain, which time through, its first bar
@@ -8058,7 +8345,7 @@ struct TStrain {
 }
 
 /// The tavern piece in play.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Tavern {
     kind: u8,
     /// 16ths a bar and a beat
@@ -8493,7 +8780,9 @@ fn sounds_tavern(r: &mut Rng, s: &mut Synth) {
     ch[CH_HAT].drums = kit_trim(kit_tambourine(r), -4.8);
     ch[CH_PERC].drums = kit_spoons(r);
     ch[CH_SNARE].drums = kit_hand_clap(r);
-    mix(&mut ch[CH_KICK], 0.6, 0.0, 0.1, 0.0, 0.0);
+    // (the frame drum and the bass lighter: early-music records' low end is
+    // under a third of the whole, the melody instruments' middle over half)
+    mix(&mut ch[CH_KICK], 0.42, 0.0, 0.1, 0.0, 0.0);
     mix(&mut ch[CH_HAT], 0.3, 0.35, 0.15, 0.0, 0.0);
     mix(&mut ch[CH_PERC], 0.35, -0.35, 0.15, 0.0, 0.0);
     mix(&mut ch[CH_SNARE], 0.35, 0.1, 0.2, 0.0, 0.0);
@@ -8501,7 +8790,7 @@ fn sounds_tavern(r: &mut Rng, s: &mut Synth) {
     mix(&mut ch[CH_LEAD], 0.42, 0.1, 0.22, 0.05, 0.0);
     mix(&mut ch[CH_BELL], 0.32, 0.3, 0.22, 0.05, 0.0);
     mix(&mut ch[CH_DRONE], 0.22, -0.1, 0.2, 0.0, 0.0);
-    mix(&mut ch[CH_BASS], 0.35, 0.0, 0.1, 0.0, 0.0);
+    mix(&mut ch[CH_BASS], 0.24, 0.0, 0.1, 0.0, 0.0);
     // a room, not a hall
     s.rev.fb = r.range(0.72, 0.78);
     s.rev.damp = 0.5;
@@ -8723,7 +9012,7 @@ struct SkaStrain {
 }
 
 /// The ska piece in play.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Ska {
     /// 16ths a bar and a beat, and the meter's (and the style's) name
     bar_steps: u32,
@@ -10219,6 +10508,7 @@ fn new_bass(r: &mut Rng, mode: usize, style: u8) -> [Step; 16] {
 
 fn mix(c: &mut Channel, gain: f32, pan: f32, rev: f32, dly: f32, duck: f32) {
     c.gain = gain;
+    c.chorus = 0.0;
     c.pan = pan;
     c.rev = rev;
     c.dly = dly;
@@ -10364,13 +10654,36 @@ fn loudness_in(p: &Patch, note: f32, bank: Option<&Bank>) -> f32 {
 /// choruses and bridges the other, give or take), and two kits for each drum
 /// channel; swapped at section boundaries, each note keeping the patch it
 /// began with. (And the note each tonal pair was levelled at.)
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Band {
     tones: Vec<(usize, [Patch; 2], f32)>,
     kits: Vec<(usize, [Vec<DrumPatch>; 2])>,
 }
 
 /// `p` brought to the loudness of `orig` at `note`.
+/// The vibrato each recording has of its own, held: its pitch's standard
+/// deviation in cents, as `vibrato_survey` measures it.
+const OWN_VIOLINS: f32 = 4.1;
+const OWN_VIOLIN: f32 = 9.8;
+const OWN_GM_VIOLIN: f32 = 13.1;
+const OWN_TRUMPET: f32 = 9.5;
+const OWN_GM_TRUMPET: f32 = 5.4;
+
+/// A recording (`q`) played with the vibrato its synthesiser's patch `p`
+/// asks for (`vib`, a sine's depth in semitones, at `vib_rate`), less what
+/// the recording has of its own (`own`, cents): the two add as their
+/// squares do. Most recordings are near straight (a section's players blur
+/// theirs; a held trumpet's is 2 cents), and a style's (mariachi's violins
+/// and trumpets, a film score's) is wide. The synthesiser's patch as it is.
+fn add_vib(q: Patch, p: &Patch, own: f32) -> Patch {
+    if q.samp == 0 {
+        return q;
+    }
+    let want = p.vib * 100.0 / std::f32::consts::SQRT_2;
+    let add = (want * want - own * own).max(0.0).sqrt() * std::f32::consts::SQRT_2 / 100.0;
+    Patch { vib: add, vib_rate: p.vib_rate, ..q }
+}
+
 fn levelled(orig: &Patch, note: f32, p: Patch) -> Patch {
     Patch { gain: p.gain * (loudness(orig, note) / loudness(&p, note)).clamp(0.2, 5.0), ..p }
 }
@@ -13395,16 +13708,26 @@ fn sounds_synthwave(r: &mut Rng, s: &mut Synth) {
     };
     ch[CH_BELL].patch = rec(bell, samples::gm("FM Electric Piano"), 64.0);
     mix(&mut ch[CH_BELL], 0.3, r.range(-0.4, 0.4), 0.4, 0.35, 0.2);
-    mix(&mut ch[CH_KICK], 0.8, 0.0, 0.0, 0.0, 0.0);
+    // (the pads and leads forward, the bass and kick back, as synthwave's
+    // records have them: their middle a third of the whole, against our
+    // first balance's tenth under a heavy low end)
+    mix(&mut ch[CH_KICK], 0.6, 0.0, 0.0, 0.0, 0.0);
     mix(&mut ch[CH_SNARE], 0.4, 0.0, 0.15, 0.0, 0.0);
     ch[CH_SNARE].rev2 = 0.9;
     mix(&mut ch[CH_HAT], 1.0, 0.2, 0.1, 0.0, 0.0);
     mix(&mut ch[CH_PERC], 0.4, -0.15, 0.3, 0.0, 0.0);
     mix(&mut ch[CH_CYM], 0.45, -0.2, 0.3, 0.0, 0.0);
-    mix(&mut ch[CH_BASS], 0.6, 0.0, 0.05, 0.0, 0.25);
-    mix(&mut ch[CH_PAD], 0.42, 0.0, 0.45, 0.0, 0.5);
-    mix(&mut ch[CH_ARP], 0.36, r.range(-0.3, 0.3), 0.3, 0.4, 0.2);
-    mix(&mut ch[CH_LEAD], 0.28, 0.0, 0.35, 0.3, 0.0);
+    mix(&mut ch[CH_BASS], 0.42, 0.0, 0.05, 0.0, 0.25);
+    mix(&mut ch[CH_PAD], 0.55, 0.0, 0.45, 0.0, 0.5);
+    mix(&mut ch[CH_ARP], 0.42, r.range(-0.3, 0.3), 0.3, 0.4, 0.2);
+    mix(&mut ch[CH_LEAD], 0.34, 0.0, 0.35, 0.3, 0.0);
+    // the polysynth's chorus on the pad, the lead, the arpeggio and the
+    // glass: the width synthwave's records have (their side a fifth of
+    // the whole, against a mono-ish 4% without it)
+    ch[CH_PAD].chorus = 0.9;
+    ch[CH_LEAD].chorus = 0.55;
+    ch[CH_ARP].chorus = 0.6;
+    ch[CH_BELL].chorus = 0.5;
     s.rev.fb = r.range(0.85, 0.9);
     s.rev.damp = 0.3;
     s.rev_wet = 0.3;
@@ -13598,6 +13921,9 @@ fn sounds_lofi(r: &mut Rng, s: &mut Synth) {
     s.fx.hiss = r.range(0.002, 0.005);
     s.fx.wind_to = 0.0;
     s.m.set_lp(r.range(7000.0, 9500.0));
+    // brighter below that: lo-fi's records keep about 3% of their energy
+    // between 2 and 8 kHz (ours a tenth of that, all but muffled)
+    s.m.set_tilt(0.0, 5.0);
     s.m.wow_to = r.range(0.0004, 0.0008) * SR;
     s.m.wrate = r.range(0.35, 0.7);
     s.m.gain = 1.4;
@@ -13845,12 +14171,8 @@ const MARIACHI_MIN_A: &[&str] = &[
     "i V7 i V7 iv i V7 i",
     "i I7 iv iv V7 V7 i i",
 ];
-const MARIACHI_MIN_B: &[&str] = &[
-    "iv iv i i V7 V7 i i",
-    "I7 iv V7 i I7 iv V7 i",
-    "bVI bVI V7 V7 iv i V7 i",
-    "iv V7 i bVI iv i V7 i",
-];
+const MARIACHI_MIN_B: &[&str] =
+    &["iv iv i i V7 V7 i i", "I7 iv V7 i I7 iv V7 i", "bVI bVI V7 V7 iv i V7 i", "iv V7 i bVI iv i V7 i"];
 const MARIACHI_MIN_C: &[&str] = &[
     "bIII bIII bVII7 bVII7 bIII bIII V7 V7",
     "bVII7 bVII7 bIII bIII iv iv V7 V7",
@@ -13881,7 +14203,7 @@ struct MariachiSection {
 }
 
 /// The mariachi piece in play.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Mariachi {
     /// 16ths a bar and a beat, the meter's name, the style
     bar_steps: u32,
@@ -13930,7 +14252,9 @@ fn mariachi_manico(style: u8, hemi: bool, guitar: bool, alt: bool) -> &'static [
         (MARIACHI_SON, _, false, false) => {
             &[(0, D, 1.0), (2, U, 0.5), (4, D, 0.72), (6, D, 0.95), (8, C, 0.62), (10, U, 0.5)]
         }
-        (MARIACHI_SON, _, false, true) => &[(0, D, 1.0), (2, C, 0.6), (4, U, 0.5), (6, D, 0.95), (8, C, 0.6), (10, U, 0.5)],
+        (MARIACHI_SON, _, false, true) => {
+            &[(0, D, 1.0), (2, C, 0.6), (4, U, 0.5), (6, D, 0.95), (8, C, 0.6), (10, U, 0.5)]
+        }
         (MARIACHI_SON, _, true, _) => &[(0, D, 0.9), (4, U, 0.45), (6, D, 0.85), (10, U, 0.45)],
         (MARIACHI_HUAPANGO, _, false, false) => &[
             (0, D, 1.0),
@@ -13943,14 +14267,23 @@ fn mariachi_manico(style: u8, hemi: bool, guitar: bool, alt: bool) -> &'static [
             (9, U, 0.4),
             (10, C, 0.55),
         ],
-        (MARIACHI_HUAPANGO, _, false, true) => {
-            &[(0, D, 1.0), (2, U, 0.45), (3, D, 0.6), (4, C, 0.6), (6, D, 0.95), (8, U, 0.45), (9, D, 0.6), (10, C, 0.6)]
-        }
+        (MARIACHI_HUAPANGO, _, false, true) => &[
+            (0, D, 1.0),
+            (2, U, 0.45),
+            (3, D, 0.6),
+            (4, C, 0.6),
+            (6, D, 0.95),
+            (8, U, 0.45),
+            (9, D, 0.6),
+            (10, C, 0.6),
+        ],
         (MARIACHI_HUAPANGO, _, true, _) => &[(0, D, 0.85), (3, U, 0.4), (6, D, 0.8), (9, U, 0.4)],
         (MARIACHI_VALS, _, false, false) => &[(0, C, 0.35), (4, D, 0.85), (6, U, 0.45), (8, D, 0.8), (10, U, 0.45)],
         (MARIACHI_VALS, _, false, true) => &[(4, D, 0.85), (6, U, 0.4), (8, D, 0.8), (10, C, 0.5), (11, U, 0.35)],
         (MARIACHI_VALS, _, true, _) => &[(4, D, 0.7), (8, D, 0.65)],
-        (MARIACHI_POLKA, _, false, false) => &[(0, C, 0.35), (2, D, 0.85), (3, U, 0.4), (4, C, 0.35), (6, D, 0.85), (7, U, 0.4)],
+        (MARIACHI_POLKA, _, false, false) => {
+            &[(0, C, 0.35), (2, D, 0.85), (3, U, 0.4), (4, C, 0.35), (6, D, 0.85), (7, U, 0.4)]
+        }
         (MARIACHI_POLKA, _, false, true) => &[(2, D, 0.85), (3, U, 0.45), (6, D, 0.85), (7, U, 0.45)],
         (MARIACHI_POLKA, _, true, _) => &[(2, D, 0.7), (6, D, 0.7)],
         // the bolero's: down and up on the eighths, now and then (and the
@@ -13997,8 +14330,17 @@ fn mariachi_manico(style: u8, hemi: bool, guitar: bool, alt: bool) -> &'static [
 fn mariachi_rhythms(style: u8, bs: u16, three: bool, cadence: bool, fanfare: bool) -> &'static [&'static [(u16, u16)]] {
     match (bs, three, cadence, fanfare) {
         (8, _, true, _) => &[&[(0, 1), (1, 1), (2, 6)], &[(0, 2), (2, 6)], &[(0, 4), (4, 4)]],
-        (8, _, _, true) => &[&[(0, 1), (1, 1), (2, 2), (4, 1), (5, 1), (6, 2)], &[(0, 3), (3, 1), (4, 4)], &[(0, 1), (1, 1), (2, 2), (4, 4)]],
-        (8, _, _, _) => &[&[(0, 2), (2, 2), (4, 2), (6, 2)], &[(0, 4), (4, 2), (6, 2)], &[(0, 3), (3, 1), (4, 4)], &[(0, 2), (2, 2), (4, 4)]],
+        (8, _, _, true) => &[
+            &[(0, 1), (1, 1), (2, 2), (4, 1), (5, 1), (6, 2)],
+            &[(0, 3), (3, 1), (4, 4)],
+            &[(0, 1), (1, 1), (2, 2), (4, 4)],
+        ],
+        (8, _, _, _) => &[
+            &[(0, 2), (2, 2), (4, 2), (6, 2)],
+            &[(0, 4), (4, 2), (6, 2)],
+            &[(0, 3), (3, 1), (4, 4)],
+            &[(0, 2), (2, 2), (4, 4)],
+        ],
         (16, _, true, true) => &[&[(0, 1), (1, 1), (2, 2), (4, 12)], &[(0, 3), (3, 1), (4, 12)]],
         (16, _, true, _) => &[&[(0, 4), (4, 4), (8, 8)], &[(0, 2), (2, 2), (4, 12)], &[(0, 16)], &[(0, 6), (6, 10)]],
         (16, _, _, true) => &[
@@ -14016,9 +14358,15 @@ fn mariachi_rhythms(style: u8, bs: u16, three: bool, cadence: bool, fanfare: boo
             &[(2, 2), (4, 4), (8, 2), (10, 6)],
         ],
         (_, true, true, _) => &[&[(0, 4), (4, 8)], &[(0, 2), (2, 2), (4, 8)], &[(0, 12)]],
-        (_, false, true, _) if style == MARIACHI_HUAPANGO => &[&[(0, 2), (2, 2), (4, 8)], &[(0, 12)], &[(0, 4), (4, 8)]],
+        (_, false, true, _) if style == MARIACHI_HUAPANGO => {
+            &[&[(0, 2), (2, 2), (4, 8)], &[(0, 12)], &[(0, 4), (4, 8)]]
+        }
         (_, false, true, _) => &[&[(0, 2), (2, 2), (4, 2), (6, 6)], &[(0, 4), (4, 2), (6, 6)], &[(0, 6), (6, 6)]],
-        (_, true, _, true) => &[&[(0, 1), (1, 1), (2, 2), (4, 4), (8, 4)], &[(0, 3), (3, 1), (4, 4), (8, 4)], &[(0, 2), (2, 2), (4, 2), (6, 2), (8, 4)]],
+        (_, true, _, true) => &[
+            &[(0, 1), (1, 1), (2, 2), (4, 4), (8, 4)],
+            &[(0, 3), (3, 1), (4, 4), (8, 4)],
+            &[(0, 2), (2, 2), (4, 2), (6, 2), (8, 4)],
+        ],
         (_, false, _, true) => &[
             &[(0, 1), (1, 1), (2, 2), (4, 2), (6, 2), (8, 4)],
             &[(0, 2), (2, 2), (4, 2), (6, 6)],
@@ -14086,7 +14434,8 @@ fn mariachi_figure(
         let h = chord_at(st);
         let ct = in_range(&h.pcs(), lo, hi);
         let strong = st % beat == 0 || len >= beat;
-        let along = |v: &[i32], from: i32, by: i32| v[(nearest(v, from) as i32 + by).clamp(0, v.len() as i32 - 1) as usize];
+        let along =
+            |v: &[i32], from: i32, by: i32| v[(nearest(v, from) as i32 + by).clamp(0, v.len() as i32 - 1) as usize];
         p = match land {
             Some(goal) if k + 1 == tpl.len() => ct[nearest(&ct, goal)],
             _ if fanfare => {
@@ -14235,7 +14584,13 @@ fn mariachi_tune(
         let n = ((bs - start) / q).min(8);
         // up or down, whichever has room; turning back at the range's edge
         let (top, room) = (v.len() as isize - 1, n as isize - 1);
-        let up = if j + room > top { false } else if j - room < 0 { true } else { r.bit_chance() };
+        let up = if j + room > top {
+            false
+        } else if j - room < 0 {
+            true
+        } else {
+            r.bit_chance()
+        };
         for k in 0..n as isize {
             let mut i = j + if up { k } else { -k };
             if i > top {
@@ -14244,7 +14599,13 @@ fn mariachi_tune(
                 i = -i;
             }
             let pitch = v[i.clamp(0, top) as usize];
-            ans.push(PNote { step: st0 + start + k as u16 * q, len: q, pitch, vel: 0.72 + r.range(-0.04, 0.04), grace: 0 });
+            ans.push(PNote {
+                step: st0 + start + k as u16 * q,
+                len: q,
+                pitch,
+                vel: 0.72 + r.range(-0.04, 0.04),
+                grace: 0,
+            });
         }
     }
     (mel, ans)
@@ -14417,17 +14778,7 @@ fn mariachi_guitar(r: &mut Rng) -> Patch {
 }
 
 fn mariachi_requinto(r: &mut Rng) -> Patch {
-    Patch {
-        filter: false,
-        ks: r.range(1.0, 1.4),
-        ks_tone: 0.78,
-        a: 0.001,
-        d: 3.0,
-        s: 1.0,
-        r: 0.1,
-        gain: 0.48,
-        ..PATCH
-    }
+    Patch { filter: false, ks: r.range(1.0, 1.4), ks_tone: 0.78, a: 0.001, d: 3.0, s: 1.0, r: 0.1, gain: 0.48, ..PATCH }
 }
 
 fn mariachi_guitarron(r: &mut Rng) -> Patch {
@@ -14480,6 +14831,12 @@ fn mariachi_sampled(p: Patch, id: Option<u16>, gain: f32) -> Patch {
     }
 }
 
+/// `mariachi_sampled`, with the vibrato `p` asks for that the recording
+/// lacks (`own`: see `add_vib`).
+fn mariachi_vib(p: Patch, id: Option<u16>, gain: f32, own: f32) -> Patch {
+    add_vib(mariachi_sampled(p, id, gain), &p, own)
+}
+
 /// A kit's kinds played by recordings (an id and a gain for each; None,
 /// or a kind past the list, keeps its synthesised hit).
 fn mariachi_kit_sampled(kit: Vec<DrumPatch>, recs: &[(Option<u16>, f32)]) -> Vec<DrumPatch> {
@@ -14492,30 +14849,30 @@ fn mariachi_kit_sampled(kit: Vec<DrumPatch>, recs: &[(Option<u16>, f32)]) -> Vec
 
 /// The first violins: a section (spiccato on short notes, held with vibrato).
 fn mariachi_rec_violins(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_violins(r), samples::multi("violins", "auto"), 0.38)
+    mariachi_vib(mariachi_violins(r), samples::multi("violins", "auto"), 0.38, OWN_VIOLINS)
 }
 
 /// The section held through every note (sweeter, slower to speak).
 fn mariachi_rec_violins_sweet(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_violins_sweet(r), samples::multi("violins", "sus"), 0.31)
+    mariachi_vib(mariachi_violins_sweet(r), samples::multi("violins", "sus"), 0.31, OWN_VIOLINS)
 }
 
 /// The second violins: fewer players (a solo violin's recording).
 fn mariachi_rec_violins2(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_violins(r), samples::multi("violin", "auto"), 0.3)
+    mariachi_vib(mariachi_violins(r), samples::multi("violin", "auto"), 0.3, OWN_VIOLIN)
 }
 
 fn mariachi_rec_violins_long(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_violins_long(r), samples::multi("violin", "sus"), 0.14)
+    mariachi_vib(mariachi_violins_long(r), samples::multi("violin", "sus"), 0.14, OWN_VIOLIN)
 }
 
 /// The violas: the SoundFont's violin, another player.
 fn mariachi_rec_viola(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_viola(r), samples::gm("Violin"), 0.17)
+    mariachi_vib(mariachi_viola(r), samples::gm("Violin"), 0.17, OWN_GM_VIOLIN)
 }
 
 fn mariachi_rec_fiddle(r: &mut Rng) -> Patch {
-    mariachi_sampled(fiddle_synth(r), samples::gm("Fiddle"), 0.15)
+    mariachi_vib(fiddle_synth(r), samples::gm("Fiddle"), 0.15, OWN_GM_VIOLIN)
 }
 
 fn mariachi_rec_strings(r: &mut Rng) -> Patch {
@@ -14524,7 +14881,7 @@ fn mariachi_rec_strings(r: &mut Rng) -> Patch {
 
 /// The trumpets: staccato on short notes, held with vibrato.
 fn mariachi_rec_trumpet(r: &mut Rng) -> Patch {
-    mariachi_sampled(mariachi_trumpet(r), samples::multi("trumpet", "auto"), 0.245)
+    mariachi_vib(mariachi_trumpet(r), samples::multi("trumpet", "auto"), 0.245, OWN_TRUMPET)
 }
 
 /// The flugelhorns' place: a trumpet held straight, no vibrato.
@@ -14534,7 +14891,7 @@ fn mariachi_rec_flugel(r: &mut Rng) -> Patch {
 
 /// Other trumpets: the SoundFont's.
 fn mariachi_rec_trumpets(r: &mut Rng) -> Patch {
-    mariachi_sampled(trumpet_synth(r), samples::gm("Trumpet"), 0.2)
+    mariachi_vib(trumpet_synth(r), samples::gm("Trumpet"), 0.2, OWN_GM_TRUMPET)
 }
 
 fn mariachi_rec_muted(r: &mut Rng) -> Patch {
@@ -14925,8 +15282,11 @@ fn sounds_mariachi(r: &mut Rng, s: &mut Synth) {
 // ---------------------------------------------------------------- the engine
 
 /// A genre's music: the composer writing a bar at a time, the synthesiser playing it.
+#[derive(Clone)]
 struct Engine {
     genre: usize,
+    /// the seed it was made with
+    seed: u64,
     syn: Synth,
     song: Song,
     ev: Vec<(u64, Ev)>,
@@ -14939,6 +15299,9 @@ struct Engine {
     /// switched away from: it writes and plays nothing more, its sounds
     /// ringing out under the crossfade (two beats never run together)
     done: bool,
+    /// the engine as it was when the piece playing began (its first bar
+    /// made), to play the piece again from
+    snap: Option<Box<Engine>>,
 }
 
 impl Engine {
@@ -14946,7 +15309,19 @@ impl Engine {
         let genre = canon(genre);
         let mut syn = Synth::new(genre);
         let song = Song::new(genre, seed, &mut syn);
-        Engine { genre, syn, song, ev: Vec::with_capacity(1024), evi: 0, t: 0, pos: 0.0, cur: (0.0, 1.0), done: false }
+        Engine {
+            genre,
+            seed,
+            syn,
+            song,
+            ev: Vec::with_capacity(1024),
+            evi: 0,
+            t: 0,
+            pos: 0.0,
+            cur: (0.0, 1.0),
+            done: false,
+            snap: None,
+        }
     }
 
     /// Fills `out` (interleaved stereo).
@@ -14969,6 +15344,11 @@ impl Engine {
                 self.ev[self.evi..].sort_by_key(|e| e.0);
                 self.cur = (start, len);
                 self.pos += len;
+                if self.song.piece_t0 == start {
+                    // a piece begun: kept, to play again
+                    self.snap = None;
+                    self.snap = Some(Box::new(self.clone()));
+                }
                 continue;
             }
             while self.evi < self.ev.len() && self.ev[self.evi].0 <= self.t {
@@ -14988,6 +15368,15 @@ impl Engine {
             self.t += n as u64;
             done += n;
         }
+    }
+
+    /// The piece playing, from its start again (itself ready to be played
+    /// again): None before it has begun.
+    fn replay(&self) -> Option<Engine> {
+        let snap = self.snap.as_ref()?;
+        let mut e = (**snap).clone();
+        e.snap = Some(snap.clone());
+        Some(e)
     }
 
     /// Where a genre switch can start: the next bar line, or the next beat
@@ -15020,23 +15409,108 @@ struct Mix {
     tmp: Vec<f32>,
     /// pieces begun by the engines switched away from
     begun: u64,
+    /// replays asked for (counted from outside, like `skip`), and the count
+    /// honoured: each new count plays the piece playing again from its start
+    replay: u64,
+    replayed: u64,
+    /// playing, else stopped (silence, the engines held where they are), and
+    /// the gain on its way to either
+    run: bool,
+    gain: f32,
+    /// the length asked of each piece (seconds; 0: its own)
+    length: f64,
+    /// exports asked for (counted from outside), and those handed over
+    export: u64,
+    exported: u64,
 }
 
 impl Mix {
     fn new(genre: usize, seed: u64) -> Mix {
         let cur = Engine::new(genre, seed);
         let want = cur.genre;
-        Mix { cur, next: None, fade: 0, at: None, seed, switches: 0, want, skip: 0, skipped: 0, tmp: vec![0.0; 2 * BLOCK], begun: 0 }
+        Mix {
+            cur,
+            next: None,
+            fade: 0,
+            at: None,
+            seed,
+            switches: 0,
+            want,
+            skip: 0,
+            skipped: 0,
+            tmp: vec![0.0; 2 * BLOCK],
+            begun: 0,
+            replay: 0,
+            replayed: 0,
+            run: true,
+            gain: 1.0,
+            length: 0.0,
+            export: 0,
+            exported: 0,
+        }
+    }
+
+    /// When an export was asked for: the piece playing (the one coming in,
+    /// in a crossfade) as it began.
+    fn exported(&mut self) -> Option<Box<Engine>> {
+        if self.export == self.exported {
+            return None;
+        }
+        self.exported = self.export;
+        self.next.as_ref().unwrap_or(&self.cur).snap.clone()
+    }
+
+    /// Whether a genre switch, a skip or a replay waits.
+    fn asked(&self) -> bool {
+        canon(self.want) != self.cur.genre || self.skip != self.skipped || self.replay != self.replayed
+    }
+
+    /// What was asked for, to switch to: the piece playing again from its
+    /// start (when a replay is all that was asked), else a new engine.
+    fn incoming(&mut self) -> Engine {
+        let again = canon(self.want) == self.cur.genre && self.skip == self.skipped;
+        // presses before now are this piece's; one during the crossfade
+        // skips (or replays) the piece coming in
+        self.skipped = self.skip;
+        self.replayed = self.replay;
+        if again && let Some(e) = self.cur.replay() {
+            return e;
+        }
+        self.switches += 1;
+        let seed = self.seed.wrapping_add(self.switches.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        self.begun += self.cur.song.log.len() as u64;
+        let mut e = Engine::new(self.want, seed);
+        e.song.length = self.length;
+        e
     }
 
     fn render(&mut self, out: &mut [f32]) {
         let _ftz = Ftz::on();
+        if self.gain <= 0.0 {
+            // stopped, or starting again: what was asked meanwhile begins at
+            // once, from its start (a crossfade under way, its end)
+            if let Some(nx) = self.next.take() {
+                self.cur = nx;
+            }
+            if self.asked() {
+                self.cur = self.incoming();
+            }
+            self.at = None;
+            if !self.run {
+                out.fill(0.0);
+                return;
+            }
+        }
+        self.cur.song.length = self.length;
+        if let Some(nx) = &mut self.next {
+            nx.song.length = self.length;
+        }
         let frames = out.len() / 2;
         let mut done = 0;
         while done < frames {
             let mut n = (frames - done).min(BLOCK);
             if self.next.is_none() {
-                if canon(self.want) == self.cur.genre && self.skip == self.skipped {
+                if !self.asked() {
                     self.at = None;
                 } else {
                     let at = match self.at {
@@ -15044,16 +15518,10 @@ impl Mix {
                         None => *self.at.insert(self.cur.switch_point()),
                     };
                     if self.cur.t >= at {
-                        self.switches += 1;
-                        let seed = self.seed.wrapping_add(self.switches.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-                        self.begun += self.cur.song.log.len() as u64;
-                        self.next = Some(Engine::new(self.want, seed));
+                        self.next = Some(self.incoming());
                         self.cur.done = true;
                         self.fade = 0;
                         self.at = None;
-                        // presses before now are this piece's; one during
-                        // the crossfade skips the piece coming in
-                        self.skipped = self.skip;
                     } else {
                         n = n.min((at - self.cur.t) as usize);
                     }
@@ -15078,6 +15546,15 @@ impl Mix {
             }
             done += n;
         }
+        // stopping or starting: 30 ms to silence, or from it
+        if !self.run || self.gain < 1.0 {
+            let step = 1.0 / (0.03 * SR);
+            for f in out.chunks_exact_mut(2) {
+                self.gain = if self.run { (self.gain + step).min(1.0) } else { (self.gain - step).max(0.0) };
+                f[0] *= self.gain;
+                f[1] *= self.gain;
+            }
+        }
     }
 }
 
@@ -15099,6 +15576,13 @@ impl Mix {
             section: sec.map_or("", |x| SECTION_NAMES.get(x.kind as usize).copied().unwrap_or("")),
             bar: s.sec_bar,
             bars: sec.map_or(0, |x| x.bars),
+            stopped: !self.run,
+            elapsed: ((e.t as f64 - s.piece_t0) / SR as f64).max(0.0),
+            length: self.length,
+            planned: s.plan.iter().map(|x| x.bars as f64).sum::<f64>() * s.bar_steps() as f64 * s.step_len()
+                / SR as f64,
+            seed: e.seed,
+            song: s.log.len(),
         }
     }
 }
@@ -15152,9 +15636,9 @@ fn to_i16(x: f32) -> i16 {
 /// callback (SDL's real-time audio thread), or failing that on a thread of
 /// its own writing to pacat.
 pub struct Player {
-    want: Arc<AtomicUsize>,
-    /// skips asked for
-    skip: Arc<AtomicU64>,
+    ctl: Arc<Controls>,
+    /// what became of the last export (taken by `news`)
+    news: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     /// frames made so far (the tests watch it)
     #[cfg_attr(not(test), allow(dead_code))]
@@ -15167,12 +15651,48 @@ pub struct Player {
     tap: Arc<Tap>,
 }
 
+/// What the app asks of the music, read before each buffer is made.
+#[derive(Default)]
+struct Controls {
+    want: AtomicUsize,
+    /// skips and replays asked for
+    skip: AtomicU64,
+    replay: AtomicU64,
+    stopped: AtomicBool,
+    /// seconds a piece (f64 bits; 0: as long as it was written)
+    length: AtomicU64,
+    /// exports asked for, and the piece to export, handed over
+    export: AtomicU64,
+    slot: Mutex<Option<Box<Engine>>>,
+}
+
+impl Controls {
+    fn new(genre: usize) -> Arc<Controls> {
+        Arc::new(Controls { want: AtomicUsize::new(genre), ..Default::default() })
+    }
+
+    fn apply(&self, mix: &mut Mix) {
+        mix.want = self.want.load(Ordering::Relaxed);
+        mix.skip = self.skip.load(Ordering::Relaxed);
+        mix.replay = self.replay.load(Ordering::Relaxed);
+        mix.run = !self.stopped.load(Ordering::Relaxed);
+        mix.length = f64::from_bits(self.length.load(Ordering::Relaxed));
+        mix.export = self.export.load(Ordering::Relaxed);
+    }
+
+    /// After a buffer: the piece to export, if one was asked for.
+    fn hand_over(&self, mix: &mut Mix) {
+        if let Some(e) = mix.exported() {
+            *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
+        }
+    }
+}
+
 /// What the device's callback plays: the mix (and its float buffer), and
 /// what the app asks of it.
 struct Live {
     mix: std::sync::Mutex<(Mix, Vec<f32>)>,
-    want: Arc<AtomicUsize>,
-    skip: Arc<AtomicU64>,
+    ctl: Arc<Controls>,
     frames: Arc<AtomicU64>,
     tap: Arc<Tap>,
 }
@@ -15181,13 +15701,15 @@ struct Live {
 unsafe extern "C" fn fill(user: *mut std::ffi::c_void, stream: *mut u8, len: std::ffi::c_int) {
     // SAFETY: `user` is the Live the Player keeps boxed until the device is
     // closed; SDL hands a buffer of `len` bytes, aligned for its samples
-    let (live, out) = unsafe { (&*(user as *const Live), std::slice::from_raw_parts_mut(stream as *mut i16, len.max(0) as usize / 2)) };
+    let (live, out) = unsafe {
+        (&*(user as *const Live), std::slice::from_raw_parts_mut(stream as *mut i16, len.max(0) as usize / 2))
+    };
     let mut g = live.mix.lock().unwrap_or_else(|e| e.into_inner());
     let (mix, buf) = &mut *g;
     buf.resize(out.len(), 0.0);
-    mix.want = live.want.load(Ordering::Relaxed);
-    mix.skip = live.skip.load(Ordering::Relaxed);
+    live.ctl.apply(mix);
     mix.render(buf);
+    live.ctl.hand_over(mix);
     for (o, &x) in out.iter_mut().zip(buf.iter()) {
         *o = to_i16(x);
     }
@@ -15214,22 +15736,30 @@ impl Player {
     /// callback on a real-time thread (round robin, priority 20 here).
     fn device(genre: usize, seed: u64) -> Result<Player, String> {
         let genre = canon(genre);
-        let want = Arc::new(AtomicUsize::new(genre));
-        let skip = Arc::new(AtomicU64::new(0));
+        let ctl = Controls::new(genre);
         let frames = Arc::new(AtomicU64::new(0));
         // the callback's buffer ahead of the one playing, about
         let tap = Arc::new(Tap::new(RATE, 2 * 4096));
         let live = Box::new(Live {
             mix: std::sync::Mutex::new((Mix::new(genre, seed), Vec::new())),
-            want: want.clone(),
-            skip: skip.clone(),
+            ctl: ctl.clone(),
             frames: frames.clone(),
             tap: tap.clone(),
         });
         // SAFETY: the Live is boxed (it never moves) and dropped only after the device
-        let out = unsafe { crate::sdl::AudioOut::open(RATE, 4096, fill, &*live as *const Live as *mut std::ffi::c_void)? };
+        let out =
+            unsafe { crate::sdl::AudioOut::open(RATE, 4096, fill, &*live as *const Live as *mut std::ffi::c_void)? };
         eprintln!("musicbox: music through {}", out.driver());
-        Ok(Player { want, skip, stop: Arc::new(AtomicBool::new(false)), frames, child: None, thread: None, device: Some((out, live)), tap })
+        Ok(Player {
+            ctl,
+            news: Arc::default(),
+            stop: Arc::new(AtomicBool::new(false)),
+            frames,
+            child: None,
+            thread: None,
+            device: Some((out, live)),
+            tap,
+        })
     }
 
     /// The same, writing to `cmd`'s stdin.
@@ -15243,22 +15773,21 @@ impl Player {
             .map_err(|e| format!("{}: {e}", cmd[0]))?;
         let mut pipe = child.stdin.take().expect("piped stdin");
         let genre = canon(genre);
-        let want = Arc::new(AtomicUsize::new(genre));
-        let skip = Arc::new(AtomicU64::new(0));
+        let ctl = Controls::new(genre);
         let stop = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(AtomicU64::new(0));
         // pacat's 200 ms, and the chunk being written
         let tap = Arc::new(Tap::new(RATE, RATE as u64 / 5 + CHUNK as u64));
-        let (w, sk, st, fr, tp) = (want.clone(), skip.clone(), stop.clone(), frames.clone(), tap.clone());
+        let (c, st, fr, tp) = (ctl.clone(), stop.clone(), frames.clone(), tap.clone());
         let thread = std::thread::Builder::new().name("music".into()).spawn(move || {
             let mut mix = Mix::new(genre, seed);
             let mut f = vec![0.0f32; 2 * CHUNK];
             let mut bytes = vec![0u8; 4 * CHUNK];
             // blocking writes pace the generator to the sound server
             while !st.load(Ordering::Relaxed) {
-                mix.want = w.load(Ordering::Relaxed);
-                mix.skip = sk.load(Ordering::Relaxed);
+                c.apply(&mut mix);
                 mix.render(&mut f);
+                c.hand_over(&mut mix);
                 for (o, &x) in bytes.chunks_exact_mut(2).zip(&f) {
                     o.copy_from_slice(&to_i16(x).to_le_bytes());
                 }
@@ -15277,7 +15806,16 @@ impl Player {
                 return Err(format!("music thread: {e}"));
             }
         };
-        let mut p = Player { want, skip, stop, frames, child: Some(child), thread: Some(thread), device: None, tap };
+        let mut p = Player {
+            ctl,
+            news: Arc::default(),
+            stop,
+            frames,
+            child: Some(child),
+            thread: Some(thread),
+            device: None,
+            tap,
+        };
         // a sound server that is not there shows as the player exiting at once
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_millis(300) {
@@ -15294,18 +15832,79 @@ impl Player {
     /// Switches the music (to an id: `mix_id`), at the next bar line, or beat
     /// when bars are long, with a crossfade.
     pub fn set_genre(&self, genre: usize) {
-        self.want.store(canon(genre), Ordering::Relaxed);
+        self.ctl.want.store(canon(genre), Ordering::Relaxed);
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn genre(&self) -> usize {
-        self.want.load(Ordering::Relaxed)
+        self.ctl.want.load(Ordering::Relaxed)
     }
 
     /// Skips to a new piece of the same music, as a genre switch does: at the
     /// next bar line, or beat when bars are long, with a crossfade.
     pub fn skip(&self) {
-        self.skip.fetch_add(1, Ordering::Relaxed);
+        self.ctl.skip.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Plays the piece playing again from its start, as a skip goes to a new
+    /// one (at once, when stopped).
+    pub fn replay(&self) {
+        self.ctl.replay.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Stops (30 ms to silence, the music held where it is) or plays on.
+    /// What is asked while stopped begins at once when it plays again.
+    pub fn set_playing(&self, on: bool) {
+        self.ctl.stopped.store(!on, Ordering::Relaxed);
+    }
+
+    pub fn playing(&self) -> bool {
+        !self.ctl.stopped.load(Ordering::Relaxed)
+    }
+
+    /// How long each piece is to be (seconds; 0: as long as it was written),
+    /// the piece playing too: it turns to its outro, or back to a main
+    /// section, at its next chance.
+    pub fn set_length(&self, secs: f64) {
+        self.ctl.length.store(secs.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Saves the piece playing, from its start to its end, as an MP3 in
+    /// `dir`, made on a thread of its own (faster than it plays): what
+    /// became of it comes from `news`.
+    pub fn export(&self, dir: PathBuf) {
+        self.ctl.export.fetch_add(1, Ordering::Relaxed);
+        let (ctl, news) = (self.ctl.clone(), self.news.clone());
+        let say = move |s: String| *news.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
+        let _ = std::thread::Builder::new().name("export".into()).spawn(move || {
+            // the piece as it began, handed over after the next buffer
+            let t0 = Instant::now();
+            let e = loop {
+                if let Some(e) = ctl.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    break e;
+                }
+                if t0.elapsed() > Duration::from_secs(3) {
+                    return say("export: the player did not answer".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let length = f64::from_bits(ctl.length.load(Ordering::Relaxed));
+            let file = song_file(e.genre, e.seed, e.song.log.len());
+            say(format!("exporting {file}"));
+            let path = dir.join(&file);
+            let r = std::fs::create_dir_all(&dir)
+                .map_err(|err| format!("{}: {err}", dir.display()))
+                .and_then(|_| export_piece(*e, length, &path.to_string_lossy()));
+            say(match r {
+                Ok(secs) => format!("saved {} ({})", path.display(), clock(secs)),
+                Err(err) => format!("export failed: {err}"),
+            });
+        });
+    }
+
+    /// What became of the last export, once.
+    pub fn news(&self) -> Option<String> {
+        self.news.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     /// What it plays, and what is playing.
@@ -15386,7 +15985,15 @@ pub const FADE_OUT: f64 = 4.0;
 /// soundtrack not the shorter stream), faded in over `fade_in` seconds. Ok:
 /// where a natural ending's last bar ended (seconds), None when it was faded
 /// instead (or cut).
-pub fn render_wav(genre: usize, seed: u64, secs: f64, path: &str, ending: Ending, fade_in: f64) -> Result<Option<f64>, String> {
+pub fn render_wav(
+    genre: usize,
+    seed: u64,
+    secs: f64,
+    path: &str,
+    ending: Ending,
+    fade_in: f64,
+    length: f64,
+) -> Result<Option<f64>, String> {
     let pad = if ending == Ending::Cut { 0.0 } else { 0.1 };
     let end = (secs.max(0.0) * RATE as f64).round() as usize;
     let frames = (end as f64 + pad * RATE as f64).round() as usize;
@@ -15405,6 +16012,7 @@ pub fn render_wav(genre: usize, seed: u64, secs: f64, path: &str, ending: Ending
     data.extend_from_slice(b"data");
     data.extend_from_slice(&(bytes as u32).to_le_bytes());
     let mut mix = Mix::new(genre, seed);
+    mix.length = length;
     if ending == Ending::Natural {
         let tail = end_tail(genre);
         // (the last bar as late as a second before the end, or 2.5 s after the
@@ -15447,17 +16055,217 @@ pub fn render_wav(genre: usize, seed: u64, secs: f64, path: &str, ending: Ending
     Ok(if ending == Ending::Natural { done } else { None })
 }
 
+/// The music made on demand, for a host that pulls it a buffer at a time
+/// (the browser's worker, web/): what `Player` does with a sound device,
+/// without one.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub struct Stream {
+    mix: Mix,
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+impl Stream {
+    pub fn new(genre: usize, seed: u64) -> Stream {
+        Stream { mix: Mix::new(canon(genre), seed) }
+    }
+
+    /// The next frames, interleaved stereo at 48 kHz.
+    pub fn render(&mut self, out: &mut [f32]) {
+        self.mix.render(out);
+    }
+
+    /// As `Player`'s.
+    pub fn set_genre(&mut self, genre: usize) {
+        self.mix.want = canon(genre);
+    }
+
+    pub fn skip(&mut self) {
+        self.mix.skip += 1;
+    }
+
+    pub fn replay(&mut self) {
+        self.mix.replay += 1;
+    }
+
+    pub fn set_playing(&mut self, on: bool) {
+        self.mix.run = on;
+    }
+
+    pub fn set_length(&mut self, secs: f64) {
+        self.mix.length = secs.max(0.0);
+    }
+
+    pub fn now(&self) -> Now {
+        self.mix.now()
+    }
+}
+
+/// The `song`th piece of the music `genre` from an engine seeded `seed`
+/// (as `Now` gives them), on its own in the length `length` asks: a WAV
+/// file's bytes (`--export`'s, for the browser).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn song_wav(genre: usize, seed: u64, song: usize, length: f64) -> Vec<u8> {
+    let mut e = Engine::new(genre, seed);
+    e.song.length = length;
+    let mut buf = vec![0.0f32; 2 * CHUNK];
+    while !e.snap.as_ref().is_some_and(|s| s.song.log.len() >= song.max(1)) {
+        e.render(&mut buf);
+    }
+    let snap = *e.snap.take().expect("a snapshot");
+    let pcm: Vec<i16> = render_piece(snap, length).into_iter().map(to_i16).collect();
+    wav_bytes(&pcm)
+}
+
+/// A song's file name: the music, the seed of the engine that made it, and
+/// which of its pieces it is (as `--export` takes them).
+fn song_file(genre: usize, seed: u64, piece: usize) -> String {
+    format!("{}-{seed}-{piece}.mp3", name(genre).to_lowercase())
+}
+
+/// The piece `e` is at the start of (a snapshot: its first bar made) on its
+/// own, in the length `length` asks (0: its own): from silence to its last
+/// bar, then `end_tail` seconds to ring out, the last `END_FADE` of them
+/// faded. Interleaved stereo.
+fn render_piece(mut e: Engine, length: f64) -> Vec<f32> {
+    e.syn.hush();
+    e.song.length = length;
+    let mut out = Vec::new();
+    let mut buf = vec![0.0f32; 2 * CHUNK];
+    // a bar at a time, so that the next piece's first is never begun (an
+    // hour at most)
+    while out.len() < 2 * 3600 * RATE as usize {
+        let next_bar = e.pos.ceil() as u64;
+        if e.t >= next_bar && e.song.piece_over() {
+            break;
+        }
+        let n = if e.t >= next_bar { 1 } else { ((next_bar - e.t) as usize).min(CHUNK) };
+        e.render(&mut buf[..2 * n]);
+        out.extend_from_slice(&buf[..2 * n]);
+    }
+    e.done = true;
+    let tail = (end_tail(e.genre) * SR as f64) as usize;
+    let end = out.len() / 2 + tail;
+    while out.len() / 2 < end {
+        let n = (end - out.len() / 2).min(CHUNK);
+        e.render(&mut buf[..2 * n]);
+        out.extend_from_slice(&buf[..2 * n]);
+    }
+    let fade = (END_FADE * SR as f64) as usize;
+    let frames = out.len() / 2;
+    for i in frames.saturating_sub(fade)..frames {
+        let g = smooth((frames - i) as f64 / fade as f64);
+        out[2 * i] *= g;
+        out[2 * i + 1] *= g;
+    }
+    out
+}
+
+/// 16-bit stereo at `RATE` as a WAV file's bytes.
+fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
+    let bytes = pcm.len() * 2;
+    let mut data = Vec::with_capacity(44 + bytes);
+    data.extend_from_slice(b"RIFF");
+    data.extend_from_slice(&(36 + bytes as u32).to_le_bytes());
+    data.extend_from_slice(b"WAVEfmt ");
+    data.extend_from_slice(&16u32.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&2u16.to_le_bytes());
+    data.extend_from_slice(&RATE.to_le_bytes());
+    data.extend_from_slice(&(RATE * 4).to_le_bytes());
+    data.extend_from_slice(&4u16.to_le_bytes());
+    data.extend_from_slice(&16u16.to_le_bytes());
+    data.extend_from_slice(b"data");
+    data.extend_from_slice(&(bytes as u32).to_le_bytes());
+    for x in pcm {
+        data.extend_from_slice(&x.to_le_bytes());
+    }
+    data
+}
+
+/// Renders the piece `e` begins (see `render_piece`) to `path`: an MP3,
+/// tagged, or a WAV when the name ends in .wav. Ok: its length in seconds.
+fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
+    let (genre, seed, piece) = (e.genre, e.seed, e.song.log.len());
+    let (bpm, root, mode, meter) = e.song.log.last().copied().unwrap_or((e.song.bpm, 0, 0, ""));
+    let pcm: Vec<i16> = render_piece(e, length).into_iter().map(to_i16).collect();
+    let secs = pcm.len() as f64 / 2.0 / SR as f64;
+    let bytes = if path.to_lowercase().ends_with(".wav") {
+        wav_bytes(&pcm)
+    } else {
+        let what = name(genre).to_lowercase();
+        let key = if parts(genre).0 == INDONESIAN {
+            String::new()
+        } else {
+            format!(", {} {}", KEY_NAMES[root.rem_euclid(12) as usize], MODE_NAMES.get(mode).copied().unwrap_or(""))
+        };
+        let mut again = format!("musicbox --export {what} OUT.mp3 --seed {seed} --song {piece}");
+        if length > 0.0 {
+            again += &format!(" --length {}", clock(length));
+        }
+        let year = 1970
+            + std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() / 31_556_952);
+        let tags = mp3::Tags {
+            title: format!("{what}, song {piece} ({meter}, {bpm:.0} bpm{key})"),
+            artist: "musicbox".into(),
+            album: format!("musicbox: {what}"),
+            year: year.to_string(),
+            comment: format!("seed {seed}, song {piece}: {again}"),
+        };
+        mp3::encode(&pcm, RATE, &tags)?
+    };
+    std::fs::write(path, bytes).map_err(|e| format!("{path}: {e}"))?;
+    Ok(secs)
+}
+
+/// `--export GENRE OUT.mp3`: the `song`th piece of the music `genre` with
+/// `seed`, on its own, to an MP3 (or a WAV).
+pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64) {
+    let genre = args.first().and_then(|g| find(g));
+    let (Some(genre), Some(path)) = (genre, args.get(1)) else {
+        eprintln!("musicbox: --export GENRE OUT.mp3, GENRE one of {} or two (polka+techno)", cli_names());
+        std::process::exit(2);
+    };
+    samples::load_now();
+    let t0 = Instant::now();
+    // on to the piece's start (the engine keeps each piece's as it begins)
+    let mut e = Engine::new(genre, seed);
+    e.song.length = length;
+    let mut buf = vec![0.0f32; 2 * CHUNK];
+    while !e.snap.as_ref().is_some_and(|s| s.song.log.len() >= song.max(1)) {
+        e.render(&mut buf);
+    }
+    let snap = *e.snap.take().expect("a snapshot");
+    let (bpm, root, mode, meter) = snap.song.log.last().copied().unwrap_or_default();
+    match export_piece(snap, length, path) {
+        Ok(secs) => println!(
+            "{path}: song {} of {} (seed {seed}): {meter}, {bpm:.0} bpm, {} {}, {}, made in {:.1} s",
+            song.max(1),
+            name(genre).to_lowercase(),
+            KEY_NAMES[root.rem_euclid(12) as usize],
+            MODE_NAMES.get(mode).copied().unwrap_or(""),
+            clock(secs),
+            t0.elapsed().as_secs_f64()
+        ),
+        Err(err) => {
+            eprintln!("musicbox: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// A smoothstep from 0 (at 0) to 1 (at 1).
 pub fn smooth(x: f64) -> f32 {
     let x = x.clamp(0.0, 1.0);
     (x * x * (3.0 - 2.0 * x)) as f32
 }
 
-
 /// The pieces (start in seconds, tempo, tonic, mode) the first `secs` of a
 /// genre and seed hold: the composer run alone, without the sound.
-fn pieces(genre: usize, seed: u64, secs: f64) -> Vec<(f64, f64, i32, usize, &'static str)> {
+fn pieces(genre: usize, seed: u64, secs: f64, length: f64) -> Vec<(f64, f64, i32, usize, &'static str)> {
     let mut e = Engine::new(genre, seed);
+    e.song.length = length;
     let mut ev = Vec::new();
     let mut starts = vec![0.0];
     while e.pos < secs * SR as f64 {
@@ -15484,8 +16292,9 @@ struct Stats {
     sim: [f64; 4],
 }
 
-fn stats(genre: usize, seed: u64, secs: f64) -> Stats {
+fn stats(genre: usize, seed: u64, secs: f64, length: f64) -> Stats {
     let mut e = Engine::new(genre, seed);
+    e.song.length = length;
     let mut ev = Vec::new();
     // per bar: piece, start (s), all events, notes alone
     let mut bars: Vec<(usize, f64, Vec<u32>, Vec<u32>)> = Vec::new();
@@ -15559,17 +16368,20 @@ fn stats(genre: usize, seed: u64, secs: f64) -> Stats {
 
 /// `--musicwav GENRE SECONDS OUT.wav`: renders and says how long it took
 /// (ending as `ending` says, faded in over `fade_in` seconds).
-pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64) {
+pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64) {
     let genre = args.first().and_then(|g| find(g));
     let secs = args.get(1).and_then(|s| s.parse::<f64>().ok());
     let (Some(genre), Some(secs), Some(path)) = (genre, secs, args.get(2)) else {
-        eprintln!("musicbox: --musicwav GENRE SECONDS OUT.wav, GENRE one of {} or two (POLKA+TECHNO: the first's music, the second's drums)", GENRES.join(", "));
+        eprintln!(
+            "musicbox: --musicwav GENRE SECONDS OUT.wav, GENRE one of {} or two (POLKA+TECHNO: the first's music, the second's drums)",
+            GENRES.join(", ")
+        );
         std::process::exit(2);
     };
     // the recorded instruments before the first note: a seed's music the same every time
     samples::load_now();
     let t0 = Instant::now();
-    let done = match render_wav(genre, seed, secs, path, ending, fade_in) {
+    let done = match render_wav(genre, seed, secs, path, ending, fade_in, length) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("musicbox: {e}");
@@ -15579,13 +16391,17 @@ pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64) {
     let took = t0.elapsed().as_secs_f64();
     match (ending, done) {
         (Ending::Natural, Some(d)) => println!("{path}: the music ends at {d:.1} s, ringing out to {secs:.1} s"),
-        (Ending::Natural, None) => println!("{path}: too short a time for an ending of its own: faded out over the last {FADE_OUT} s"),
+        (Ending::Natural, None) => {
+            println!("{path}: too short a time for an ending of its own: faded out over the last {FADE_OUT} s")
+        }
         _ => {}
     }
-    let pieces = pieces(genre, seed, secs);
+    let pieces = pieces(genre, seed, secs, length);
     let p: Vec<String> = pieces
         .iter()
-        .map(|&(t, bpm, k, m, meter)| format!("{t:.0} s: {bpm:.1} bpm {meter} {} {}", KEY_NAMES[k as usize % 12], MODE_NAMES[m]))
+        .map(|&(t, bpm, k, m, meter)| {
+            format!("{t:.0} s: {bpm:.1} bpm {meter} {} {}", KEY_NAMES[k as usize % 12], MODE_NAMES[m])
+        })
         .collect();
     println!(
         "{path}: {secs:.1} s of {} (seed {seed}) in {took:.2} s, {:.0}x real time; pieces: {}",
@@ -15593,7 +16409,7 @@ pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64) {
         secs / took.max(1e-9),
         p.join(", ")
     );
-    let st = stats(genre, seed, secs);
+    let st = stats(genre, seed, secs, length);
     println!(
         "  composition: {:.1} chord changes and {:.1} distinct chords a minute, {:.1} notes and {:.1} drum hits a second; \
          bars 4 / 8 apart alike {:.2} / {:.2} (notes alone {:.2} / {:.2})",
@@ -15621,6 +16437,169 @@ mod tests {
 
     /// Every piece's plan ends on an outro (where an ending jumps to), every
     /// genre's and every mix's.
+    /// Each piece's length (seconds) in the first `secs` of the music, the
+    /// composer run alone, asked for `length`.
+    fn piece_lengths(genre: usize, seed: u64, secs: f64, length: f64) -> Vec<f64> {
+        let p = pieces(genre, seed, secs, length);
+        p.windows(2).map(|w| w[1].0 - w[0].0).collect()
+    }
+
+    #[test]
+    #[ignore = "a survey: cargo test --release forms_survey -- --ignored --nocapture"]
+    fn forms_survey() {
+        for g in [CELTIC, TAVERN, POLKA, MARIACHI, SKA] {
+            let mut forms: std::collections::BTreeMap<String, usize> = Default::default();
+            let mut keys: std::collections::BTreeMap<String, usize> = Default::default();
+            let mut bpm: Vec<f64> = Vec::new();
+            for seed in 1..300 {
+                for (_, b, k, m, meter) in pieces(g, seed, 400.0, 0.0) {
+                    *forms.entry(meter.to_string()).or_default() += 1;
+                    *keys.entry(format!("{} {}", KEY_NAMES[k.rem_euclid(12) as usize], MODE_NAMES[m])).or_default() +=
+                        1;
+                    bpm.push(b);
+                }
+            }
+            let n = bpm.len() as f64;
+            let top = |m: &std::collections::BTreeMap<String, usize>| {
+                let mut v: Vec<_> = m.iter().collect();
+                v.sort_by(|a, b| b.1.cmp(a.1));
+                v.iter()
+                    .take(16)
+                    .map(|(k, c)| format!("{k} {:.1}%", 100.0 * **c as f64 / n))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            bpm.sort_by(f64::total_cmp);
+            println!(
+                "{}: {} pieces; tempo {:.0}/{:.0}/{:.0}",
+                GENRES[g],
+                n,
+                bpm[bpm.len() / 10],
+                bpm[bpm.len() / 2],
+                bpm[bpm.len() * 9 / 10]
+            );
+            println!("  forms: {}", top(&forms));
+            println!("  keys: {}", top(&keys));
+        }
+    }
+
+    #[test]
+    #[ignore = "a survey: cargo test --release lengths_survey -- --ignored --nocapture"]
+    fn lengths_survey() {
+        for g in 0..NG {
+            for len in [0.0, 45.0, 90.0, 180.0, 400.0] {
+                let v: Vec<String> = piece_lengths(g, 7, 1500.0, len).iter().map(|d| format!("{d:.0}")).collect();
+                println!("{:12} {len:4}: {}", GENRES[g], v.join(" "));
+            }
+        }
+    }
+
+    #[test]
+    fn songs_keep_the_length_asked() {
+        for g in 0..NG {
+            for len in [90.0, 180.0, 400.0] {
+                let v = piece_lengths(g, 7, 1300.0, len);
+                assert!(v.len() >= 2, "{} {len}: {v:?}", GENRES[g]);
+                for d in &v {
+                    assert!((d - len).abs() <= 10.0, "{} asked {len} s: pieces of {v:?}", GENRES[g]);
+                }
+            }
+            // shorter than a piece can be: its intro, four bars and its outro
+            for d in piece_lengths(g, 7, 600.0, 30.0) {
+                assert!(d < 75.0, "{} asked 30 s: a piece of {d}", GENRES[g]);
+            }
+        }
+    }
+
+    /// Renders `secs` of an engine, from where it is.
+    fn run(e: &mut Engine, secs: f64) -> Vec<f32> {
+        let mut out = vec![0.0f32; 2 * (secs * SR as f64) as usize];
+        for c in out.chunks_mut(2 * CHUNK) {
+            e.render(c);
+        }
+        out
+    }
+
+    #[test]
+    fn a_replay_plays_the_piece_again() {
+        for (g, seed) in [(TECHNO, 5), (CELTIC, 2), (mix_id(POLKA, Some(SKA)), 4)] {
+            let mut e = Engine::new(g, seed);
+            e.song.length = 45.0;
+            // the stream from the start, a chunk at a time, into the second piece
+            let mut heard = Vec::new();
+            let mut buf = vec![0.0f32; 2 * CHUNK];
+            let mut more = 600;
+            while e.song.log.len() < 2 || more > 0 {
+                more -= (e.song.log.len() >= 2) as i32;
+                e.render(&mut buf);
+                heard.extend_from_slice(&buf);
+            }
+            let snap = e.snap.as_ref().expect("a snapshot");
+            assert_eq!(snap.song.log.len(), 2, "the second piece's");
+            let at = 2 * snap.t as usize;
+            let mut again = e.replay().expect("a replay");
+            // in the chunks the stream was made in (the synth's smoothing
+            // goes a block at a time: blocks split elsewhere round otherwise)
+            let mut replayed = vec![0.0f32; 2 * (CHUNK - snap.t as usize % CHUNK)];
+            again.render(&mut replayed);
+            replayed.extend(run(&mut again, 10.0));
+            assert!(replayed.iter().any(|x| x.abs() > 1e-3), "{}: sound", name(g));
+            let diff = heard[at..at + replayed.len()].iter().zip(&replayed).position(|(a, b)| a != b);
+            assert_eq!(diff, None, "{}: the piece as it was heard", name(g));
+        }
+    }
+
+    #[test]
+    fn stopping_holds_the_music_and_starting_goes_on() {
+        let mut m = Mix::new(TECHNO, 3);
+        let mut buf = vec![0.0f32; 2 * CHUNK];
+        for _ in 0..40 {
+            m.render(&mut buf);
+        }
+        m.run = false;
+        // 30 ms to silence (two chunks of 21 ms), then nothing moves
+        m.render(&mut buf);
+        m.render(&mut buf);
+        assert!(buf[2 * 500..].iter().all(|&x| x == 0.0), "silent 30 ms on");
+        let t = m.cur.t;
+        m.skip = 1;
+        for _ in 0..20 {
+            m.render(&mut buf);
+            assert!(buf.iter().all(|&x| x == 0.0));
+        }
+        // the skip asked while stopped: the new piece in at once, at its start
+        assert_eq!(m.skipped, 1);
+        assert!(m.next.is_none());
+        assert!(m.cur.t < t, "a new engine");
+        m.run = true;
+        let t = m.cur.t;
+        for _ in 0..20 {
+            m.render(&mut buf);
+        }
+        assert!(m.cur.t > t);
+        assert!(buf.iter().any(|&x| x.abs() > 1e-3), "sound again");
+    }
+
+    #[test]
+    fn an_exported_piece_stands_alone() {
+        let mut e = Engine::new(SKA, 8);
+        e.song.length = 50.0;
+        while e.song.log.len() < 2 {
+            run(&mut e, 1.0);
+        }
+        let snap = *e.snap.take().expect("a snapshot");
+        let pcm = render_piece(snap, 50.0);
+        let secs = pcm.len() as f64 / 2.0 / SR as f64;
+        // the piece (about 50 s) and its ring-out
+        assert!((secs - 50.0 - end_tail(SKA)).abs() < 8.0, "{secs} s");
+        let peak = |a: usize, b: usize| pcm[2 * a..2 * b].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let rate = RATE as usize;
+        assert!(peak(0, rate) > 0.01, "it starts at once");
+        // (the last piece's ring-out hushed: nothing before the first notes but them)
+        let n = pcm.len() / 2;
+        assert!(peak(n - 200, n) < 1e-3, "faded to nothing at the end");
+    }
+
     #[test]
     fn plans_end_on_an_outro() {
         for id in (0..IDS).filter(|&id| canon(id) == id) {
@@ -15679,7 +16658,8 @@ mod tests {
             }
         }
         let mariachi = [MARIACHI_MAJ_A, MARIACHI_MAJ_B, MARIACHI_MAJ_C, MARIACHI_MIN_A, MARIACHI_MIN_B, MARIACHI_MIN_C];
-        for (pool, bars) in mariachi.iter().map(|p| (p, 8)).chain([(&MARIACHI_FANFARE, 4), (&MARIACHI_FANFARE_MIN, 4)]) {
+        for (pool, bars) in mariachi.iter().map(|p| (p, 8)).chain([(&MARIACHI_FANFARE, 4), (&MARIACHI_FANFARE_MIN, 4)])
+        {
             for plan in pool.iter() {
                 assert_eq!(plan.split_whitespace().count(), bars, "{plan}");
                 for tok in plan.split_whitespace().flat_map(|t| t.split('+')) {
@@ -15751,15 +16731,28 @@ mod tests {
                         for &(t, x) in &ev {
                             if let Ev::Hit { ch, kind, .. } = x {
                                 let at = (t as f64 - t0) / step;
-                                assert!((-0.01..bs as f64).contains(&at), "{} seed {seed}: a hit at {at} of {bs}", name(id));
                                 assert!(
-                                    ending || !(p == TAVERN && !matches!(g, TAVERN | MARIACHI | INDONESIAN | CELTIC) && ch as usize == CH_KICK && kind == 1),
+                                    (-0.01..bs as f64).contains(&at),
+                                    "{} seed {seed}: a hit at {at} of {bs}",
+                                    name(id)
+                                );
+                                assert!(
+                                    ending
+                                        || !(p == TAVERN
+                                            && !matches!(g, TAVERN | MARIACHI | INDONESIAN | CELTIC)
+                                            && ch as usize == CH_KICK
+                                            && kind == 1),
                                     "{}: the writer's frame drum",
                                     name(id)
                                 );
                                 hits += 1;
                                 one |= ch as usize == CH_KICK && at.abs() < 0.01;
-                                if ch as usize == CH_SNARE && kind == 0 && p == POLKA && g == TECHNO && (at - 4.0).abs() < 0.01 {
+                                if ch as usize == CH_SNARE
+                                    && kind == 0
+                                    && p == POLKA
+                                    && g == TECHNO
+                                    && (at - 4.0).abs() < 0.01
+                                {
                                     claps += 1;
                                 }
                             }
@@ -15772,7 +16765,11 @@ mod tests {
                         ev.clear();
                     }
                     assert!(mains > 20, "{} seed {seed}: {mains} main bars", name(id));
-                    assert!(p != POLKA || g != TECHNO || claps > mains / 2, "{} seed {seed}: {claps} claps in {mains} bars", name(id));
+                    assert!(
+                        p != POLKA || g != TECHNO || claps > mains / 2,
+                        "{} seed {seed}: {claps} claps in {mains} bars",
+                        name(id)
+                    );
                 }
             }
         }
@@ -16077,6 +17074,79 @@ mod sample_tests {
         assert_eq!(v.sm.n, 0);
         v.start(&Patch { samp: 999, ..p }, 69.0, 0.8, 4800, false, 1, Some(&b), 0);
         assert_eq!(v.sm.n, 0);
+    }
+
+    /// A tone's pitch every 20 ms (autocorrelation near `f0`), in cents
+    /// from its median.
+    fn pitch_track(x: &[f32], f0: f64) -> Vec<f64> {
+        let w = 2048;
+        let t0 = SR as f64 / f0;
+        let mut v = Vec::new();
+        let mut i = 0;
+        while i + w + (1.2 * t0) as usize + 2 < x.len() {
+            let corr = |lag: usize| (0..w).map(|k| x[i + k] * x[i + k + lag]).sum::<f32>();
+            let (lo, hi) = ((0.85 * t0) as usize, (1.15 * t0) as usize + 1);
+            let best = (lo..=hi).max_by(|&a, &b| corr(a).total_cmp(&corr(b))).unwrap_or(lo);
+            let (a, b, c) = (corr(best - 1) as f64, corr(best) as f64, corr(best + 1) as f64);
+            let d = if a - 2.0 * b + c != 0.0 { 0.5 * (a - c) / (a - 2.0 * b + c) } else { 0.0 };
+            v.push(1200.0 * (SR as f64 / (best as f64 + d) / f0).log2());
+            i += (0.02 * SR) as usize;
+        }
+        let mut m = v.clone();
+        m.sort_by(f64::total_cmp);
+        let med = m.get(m.len() / 2).copied().unwrap_or(0.0);
+        v.iter().map(|c| c - med).collect()
+    }
+
+    #[test]
+    #[ignore = "a survey of the recordings: cargo test --release vibrato_survey -- --ignored --nocapture"]
+    fn vibrato_survey() {
+        let Ok(b) = samples::load(&samples::default_dir()) else { return eprintln!("no samples") };
+        let cases: Vec<(&str, Option<u16>, f32)> = vec![
+            ("violins auto", b.multi("violins", "auto"), 76.0),
+            ("violins sus", b.multi("violins", "sus"), 76.0),
+            ("violin auto", b.multi("violin", "auto"), 76.0),
+            ("violin sus", b.multi("violin", "sus"), 76.0),
+            ("gm Violin", b.gm("Violin"), 76.0),
+            ("gm Fiddle", b.gm("Fiddle"), 76.0),
+            ("trumpet auto", b.multi("trumpet", "auto"), 72.0),
+            ("trumpet sus", b.multi("trumpet", "sus"), 72.0),
+            ("gm Trumpet", b.gm("Trumpet"), 72.0),
+            ("gm Muted Trumpet", b.gm("Muted Trumpet"), 72.0),
+            ("gm Trombone", b.gm("Trombone"), 60.0),
+            ("gm French Horns", b.gm("French Horns"), 62.0),
+            ("gm Tuba", b.gm("Tuba"), 40.0),
+            ("gm Clarinet", b.gm("Clarinet"), 70.0),
+            ("gm Tenor Sax", b.gm("Tenor Sax"), 62.0),
+            ("gm Alto Sax", b.gm("Alto Sax"), 68.0),
+            ("gm Accordion", b.gm("Accordion"), 70.0),
+            ("gm Harmonica", b.gm("Harmonica"), 70.0),
+            ("gm Flute", b.gm("Flute"), 76.0),
+            ("gm Strings", b.gm("Strings"), 64.0),
+            ("gm Cello", b.gm("Cello"), 50.0),
+        ];
+        for (name, id, note) in cases {
+            let Some(samp) = id else {
+                println!("{name:20} (not in the bank)");
+                continue;
+            };
+            let p = Patch { samp, gain: 1.0, ..SAMPLED };
+            let mut v = VOICE;
+            v.start(&p, note, 0.8, (3.5 * SR) as i64, false, 1, Some(&b), 0);
+            let out = run(&mut v, &b, 3.2);
+            let x: Vec<f32> = out.iter().map(|s| s[0] + s[1]).collect();
+            let c = pitch_track(&x[(0.4 * SR) as usize..], hz(note));
+            let sd = (c.iter().map(|v| v * v).sum::<f64>() / c.len().max(1) as f64).sqrt();
+            let p2p = c.iter().cloned().fold(f64::MIN, f64::max) - c.iter().cloned().fold(f64::MAX, f64::min);
+            // the modulation's rate: zero crossings of the track
+            let zc =
+                c.windows(2).filter(|w| w[0].signum() != w[1].signum()).count() as f64 / 2.0 / (c.len() as f64 * 0.02);
+            let env: Vec<f32> = out.chunks((0.02 * SR) as usize).map(rms).collect();
+            let e = &env[20..env.len() - 2];
+            let em = e.iter().sum::<f32>() / e.len() as f32;
+            let ed = (e.iter().map(|x| (x - em) * (x - em)).sum::<f32>() / e.len() as f32).sqrt() / em.max(1e-9);
+            println!("{name:20} pitch sd {sd:5.1} cents, p2p {p2p:5.1}, ~{zc:4.1} Hz; level sd {:4.1}%", 100.0 * ed);
+        }
     }
 
     #[test]

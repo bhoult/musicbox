@@ -44,7 +44,7 @@ pub(super) struct WnPart {
 }
 
 /// A Western piece's state.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Western {
     pub(super) bar_steps: u32,
     pub(super) beat_steps: u32,

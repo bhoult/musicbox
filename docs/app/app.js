@@ -1,0 +1,339 @@
+// musicbox in the browser: the page's side. The engine runs in a worker
+// (worker.js, WebAssembly), the audio worklet (worklet.js) plays what it
+// makes, and this draws what is playing, the equalizer (an analyser on the
+// output) and the controls, as the desktop app's window has them.
+
+const $ = (id) => document.getElementById(id);
+const MIN_LENGTH = 30;
+const MAX_LENGTH = 3600;
+
+const st = {
+  genres: [],
+  primary: 0,
+  drums: null,
+  length: 0,
+  stopped: false,
+  seed: Math.floor(Math.random() * 0xffffffff),
+  now: null,
+};
+let worker = null;
+let exporter = null;
+let module = null;
+let analyser = null;
+
+// a length as typed: auto (or 0); M:SS; 3.5m or 210s; a bare number in
+// minutes under 30, else seconds (as the desktop app reads it)
+function parseLength(s) {
+  s = s.trim().toLowerCase();
+  if (s === 'auto' || s === '0') return 0;
+  const num = (x) => (/^\d+(\.\d+)?$/.test(x.trim()) ? parseFloat(x) : NaN);
+  let secs;
+  if (s.includes(':')) {
+    const [m, sec] = s.split(':');
+    if (!(num(sec) < 60)) return null;
+    secs = Math.trunc(num(m)) * 60 + num(sec);
+  } else if (s.endsWith('s')) secs = num(s.slice(0, -1));
+  else if (s.endsWith('m')) secs = num(s.slice(0, -1)) * 60;
+  else {
+    const x = num(s);
+    secs = x < 30 ? x * 60 : x;
+  }
+  if (!(secs > 0)) return null;
+  return Math.round(Math.min(MAX_LENGTH, Math.max(MIN_LENGTH, secs)));
+}
+
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const showLength = (s) => (s > 0 ? clock(s) : 'auto');
+
+function say(text, kind = 'note') {
+  st.note = { text, kind, until: performance.now() + 6000 };
+}
+
+// ---- the controls
+
+function setGenre(primary, drums) {
+  st.primary = primary;
+  st.drums = drums === primary ? null : drums;
+  worker?.postMessage({ type: 'genre', primary: st.primary, drums: st.drums });
+  drawButtons();
+}
+
+function stepGenre(by) {
+  setGenre((st.primary + by + st.genres.length) % st.genres.length, st.drums);
+}
+
+// none, then each genre but the one writing the music
+function stepDrums(by) {
+  const order = [null, ...st.genres.map((_, g) => g).filter((g) => g !== st.primary)];
+  const i = Math.max(0, order.indexOf(st.drums));
+  setGenre(st.primary, order[(i + by + order.length) % order.length]);
+}
+
+function setLength(secs) {
+  st.length = secs;
+  worker?.postMessage({ type: 'length', secs });
+  $('auto').classList.toggle('lit', secs <= 0);
+  if (secs > 0) $('slider').value = Math.min(600, secs);
+  if (document.activeElement !== $('typed')) $('typed').value = showLength(secs);
+}
+
+// 15 s longer or shorter: from auto, about the song's own length; under the
+// shortest, auto again
+function longer(by) {
+  const base = st.length > 0 ? st.length : Math.round((st.now?.planned ?? 180) / 15) * 15;
+  const v = base + 15 * by;
+  setLength(v < MIN_LENGTH ? 0 : Math.min(v, Math.max(600, base), MAX_LENGTH));
+}
+
+function setPlaying(on) {
+  st.stopped = !on;
+  worker?.postMessage({ type: 'playing', on });
+  $('play').lastElementChild.textContent = on ? 'stop' : 'start';
+}
+
+function replay() {
+  worker?.postMessage({ type: 'replay' });
+  setPlaying(true);
+}
+
+function exportSong() {
+  const n = st.now;
+  if (!n || !module) return;
+  const name = `${n.name}-${n.seed}-${n.song}.wav`;
+  if (!exporter) {
+    exporter = new Worker('app/worker.js');
+    exporter.onmessage = (e) => {
+      if (e.data.type !== 'wav') return;
+      const url = URL.createObjectURL(new Blob([e.data.bytes], { type: 'audio/wav' }));
+      const a = Object.assign(document.createElement('a'), { href: url, download: e.data.name });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      say(`saved ${e.data.name}`);
+    };
+    exporter.postMessage({ type: 'init', module, genre: 0, seed: 1 });
+  }
+  say(`exporting ${name}…`);
+  exporter.postMessage({ type: 'export', id: n.id, seed: n.seed, song: n.song, length: st.length, name });
+}
+
+// ---- the buttons
+
+function drawButtons() {
+  const g = $('genres');
+  const d = $('drummers');
+  if (!g.children.length) {
+    st.genres.forEach((name, i) => {
+      const b = Object.assign(document.createElement('button'), { textContent: name });
+      b.onclick = () => setGenre(i, st.drums);
+      b.oncontextmenu = (e) => {
+        e.preventDefault();
+        setGenre(st.primary, i);
+      };
+      g.append(b);
+    });
+    [null, ...st.genres.map((_, i) => i)].forEach((i) => {
+      const b = Object.assign(document.createElement('button'), { textContent: i === null ? 'none' : st.genres[i] });
+      b.onclick = () => setGenre(st.primary, i);
+      d.append(b);
+    });
+  }
+  [...g.children].forEach((b, i) => {
+    b.className = i === st.primary ? 'lit' : i === st.drums ? 'mark' : '';
+  });
+  [...d.children].forEach((b, k) => {
+    const i = k === 0 ? null : k - 1;
+    b.className = i === st.drums ? 'drum' : i === st.primary ? 'off' : '';
+  });
+}
+
+// ---- what is playing
+
+function drawNow() {
+  const n = st.now;
+  if (!n) return;
+  const [p, d] = n.name.split('+');
+  $('playing').innerHTML = d ? `${p} <span class="and">+</span> <span class="drums">${d}</span> <span class="and">drums</span>` : p;
+  const want = st.drums === null ? st.genres[st.primary] : `${st.genres[st.primary]}+${st.genres[st.drums]}`;
+  const line = $('line');
+  if (st.note && performance.now() < st.note.until) {
+    line.textContent = st.note.text;
+    line.className = `line ${st.note.kind}`;
+    return;
+  }
+  let s = `song ${n.piece} / ${n.meter} / ${Math.round(n.bpm)} bpm`;
+  if (n.key) s += ` / ${n.key.replace(/b$/, '♭')} ${n.mode}`;
+  if (n.section) s += ` / ${n.section} ${Math.max(1, n.bar)} of ${n.bars}`;
+  s += ` / ${clock(n.elapsed)}`;
+  if (n.length > 0) s += ` of ${clock(n.length)}`;
+  if (n.stopped) s += ' / stopped';
+  if (want !== n.name) s += `  →  next: ${want}`;
+  line.textContent = s;
+  line.className = 'line';
+}
+
+// ---- the equalizer: LED bars 35 Hz to 16 kHz, each band's loudest bin
+// tilted up 3 dB an octave (about 1 kHz), falling 1.4 a second, a peak held
+// 0.6 s
+
+const eq = { bars: [], peaks: [], held: [], last: 0 };
+
+function led(t) {
+  const mix = (a, b, k) => a.map((x, i) => Math.round(x + (b[i] - x) * k));
+  const teal0 = [30, 158, 146], teal = [95, 211, 198], amber = [242, 181, 68], red = [239, 79, 95];
+  const c = t < 0.55 ? mix(teal0, teal, t / 0.55) : t < 0.8 ? mix(teal, amber, (t - 0.55) / 0.25) : mix(amber, red, Math.min(1, (t - 0.8) / 0.2));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function drawEq(t) {
+  requestAnimationFrame(drawEq);
+  const cv = $('eq');
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cv.clientWidth * dpr);
+  const H = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== W || cv.height !== H) Object.assign(cv, { width: W, height: H });
+  const g = cv.getContext('2d');
+  g.fillStyle = '#141a21';
+  g.fillRect(0, 0, W, H);
+  const n = Math.max(16, Math.min(96, Math.floor(cv.clientWidth / 11)));
+  const label = 16 * dpr;
+  const top = 8 * dpr;
+  const seg = 4 * dpr;
+  const segs = Math.max(1, Math.floor((H - label - top) / seg));
+  const slot = (W - 8 * dpr) / n;
+  const dt = Math.min(0.1, (t - eq.last) / 1000 || 0);
+  eq.last = t;
+  let db = null;
+  if (analyser) {
+    db = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(db);
+  }
+  const hz = (k) => 35 * Math.pow(16000 / 35, k / n);
+  const bin = (f) => (f * analyser.fftSize) / analyser.context.sampleRate;
+  for (let b = 0; b < n; b++) {
+    let level = 0;
+    if (db) {
+      const lo = Math.floor(bin(hz(b)));
+      const hi = Math.max(lo + 1, Math.ceil(bin(hz(b + 1))));
+      let m = -200;
+      for (let k = lo; k < hi && k < db.length; k++) m = Math.max(m, db[k]);
+      const fc = Math.sqrt(hz(b) * hz(b + 1));
+      m += 3 * Math.log2(fc / 1000);
+      level = Math.min(1, Math.max(0, (m + 85) / 60));
+    }
+    eq.bars[b] = Math.max(level, (eq.bars[b] ?? 0) - 1.4 * dt);
+    if (level >= (eq.peaks[b] ?? 0)) {
+      eq.peaks[b] = level;
+      eq.held[b] = t;
+    } else if (t - (eq.held[b] ?? 0) > 600) {
+      eq.peaks[b] = Math.max(0, eq.peaks[b] - 1.4 * dt);
+    }
+    const x = 4 * dpr + b * slot;
+    const bw = Math.max(1, slot - 2 * dpr);
+    const lit = Math.round(eq.bars[b] * segs);
+    for (let s = 0; s < segs; s++) {
+      g.fillStyle = s < lit ? led(s / segs) : '#1b232c';
+      g.fillRect(x, H - label - (s + 1) * seg + dpr, bw, seg - dpr);
+    }
+    const pk = Math.round(eq.peaks[b] * segs);
+    if (pk > 0) {
+      g.fillStyle = '#f4f6fa';
+      g.fillRect(x, H - label - pk * seg + dpr, bw, 2 * dpr);
+    }
+  }
+  g.fillStyle = '#5c6573';
+  g.font = `${11 * dpr}px ui-monospace, monospace`;
+  g.textAlign = 'center';
+  for (const [f, s] of [[50, '50'], [100, '100'], [200, '200'], [500, '500'], [1000, '1K'], [2000, '2K'], [5000, '5K'], [10000, '10K']]) {
+    const x = 4 * dpr + (Math.log(f / 35) / Math.log(16000 / 35)) * (W - 8 * dpr);
+    g.fillText(s, x, H - 4 * dpr);
+  }
+  drawNow();
+}
+
+// ---- the start (sound needs a press first)
+
+async function start() {
+  $('start').remove();
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+  // (a server that sends the module as anything but application/wasm:
+  // compiled from its bytes instead)
+  module = await WebAssembly.compileStreaming(fetch('app/musicbox.wasm')).catch(async () =>
+    WebAssembly.compile(await (await fetch('app/musicbox.wasm')).arrayBuffer()),
+  );
+  await ctx.audioWorklet.addModule('app/worklet.js');
+  const node = new AudioWorkletNode(ctx, 'musicbox', { numberOfInputs: 0, outputChannelCount: [2] });
+  analyser = Object.assign(ctx.createAnalyser(), { fftSize: 8192, smoothingTimeConstant: 0 });
+  node.connect(analyser);
+  analyser.connect(ctx.destination);
+  node.port.onmessage = (e) => {
+    st.now = JSON.parse(e.data.now);
+  };
+  worker = new Worker('app/worker.js');
+  const ch = new MessageChannel();
+  worker.onmessage = (e) => {
+    if (e.data.type === 'genres') {
+      st.genres = e.data.genres;
+      drawButtons();
+    }
+  };
+  st.primary = st.seed % 12;
+  worker.postMessage({ type: 'init', module, genre: st.primary, seed: st.seed, port: ch.port1 }, [ch.port1]);
+  node.port.postMessage({ port: ch.port2 }, [ch.port2]);
+  $('seed').textContent = `seed ${st.seed}`;
+  await ctx.resume();
+}
+
+$('go').onclick = () => start().catch((e) => say(`could not start: ${e.message}`, 'error'));
+$('play').onclick = () => setPlaying(st.stopped);
+$('replay').onclick = replay;
+$('skip').onclick = () => worker?.postMessage({ type: 'skip' });
+$('export').onclick = exportSong;
+$('auto').onclick = () => setLength(0);
+$('slider').oninput = (e) => setLength(Number(e.target.value));
+$('typed').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    const v = parseLength(e.target.value);
+    if (v === null) say(`not a length: ${e.target.value}`, 'error');
+    else setLength(v);
+    e.target.blur();
+  } else if (e.key === 'Escape') {
+    e.target.blur();
+  }
+};
+$('typed').onblur = () => {
+  $('typed').value = showLength(st.length);
+};
+$('slider').onwheel = (e) => {
+  e.preventDefault();
+  longer(e.deltaY < 0 ? 1 : -1);
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+  if (e.ctrlKey || e.metaKey || e.altKey || !worker) return;
+  const k = e.key;
+  const act = {
+    ArrowRight: () => stepGenre(1),
+    ArrowLeft: () => stepGenre(-1),
+    ArrowUp: () => stepDrums(1),
+    ArrowDown: () => stepDrums(-1),
+    ' ': () => worker.postMessage({ type: 'skip' }),
+    s: () => setPlaying(st.stopped),
+    r: replay,
+    x: exportSong,
+    '[': () => longer(-1),
+    ']': () => longer(1),
+    t: () => {
+      $('typed').value = '';
+      $('typed').focus();
+    },
+  }[k.length === 1 ? k.toLowerCase() : k];
+  if (act) {
+    e.preventDefault();
+    act();
+  }
+});
+
+requestAnimationFrame(drawEq);
