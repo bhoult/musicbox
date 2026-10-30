@@ -1354,3 +1354,48 @@ fn sounds_ce(r: &mut Rng, s: &mut Synth, style: u8) {
     s.m.gain = 2.1;
     s.m.target = 0.21;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rules' parts of each type the tune network knows, for its
+    /// statistics against O'Neill's (tools/neural/tunes.py's `part_stats`):
+    /// `cargo test --release rules_parts -- --ignored`, one JSON line a part
+    /// to target/rules-parts.jsonl.
+    #[test]
+    #[ignore]
+    fn rules_parts() {
+        let mut r = Rng::new(0xCE17);
+        let mut out = String::new();
+        let types = [CT_REEL, CT_JIG, CT_HORNPIPE, CT_MARCH, CT_MARCH68, CT_AIR];
+        for (t, &ty) in types.iter().enumerate() {
+            let (bs, beat, _) = ct_meter(ty);
+            for _ in 0..170 {
+                let mode = r.pick(&[IONIAN, 1, MIXOLYDIAN, AEOLIAN]);
+                let pools = match mode {
+                    IONIAN => CE_ION,
+                    MIXOLYDIAN => CE_MIX,
+                    AEOLIAN => CE_AEO,
+                    _ => CE_DOR,
+                };
+                for (k, pool) in pools.iter().enumerate() {
+                    let chords = halves(r.pick(pool));
+                    let (l, h) = if k == 0 { (-3, 12) } else { (-1, 15) };
+                    let mel = ce_part(&mut r, ty, bs as u16, beat as u16, &chords, mode, l, h);
+                    let minor = |q: u8| matches!(q, Q_MIN | Q_MIN7 | Q_MIN9 | Q_MADD9 | Q_DIM | Q_HDIM7 | Q_DIM7);
+                    let notes: Vec<String> = mel.iter().map(|n| format!("[{},{},{}]", n.step, n.len, n.pitch)).collect();
+                    let ch: Vec<String> =
+                        chords.iter().map(|c| format!("[{},{}]", c.root.rem_euclid(12), minor(c.q))).collect();
+                    out += &format!(
+                        "{{\"ty\":{t},\"part\":{k},\"notes\":[{}],\"chords\":[{}]}}\n",
+                        notes.join(","),
+                        ch.join(",")
+                    );
+                }
+            }
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rules-parts.jsonl");
+        std::fs::write(path, out).expect("write");
+    }
+}

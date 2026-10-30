@@ -2150,7 +2150,10 @@ impl Bank {
         let (mut groups, owner) = self.groups();
         let mut zones = self.zones.clone();
         let mut src = vec![0u16; zones.len()];
-        let mut done: HashMap<(usize, u32, u8, u8, u32, u32), (usize, u32, u32, u32, u32)> = HashMap::new();
+        // a recording (where, how long, channels, looping, loop) to where it
+        // went: its group, where in that group's stream, how long, the loop
+        type Recording = (usize, u32, u8, u8, u32, u32);
+        let mut done: HashMap<Recording, (usize, u32, u32, u32, u32)> = HashMap::new();
         let mut deps: Vec<Vec<usize>> = vec![Vec::new(); groups.len()];
         for (g, gr) in groups.iter_mut().enumerate() {
             // each zone's recording made mono, at the engine's rate, cut to
