@@ -1,0 +1,24 @@
+[package]
+name = "musicbox"
+version = "1.0.0"
+edition = "2024"
+description = "Endless generated music in twelve genres and their mixes, played from the command line, with an optional window: a live equalizer and a genre selector"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/bhoult/musicbox"
+publish = false
+
+[[bin]]
+name = "musicbox"
+path = "src/main.rs"
+bench = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+incremental = false
+
+[profile.dev]
+opt-level = 1
