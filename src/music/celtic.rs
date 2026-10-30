@@ -299,6 +299,55 @@ fn ce_part(r: &mut Rng, ty: u8, bs: u16, beat: u16, chords: &[Harm], mode: usize
     mel
 }
 
+/// The tune network's type for a tune type (None: one it has not learned,
+/// whose tunes stay the rules').
+fn ce_net_type(ty: u8) -> Option<usize> {
+    use crate::tunes::*;
+    match ty {
+        CT_REEL => Some(T_REEL),
+        CT_JIG => Some(T_JIG),
+        CT_HORNPIPE => Some(T_HORNPIPE),
+        CT_MARCH => Some(T_MARCH),
+        CT_MARCH68 => Some(T_MARCH68),
+        CT_AIR | CT_PLANXTY => Some(T_AIR),
+        _ => None,
+    }
+}
+
+/// A part as the network writes it (`ce_part`'s in its place): over the
+/// same chords, in the same range, from dice of its own (`dice`: the rules'
+/// as the part began), its notes' weight on the beats.
+#[allow(clippy::too_many_arguments)]
+fn ce_net_part(
+    net: &crate::tunes::TuneNet,
+    ty: usize,
+    bs: u16,
+    beat: u16,
+    chords: &[Harm],
+    mode: usize,
+    part: usize,
+    lo: i32,
+    hi: i32,
+    dice: u64,
+) -> Vec<PNote> {
+    let minor = |q: u8| matches!(q, Q_MIN | Q_MIN7 | Q_MIN9 | Q_MADD9 | Q_DIM | Q_HDIM7 | Q_DIM7);
+    let ch: Vec<(i32, bool)> = chords.iter().map(|h| (h.root, minor(h.q))).collect();
+    let m = match mode {
+        IONIAN | LYDIAN => 0,
+        MIXOLYDIAN => 2,
+        AEOLIAN | 2 | 6 => 3,
+        _ => 1,
+    };
+    let mut d = Rng(dice ^ 0x7A1E_5EED_0F0E_1101);
+    let notes = net.part(ty, bs, m, part.min(1), &ch, lo, hi, 0.9, || d.f());
+    notes
+        .into_iter()
+        .filter_map(|(step, len, p)| {
+            Some(PNote { step, len, pitch: p?, vel: if step % beat == 0 { 0.9 } else { 0.75 }, grace: 0 })
+        })
+        .collect()
+}
+
 /// Ornaments on a time through: cuts and taps on the longer notes, rolls on
 /// the longest (a dotted quarter's or a quarter's), the fiddle's trebles on
 /// a few eighths; more each time.
@@ -348,6 +397,8 @@ impl Song {
         self.pivot = None;
         let guest = self.guest;
         let pull = |bpm: f64| guest.map_or(bpm, |g| bpm + 0.6 * (MID_BPM[g] - bpm));
+        // the network's tunes in the rules' place, where it knows the type
+        let net = if self.opts.net_tunes { crate::tunes::celtic() } else { None };
         let r = &mut self.rng;
         // the set's tunes: their types, keys and tempos
         let types: Vec<u8> = match style {
@@ -420,16 +471,14 @@ impl Song {
             for (k, pool) in pools.iter().enumerate() {
                 let chords = halves(r.pick(pool));
                 let (l, h) = if k == 0 { (lo, hi) } else { (lo + 2, hi + 3) };
-                let mel = ce_part(
-                    r,
-                    ty,
-                    bs as u16,
-                    beat as u16,
-                    &chords,
-                    mode,
-                    l,
-                    h.min(if style == CS_PIPES { 12 } else { 15 }),
-                );
+                let h = h.min(if style == CS_PIPES { 12 } else { 15 });
+                // (the dice as they were: the network's part from them, the
+                // rules' drawn either way so the rest of the piece is the same)
+                let dice = r.0;
+                let mut mel = ce_part(r, ty, bs as u16, beat as u16, &chords, mode, l, h);
+                if let (Some(n), Some(t)) = (net, ce_net_type(ty)) {
+                    mel = ce_net_part(n, t, bs as u16, beat as u16, &chords, mode, k, l, h, dice);
+                }
                 parts.push(CPart { chords, mel });
             }
             let key = (pc - base.0).rem_euclid(12);

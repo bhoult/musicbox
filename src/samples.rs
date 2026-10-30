@@ -1691,6 +1691,11 @@ fn config() -> &'static (PathBuf, bool) {
 /// music. A missing directory is one line on stderr, and the synthesiser.
 pub fn load_now() -> bool {
     LOAD.call_once(|| {
+        // the tunes networks (the recordings or not)
+        #[cfg(not(target_arch = "wasm32"))]
+        for w in crate::tunes::load(&crate::net::default_dir()) {
+            eprintln!("musicbox: tunes: {w}");
+        }
         let (dir, off) = config();
         if *off {
             return;
@@ -2426,8 +2431,6 @@ impl Partial {
         Ok(Partial { bank: b, groups, lens, srcs, bases })
     }
 
-    /// Group `g`'s stream (mono, 16-bit, `frames` long): its instruments
-    /// playable, and named. Once (later calls do nothing).
     /// An instrument by its kind and name, as an index line gives it ("multi"
     /// and an instrument and articulation, or "gm" and a preset), whether
     /// or not its group is in.
@@ -2439,6 +2442,8 @@ impl Partial {
         })
     }
 
+    /// Group `g`'s stream (mono, 16-bit, `frames` long): its instruments
+    /// playable, and named. Once (later calls do nothing).
     pub fn add(&mut self, g: usize, pcm: &[i16]) -> Result<(), String> {
         let gr = self.groups.get(g).ok_or_else(|| format!("no group {g}"))?;
         if self.bases[g].is_some() {
@@ -2721,6 +2726,8 @@ mod tests {
         let mut p = Partial::new(&std::fs::read(out.join("pack.bin")).expect("pack.bin")).expect("tables");
         assert!(json.contains("\"all\":["), "{json}");
         assert_eq!(p.bank.multi("sine", "sus"), None, "nothing named before its group is in");
+        assert_eq!(p.find("multi", "sine", "sus"), b.multi("sine", "sus"), "but found by name in the tables");
+        assert_eq!(p.find("gm", "Trumpet", ""), b.gm("Trumpet"));
         for g in 0..p.groups.len() {
             let (pcm, rate, chans) =
                 read_wav(&std::fs::read(out.join(format!("raw/{g}.wav"))).expect("raw")).expect("wav");

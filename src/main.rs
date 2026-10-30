@@ -12,6 +12,7 @@ mod sdl;
 mod spectrum;
 mod tap;
 mod term;
+mod tunes;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};

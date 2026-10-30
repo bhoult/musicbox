@@ -345,7 +345,7 @@ impl Gui {
         let tw = font::width(&shown, 1);
         self.text(fx + (fw - tw).max(4) / 2, y + 3, &shown, if editing { TEXT } else { ACCENT }, 1);
         y += bh + 8;
-        self.made(st.opts, m, y, bh);
+        self.made(st.opts, st.id(), m, y, bh);
         y += bh + 8;
 
         self.text(m, y, "MUSIC BY", DIM, 1);
@@ -404,8 +404,10 @@ impl Gui {
 
     /// How the music is made, a row of three choices, each a key and its
     /// options side by side, the one chosen lit: the settings as written
-    /// or tuned, the tunes by the rules or the network, the instruments.
-    fn made(&mut self, o: music::Opts, x0: i32, y: i32, bh: i32) {
+    /// or tuned, the tunes by the rules or the network, the instruments. An
+    /// option underlined does something for the music `id` (the optimiser
+    /// tuned it, a network writes its tunes, network instruments are in).
+    fn made(&mut self, o: music::Opts, id: usize, x0: i32, y: i32, bh: i32) {
         use music::Voices;
         let groups: [(&str, &str, Vec<Choice>); 3] = [
             (
@@ -440,7 +442,13 @@ impl Gui {
             for (name, to) in opts {
                 let bw = font::width(name, 1) + 8;
                 let fill = if to == o { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
-                self.button(x, y, bw, bh, name, "", fill, None, Action::SetOpts(to), None);
+                let real = match (label, name) {
+                    ("TUNING", "OPTIMISED") => music::has_tuning(id),
+                    ("TUNES", "NETWORK") => music::has_net_tunes(id),
+                    ("INSTRUMENTS", "NETWORK") => crate::net::count() > 0,
+                    _ => false,
+                };
+                self.button(x, y, bw, bh, name, "", fill, real.then_some(ACCENT), Action::SetOpts(to), None);
                 x += bw + 2;
             }
             x += 14;

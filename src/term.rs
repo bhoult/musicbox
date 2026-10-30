@@ -279,9 +279,19 @@ impl Term {
         let o = st.opts;
         let lit = |on: bool| if on { "1;36" } else { "36" };
         l.push("  o tuning ", "2");
-        l.push(if o.tuned { "optimised" } else { "as written" }, lit(o.tuned));
+        let tuning = match (o.tuned, music::has_tuning(st.id())) {
+            (false, _) => "as written",
+            (true, true) => "optimised",
+            (true, false) => "optimised (none for this genre yet: as written)",
+        };
+        l.push(tuning, lit(o.tuned));
         l.push("  m tunes ", "2");
-        l.push(if o.net_tunes { "network" } else { "rules" }, lit(o.net_tunes));
+        let tunes = match (o.net_tunes, music::has_net_tunes(st.id())) {
+            (false, _) => "rules",
+            (true, true) => "network",
+            (true, false) => "network (celtic's only: rules here)",
+        };
+        l.push(tunes, lit(o.net_tunes));
         l.push("  i instruments ", "2");
         let voices = match o.voices {
             music::Voices::Recorded if !st.sampled => "recorded (none installed)".to_string(),

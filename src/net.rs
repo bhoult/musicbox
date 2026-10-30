@@ -13,12 +13,16 @@
 //! - layers: dense, ReLU between them, none after the last;
 //! - out: ln of the harmonics' total amplitude, `HARMS` logits (a softmax over
 //!   the harmonics under 20 kHz shares the amplitude out), and ln of each
-//!   band's noise amplitude (its RMS).
+//!   band's noise amplitude (its RMS); an `MBN2` file's two more, its
+//!   vibrato: ln of the depth (cents, at most `VIB_MAX`), and the rate
+//!   (4 + 4 sigmoid(y) Hz).
 //!
 //! The sound, sample by sample, the frames' values ramped between them:
-//! sum over k of a_k sin(k phi), phi the note's phase; plus, for each band,
-//! its amplitude times white noise through that band's band-pass (a state
-//! variable filter at `band_hz(b)`, Q `BAND_Q`), scaled to an RMS of 1.
+//! sum over k of a_k sin(k phi), phi the note's phase (its rate f0 times
+//! 2^(depth sin(2 pi psi) / 1200), psi the vibrato's phase, both from 0 at
+//! the note's start); plus, for each band, its amplitude times white noise
+//! through that band's band-pass (a state variable filter at `band_hz(b)`,
+//! Q `BAND_Q`), scaled to an RMS of 1.
 
 use std::sync::OnceLock;
 
@@ -33,6 +37,9 @@ const T_KNEE: f32 = 0.01;
 const NYQ: f32 = 20000.0;
 pub const BAND_Q: f32 = 1.5;
 const MAGIC: &[u8; 4] = b"MBN1";
+const MAGIC_VIB: &[u8; 4] = b"MBN2";
+/// The deepest vibrato a network may ask for (cents).
+const VIB_MAX: f32 = 150.0;
 
 /// The centre of noise band `b`: 80 Hz to 16 kHz, evenly in octaves.
 pub fn band_hz(b: usize) -> f32 {
@@ -52,11 +59,13 @@ pub struct Net {
     layers: Vec<Layer>,
     /// the instrument's own release (seconds to -60 dB), as its recordings have it
     pub rel: f32,
+    /// whether it says its vibrato (`MBN2`)
+    vib: bool,
 }
 
 impl Net {
-    /// An `MBN1` file: the magic, then u32s (inputs, harmonics, bands,
-    /// layers), then each layer's u32s (inputs, outputs) and its f32s
+    /// An `MBN1` (or `MBN2`) file: the magic, then u32s (inputs, harmonics,
+    /// bands, layers), then each layer's u32s (inputs, outputs) and its f32s
     /// (weights, outputs rows of inputs; then biases); little-endian.
     pub fn parse(b: &[u8], rel: f32) -> Result<Net, String> {
         let mut at = 0usize;
@@ -65,9 +74,11 @@ impl Net {
             at += n;
             Ok(s)
         };
-        if take(4)? != MAGIC {
-            return Err("not a musicbox network".into());
-        }
+        let vib = match take(4)? {
+            m if m == MAGIC => false,
+            m if m == MAGIC_VIB => true,
+            _ => return Err("not a musicbox network".into()),
+        };
         let mut u = || -> Result<usize, String> { Ok(u32::from_le_bytes(take(4)?.try_into().expect("4")) as usize) };
         let (inp, harms, bands, n) = (u()?, u()?, u()?, u()?);
         if (inp, harms, bands) != (3, HARMS, BANDS) || !(1..=8).contains(&n) {
@@ -95,16 +106,17 @@ impl Net {
             l.b = f(l.out)?;
             want = l.out;
         }
-        if want != 1 + HARMS + BANDS {
+        if want != 1 + HARMS + BANDS + 2 * vib as usize {
             return Err(format!("network: {want} out"));
         }
-        Ok(Net { layers, rel })
+        Ok(Net { layers, rel, vib })
     }
 
     /// The controls at `t` seconds into a note at `pitch` (fractional),
-    /// velocity `vel`: each harmonic's amplitude (none at or past `NYQ`) and
-    /// each band's.
-    pub fn frame(&self, pitch: f32, vel: f32, t: f32, h: &mut [f32; HARMS], n: &mut [f32; BANDS]) {
+    /// velocity `vel`: each harmonic's amplitude (none at or past `NYQ`),
+    /// each band's, and the vibrato (its depth in cents, its rate in Hz;
+    /// none from an `MBN1`).
+    pub fn frame(&self, pitch: f32, vel: f32, t: f32, h: &mut [f32; HARMS], n: &mut [f32; BANDS], v: &mut [f32; 2]) {
         let mut x: Vec<f32> =
             vec![(pitch - 60.0) / 24.0, vel, (1.0 + t.clamp(0.0, T_MAX) / T_KNEE).ln() / (1.0 + T_MAX / T_KNEE).ln()];
         let last = self.layers.len() - 1;
@@ -135,6 +147,12 @@ impl Net {
         for (b, v) in n.iter_mut().enumerate() {
             *v = x[1 + HARMS + b].min(4.0).exp();
         }
+        *v = if self.vib {
+            let y = &x[1 + HARMS + BANDS..];
+            [y[0].min(VIB_MAX.ln()).exp(), 4.0 + 4.0 / (1.0 + (-y[1]).exp())]
+        } else {
+            [0.0, 5.0]
+        };
     }
 }
 
@@ -210,6 +228,10 @@ pub struct NetVoice {
     h1: [f32; HARMS],
     n0: [f32; BANDS],
     n1: [f32; BANDS],
+    /// the vibrato (depth in cents, rate) at the frame's start and end, its phase
+    v0: [f32; 2],
+    v1: [f32; 2],
+    vph: f32,
     phase: f32,
     bp: [Bp; BANDS],
     seed: u32,
@@ -225,6 +247,9 @@ pub const NET_VOICE: NetVoice = NetVoice {
     h1: [0.0; HARMS],
     n0: [0.0; BANDS],
     n1: [0.0; BANDS],
+    v0: [0.0; 2],
+    v1: [0.0; 2],
+    vph: 0.0,
     phase: 0.0,
     bp: [Bp { a1: 0.0, a2: 0.0, a3: 0.0, ic1: 0.0, ic2: 0.0, norm: 0.0 }; BANDS],
     seed: 1,
@@ -239,6 +264,7 @@ impl NetVoice {
         self.t = 0.0;
         self.left = 0;
         self.phase = 0.0;
+        self.vph = 0.0;
         self.bp = *bands();
         self.seed = seed | 1;
         self.h1 = [0.0; HARMS];
@@ -249,29 +275,38 @@ impl NetVoice {
 
     /// The note at `pitch` into `out` (overwritten, the same both sides).
     pub fn fill(&mut self, pitch: f32, out: &mut [[f32; 2]]) {
-        let Some(net) = get(self.net) else {
-            out.fill([0.0; 2]);
-            return;
-        };
+        match get(self.net) {
+            Some(net) => self.fill_by(net, pitch, out),
+            None => out.fill([0.0; 2]),
+        }
+    }
+}
+
+impl NetVoice {
+    /// `fill`, by `net`.
+    fn fill_by(&mut self, net: &Net, pitch: f32, out: &mut [[f32; 2]]) {
         let f0 = 440.0 * ((pitch - 69.0) / 12.0).exp2();
         let dphi = f0 / SR;
         let mut i = 0;
         while i < out.len() {
             if self.left == usize::MAX || self.left == 0 {
                 let first = self.left == usize::MAX;
-                let (mut h, mut n) = ([0.0; HARMS], [0.0; BANDS]);
-                net.frame(pitch, self.vel, self.t, &mut h, &mut n);
+                let (mut h, mut n, mut v) = ([0.0; HARMS], [0.0; BANDS], [0.0; 2]);
+                net.frame(pitch, self.vel, self.t, &mut h, &mut n, &mut v);
                 if first {
                     // the frame at the note's start, held through its first frame
                     self.h1 = h;
                     self.n1 = n;
+                    self.v1 = v;
                     self.t += FRAME as f32 / SR;
-                    net.frame(pitch, self.vel, self.t, &mut h, &mut n);
+                    net.frame(pitch, self.vel, self.t, &mut h, &mut n, &mut v);
                 }
                 self.h0 = self.h1;
                 self.n0 = self.n1;
+                self.v0 = self.v1;
                 self.h1 = h;
                 self.n1 = n;
+                self.v1 = v;
                 self.t += FRAME as f32 / SR;
                 self.left = FRAME;
             }
@@ -298,7 +333,16 @@ impl NetVoice {
                     let a = self.n0[b] + (self.n1[b] - self.n0[b]) * r;
                     x += a * f.norm * f.tick(w);
                 }
-                self.phase += dphi;
+                // the vibrato: 2^(cents / 1200), to second order
+                let depth = self.v0[0] + (self.v1[0] - self.v0[0]) * r;
+                let mut step = dphi;
+                if depth > 0.0 {
+                    self.vph += (self.v0[1] + (self.v1[1] - self.v0[1]) * r) / SR;
+                    self.vph -= self.vph.floor();
+                    let y = depth * (std::f32::consts::TAU * self.vph).sin() * (std::f32::consts::LN_2 / 1200.0);
+                    step *= 1.0 + y + 0.5 * y * y;
+                }
+                self.phase += step;
                 self.phase -= self.phase.floor();
                 *o = [x, x];
             }
@@ -454,6 +498,57 @@ mod tests {
         bias.extend((0..BANDS).map(|k| if k == b { n.ln() } else { -30.0 }));
         v.extend(bias.iter().flat_map(|x| x.to_le_bytes()));
         v
+    }
+
+    #[test]
+    fn a_network_with_vibrato_wavers_as_it_says() {
+        // the fundamental at 0.1, vibrato 50 cents (ln 50) at 6 Hz (sigmoid 0.5)
+        let mut v = flat(0.1, 0, 1e-9);
+        v[..4].copy_from_slice(MAGIC_VIB);
+        let out = 1 + HARMS + BANDS;
+        // the one layer 3 by out, made 3 by out + 2: its outputs' count, weights, biases
+        let at = 4 + 4 * 4 + 4;
+        v[at..at + 4].copy_from_slice(&((out + 2) as u32).to_le_bytes());
+        let w_end = at + 4 + 4 * 3 * out;
+        v.splice(w_end..w_end, (0..3 * 2).flat_map(|_| 0f32.to_le_bytes()));
+        v.extend(50f32.ln().to_le_bytes());
+        v.extend(0f32.to_le_bytes());
+        let net = Net::parse(&v, 0.2).expect("parse");
+        let (mut h, mut n, mut vib) = ([0.0; HARMS], [0.0; BANDS], [0.0; 2]);
+        net.frame(69.0, 0.8, 1.0, &mut h, &mut n, &mut vib);
+        assert!((vib[0] - 50.0).abs() < 0.01 && (vib[1] - 6.0).abs() < 0.01, "{vib:?}");
+        let mut nets = Nets::default();
+        nets.add(3, net);
+        let k = nets.len() as u16 - 1;
+        let mut voice = NET_VOICE;
+        // (its own table, not installed: the other test installs one)
+        voice.start(k, 0.8, 9);
+        let mut buf = vec![[0.0f32; 2]; 48000];
+        let net = &nets.nets[k as usize];
+        // the oscillator's frequency through a second, by its periods
+        let (mut hh, mut nn, mut vv) = ([0.0; HARMS], [0.0; BANDS], [0.0; 2]);
+        net.frame(69.0, 0.8, 0.0, &mut hh, &mut nn, &mut vv);
+        voice.h0 = hh;
+        voice.h1 = hh;
+        voice.v0 = vv;
+        voice.v1 = vv;
+        voice.left = FRAME;
+        let mut x = Vec::new();
+        for o in buf.iter_mut() {
+            // (one sample at a time, the controls held: the vibrato alone)
+            if voice.left == 0 {
+                voice.left = FRAME;
+            }
+            let mut one = [[0.0f32; 2]; 1];
+            voice.fill_by(net, 69.0, &mut one);
+            *o = one[0];
+            x.push(one[0][0]);
+        }
+        let ups: Vec<usize> = (1..x.len()).filter(|&i| x[i - 1] < 0.0 && x[i] >= 0.0).collect();
+        let f: Vec<f32> = ups.windows(2).map(|w| 48000.0 / (w[1] - w[0]) as f32).collect();
+        let (lo, hi) = (f.iter().copied().fold(f32::MAX, f32::min), f.iter().copied().fold(0.0, f32::max));
+        let cents = 1200.0 * (hi / lo).log2();
+        assert!((cents - 100.0).abs() < 15.0, "{cents:.0} cents from lowest to highest, not 100");
     }
 
     fn rms(x: &[[f32; 2]]) -> f32 {

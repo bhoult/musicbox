@@ -93,6 +93,11 @@ async function handle(m) {
       if (!ok) postMessage({ type: 'error', error: `network: ${text(x.mb_text(w))}` });
       break;
     }
+    case 'tunes': {
+      const ok = put(new Uint8Array(m.bytes), (p, n) => x.mb_tunes(w, m.genre, p, n));
+      if (!ok) postMessage({ type: 'error', error: `tunes: ${text(x.mb_text(w))}` });
+      break;
+    }
     case 'group': {
       const ok = put(m.pcm, (p, n) => x.mb_group(w, m.g, p, n));
       if (!ok) postMessage({ type: 'error', error: `recordings: ${text(x.mb_text(w))}` });

@@ -122,6 +122,7 @@ async function setOpts(change) {
       return;
     }
   }
+  if (next.netTunes) await loadTunes();
   Object.assign(st.opts, next);
   worker?.postMessage({ type: 'opts', code: optsCode(st.opts) });
   drawMade();
@@ -132,7 +133,7 @@ async function setOpts(change) {
 // decoded here (a worker has no decoder) and handed to the engine (moved,
 // not copied: a genre's come to tens of megabytes decoded); one load at a time
 
-const rec = { index: null, meta: null, have: new Set(), queue: Promise.resolve(), nets: null };
+const rec = { index: null, meta: null, have: new Set(), queue: Promise.resolve(), nets: null, tunes: null };
 
 function groupsFor(primary, drums) {
   const names = [st.genres[primary], drums === null ? null : st.genres[drums]].filter((n) => n);
@@ -202,6 +203,25 @@ async function fetchRecordings(primary, drums) {
   say('recordings loaded');
 }
 
+// the tunes networks (models/index.tsv's "tunes" lines: the genre, then the
+// file), once
+async function loadTunes() {
+  if (rec.tunes) return;
+  rec.tunes = [];
+  const r = await fetch('app/models/index.tsv');
+  const lines = r.ok ? (await r.text()).split('\n').filter((l) => /^tunes\t/.test(l)) : [];
+  for (const line of lines) {
+    const [, genre, , file] = line.split('\t');
+    const g = st.genres.indexOf(genre.trim());
+    const f = await fetch(`app/models/${file.trim()}`);
+    if (g < 0 || !f.ok) continue;
+    const bytes = await f.arrayBuffer();
+    rec.tunes.push({ genre: g, bytes });
+    worker.postMessage({ type: 'tunes', genre: g, bytes: bytes.slice(0) });
+  }
+  say(rec.tunes.length ? `tunes networks: ${rec.tunes.map((t) => st.genres[t.genre]).join(', ')}` : 'no tunes networks here yet: the rules write');
+}
+
 // the network's instruments (models/index.tsv: kind, name, articulation,
 // file), once, after the tables
 async function loadNets() {
@@ -242,7 +262,11 @@ async function exportSong() {
     const todo = [...rec.have].filter((g) => !exporter.groups.has(g)).sort((a, b) => a - b);
     await sendGroups(todo, exporter);
     todo.forEach((g) => exporter.groups.add(g));
-    if (rec.nets && !exporter.nets) {
+    if (rec.tunes && !exporter.tunes) {
+    for (const { genre, bytes } of rec.tunes) exporter.postMessage({ type: 'tunes', genre, bytes: bytes.slice(0) });
+    exporter.tunes = true;
+  }
+  if (rec.nets && !exporter.nets) {
       for (const { line, bytes } of rec.nets) exporter.postMessage({ type: 'net', line, bytes: bytes.slice(0) });
       exporter.nets = true;
     }

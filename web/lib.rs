@@ -23,6 +23,8 @@ mod samples;
 mod sdl;
 #[path = "../src/tap.rs"]
 mod tap;
+#[path = "../src/tunes.rs"]
+mod tunes;
 
 use music::Stream;
 
@@ -207,6 +209,33 @@ pub unsafe extern "C" fn mb_net(w: *mut Web, lp: *const u8, ln: u32, p: *const u
     })();
     match r {
         Ok(()) => 1,
+        Err(e) => {
+            w.text = e;
+            0
+        }
+    }
+}
+
+/// A tunes network (`n` bytes at `p`) for the genre `genre` (celtic's
+/// alone so far): 1, else 0 and why in `mb_text`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` holds `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_tunes(w: *mut Web, genre: u32, p: *const u8, n: u32) -> u32 {
+    let w = unsafe { web(w) };
+    // SAFETY: the caller's
+    let file = unsafe { std::slice::from_raw_parts(p, n as usize) };
+    match tunes::TuneNet::parse(file) {
+        Ok(t) if music::canon(genre as usize) == music::CELTIC => {
+            // SAFETY: between calls: nothing holds the networks
+            unsafe { tunes::web() }.celtic = Some(t);
+            1
+        }
+        Ok(_) => {
+            w.text = format!("no tunes network for genre {genre}");
+            0
+        }
         Err(e) => {
             w.text = e;
             0

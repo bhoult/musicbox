@@ -59,7 +59,7 @@ const SKA: usize = 6;
 const MARIACHI: usize = 7;
 const INDONESIAN: usize = 8;
 const STARCONFLICT: usize = 9;
-const CELTIC: usize = 10;
+pub const CELTIC: usize = 10;
 const WESTERN: usize = 11;
 /// Other names `find` takes for a genre (squashed, as it compares them).
 const ALIASES: &[(&str, &str)] = &[
@@ -79,6 +79,8 @@ mod celtic;
 mod indonesian;
 #[path = "music/starconflict.rs"]
 mod starconflict;
+#[path = "music/tuned.rs"]
+mod tuned;
 #[path = "music/western.rs"]
 mod western;
 use celtic::*;
@@ -138,7 +140,7 @@ fn dice_key(id: usize) -> u64 {
 }
 
 /// `id` in its one spelling (a mix of a genre with itself is the genre alone).
-fn canon(id: usize) -> usize {
+pub fn canon(id: usize) -> usize {
     let (p, s) = parts(id);
     mix_id(p, s)
 }
@@ -1476,6 +1478,8 @@ struct Master {
     hi_g: f32,
     lo_z: [f32; 2],
     hi_z: [f32; 2],
+    /// the optimiser's on the tilt (dB, added to the genre's)
+    tilt_add: (f32, f32),
 }
 
 /// The tilt's shelves' corners' one-pole coefficients (250 Hz, 2.5 kHz).
@@ -1506,6 +1510,7 @@ impl Master {
             hi_g: 1.0,
             lo_z: [0.0; 2],
             hi_z: [0.0; 2],
+            tilt_add: (0.0, 0.0),
         }
     }
 
@@ -1513,8 +1518,8 @@ impl Master {
     /// down (dB), the leveller keeping the loudness. A genre's balance of
     /// low, middle and high against its records' (tools/validate).
     fn set_tilt(&mut self, lo_db: f32, hi_db: f32) {
-        self.lo_g = 10f32.powf(lo_db / 20.0);
-        self.hi_g = 10f32.powf(hi_db / 20.0);
+        self.lo_g = 10f32.powf((lo_db + self.tilt_add.0) / 20.0);
+        self.hi_g = 10f32.powf((hi_db + self.tilt_add.1) / 20.0);
     }
 
     fn set_lp(&mut self, hz: f32) {
@@ -1808,6 +1813,9 @@ struct Channel {
     cline: Vec<f32>,
     cw: usize,
     cph: f32,
+    /// the optimiser's level on it, and its spread on the pan (1: as written)
+    trim: f32,
+    spread: f32,
 }
 
 /// The chorus's line (21 ms), its delay and swing (s), and the swing's rate (Hz).
@@ -1849,6 +1857,8 @@ impl Channel {
             cline: Vec::new(),
             cw: 0,
             cph: 0.0,
+            trim: 1.0,
+            spread: 1.0,
         }
     }
 
@@ -1956,12 +1966,13 @@ impl Channel {
             }
         }
         self.gain_s += (self.gain - self.gain_s) * 0.05;
-        let mut g = self.gain_s;
+        let mut g = self.gain_s * self.trim;
         if self.swell_s > 1e-4 {
             g *= 1.0 - self.swell_s * (0.5 - 0.5 * sin01(self.swell_ph));
         }
-        let gl = g * (1.0 - self.pan).min(1.0);
-        let gr = g * (1.0 + self.pan).min(1.0);
+        let pan = self.pan * self.spread;
+        let gl = g * (1.0 - pan).min(1.0);
+        let gr = g * (1.0 + pan).min(1.0);
         for i in 0..n {
             let d = 1.0 - self.duck * sc[i];
             let l = self.buf[i][0] * gl * d;
@@ -1987,6 +1998,8 @@ struct Synth {
     rev: Reverb,
     rev_wet: f32,
     rev_s: f32,
+    /// the optimiser's on the reverb's send (1: as written)
+    rev_k: f32,
     dly: Delay,
     dly_out: f32,
     dly_rev: f32,
@@ -2084,6 +2097,7 @@ impl Synth {
             rev: Reverb::new(size),
             rev_wet: 0.3,
             rev_s: 0.3,
+            rev_k: 1.0,
             dly: Delay::new(),
             dly_out: 1.0,
             dly_rev: 0.2,
@@ -2108,6 +2122,18 @@ impl Synth {
             r2s: [0.0; BLOCK],
             scb: [0.0; BLOCK],
         }
+    }
+
+    /// The optimiser's settings `t` (`tuned::KNOBS`) on the mix: each
+    /// channel's level and spread, the reverb, the tilt.
+    fn tune(&mut self, t: &[f32; tuned::NKNOBS]) {
+        for (k, c) in self.ch.iter_mut().enumerate() {
+            c.trim = 10f32.powf(t[k] / 20.0);
+            c.spread = t[tuned::K_SPREAD];
+        }
+        self.rev_k = t[tuned::K_REVERB];
+        self.m.tilt_add = (t[tuned::K_TILT_LO], t[tuned::K_TILT_HI]);
+        self.m.set_tilt(0.0, 0.0);
     }
 
     fn fire(&mut self, e: Ev) {
@@ -2178,7 +2204,7 @@ impl Synth {
                 c.mix(n, &scb[..n], &mut dry[..n], &mut rs[..n], &mut ds[..n], &mut r2s[..n]);
             }
         }
-        self.rev_s += (self.rev_wet - self.rev_s) * 0.01;
+        self.rev_s += (self.rev_wet * self.rev_k - self.rev_s) * 0.01;
         for i in 0..n {
             let (dl, dr) = self.dly.tick(self.ds[i]);
             let (rl, rr) = self.rev.tick(self.rs[i] + (dl + dr) * self.dly_rev);
@@ -3442,6 +3468,13 @@ impl Song {
             _ => self.piece_polka(s),
         }
         self.fuse(s);
+        if self.opts.tuned
+            && let Some(t) = tuning(self.genre)
+        {
+            self.bpm *= t[tuned::K_TEMPO] as f64;
+            self.swing = (self.swing + t[tuned::K_SWING]).clamp(0.0, 0.45);
+            self.human *= t[tuned::K_HUMAN];
+        }
         let meter = match (self.genre, self.tv.kind) {
             (POLKA, _) => "2/4",
             (TAVERN, T_JIG) => "6/8 jig",
@@ -15393,6 +15426,47 @@ impl Opts {
     }
 }
 
+/// The optimiser's settings for the genre `writer` (`tuned::TUNED`; on the
+/// desktop `MUSICBOX_TUNING`, a file of genre, knob and value lines, in
+/// their place, as tools/tune tries them).
+fn tuning(writer: usize) -> Option<[f32; tuned::NKNOBS]> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FILE: std::sync::OnceLock<Option<Vec<Option<[f32; tuned::NKNOBS]>>>> = std::sync::OnceLock::new();
+        let file = FILE.get_or_init(|| {
+            let text = std::fs::read_to_string(std::env::var_os("MUSICBOX_TUNING")?).ok()?;
+            let mut v: Vec<Option<[f32; tuned::NKNOBS]>> = vec![None; GENRES.len()];
+            for line in text.lines() {
+                let f: Vec<&str> = line.split('\t').collect();
+                let (Some(g), Some(k), Some(x)) = (
+                    f.first().and_then(|g| GENRES.iter().position(|n| n.eq_ignore_ascii_case(g.trim()))),
+                    f.get(1).and_then(|k| tuned::KNOBS.iter().position(|n| n.0 == k.trim())),
+                    f.get(2).and_then(|x| x.trim().parse::<f32>().ok()),
+                ) else {
+                    continue;
+                };
+                let t = v[g].get_or_insert(tuned::KNOBS.map(|k| k.3));
+                t[k] = x.clamp(tuned::KNOBS[k].1, tuned::KNOBS[k].2);
+            }
+            Some(v)
+        });
+        if let Some(v) = file {
+            return v.get(writer).copied().flatten();
+        }
+    }
+    tuned::TUNED.get(writer).copied().flatten()
+}
+
+/// Whether the optimiser has settings for the music `id`'s writer.
+pub fn has_tuning(id: usize) -> bool {
+    tuning(parts(id).0).is_some()
+}
+
+/// Whether a network writes tunes for the music `id`'s writer.
+pub fn has_net_tunes(id: usize) -> bool {
+    parts(id).0 == CELTIC && crate::tunes::celtic().is_some()
+}
+
 // ---------------------------------------------------------------- the engine
 
 /// A genre's music: the composer writing a bar at a time, the synthesiser playing it.
@@ -15430,6 +15504,11 @@ impl Engine {
         let genre = canon(genre);
         samples::hidden(opts.synth(), opts.nets(), || {
             let mut syn = Synth::new(genre);
+            if opts.tuned
+                && let Some(t) = tuning(parts(genre).0)
+            {
+                syn.tune(&t);
+            }
             let song = Song::with(genre, seed, &mut syn, opts);
             Engine {
                 genre,
