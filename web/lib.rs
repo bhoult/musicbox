@@ -5,8 +5,9 @@
 //!
 //!     cargo build --release --target wasm32-unknown-unknown --manifest-path web/Cargo.toml
 //!
-//! The recorded instruments are not here (a gigabyte): the synthesiser plays
-//! everything, as `--no-samples` has it.
+//! The recorded instruments come apart (tools/web-samples.sh): the tables
+//! (`mb_pack`), then each group of recordings a genre plays (`mb_group`),
+//! decoded by the page; until a group is in, the synthesiser plays its parts.
 
 #![allow(dead_code)]
 
@@ -14,6 +15,8 @@
 mod mp3;
 #[path = "../src/music.rs"]
 mod music;
+#[path = "../src/net.rs"]
+mod net;
 #[path = "../src/samples.rs"]
 mod samples;
 #[path = "../src/sdl.rs"]
@@ -49,10 +52,11 @@ unsafe fn web<'a>(w: *mut Web) -> &'a mut Web {
     unsafe { &mut *w }
 }
 
-/// The music `genre` (a mix id) from a seed (its low and high 32 bits).
+/// The music `genre` (a mix id) from a seed (its low and high 32 bits),
+/// made as `opts` (`Opts::code`) asks.
 #[unsafe(no_mangle)]
-pub extern "C" fn mb_new(genre: u32, seed_lo: u32, seed_hi: u32) -> *mut Web {
-    let stream = Stream::new(genre as usize, seed(seed_lo, seed_hi));
+pub extern "C" fn mb_new(genre: u32, seed_lo: u32, seed_hi: u32, opts: u32) -> *mut Web {
+    let stream = Stream::new(genre as usize, seed(seed_lo, seed_hi), music::Opts::from_code(opts));
     Box::into_raw(Box::new(Web { stream, buf: Vec::new(), text: String::new(), bytes: Vec::new() }))
 }
 
@@ -103,6 +107,122 @@ pub unsafe extern "C" fn mb_set_length(w: *mut Web, secs: f64) {
     unsafe { web(w) }.stream.set_length(secs);
 }
 
+/// How the music is to be made (`Opts::code`): the piece playing made
+/// again from its start, the new way.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_set_opts(w: *mut Web, opts: u32) {
+    unsafe { web(w) }.stream.set_opts(music::Opts::from_code(opts));
+}
+
+/// Room for `n` bytes in the module's memory, for JavaScript to fill
+/// (aligned for any number); `mb_free` gives it back.
+#[unsafe(no_mangle)]
+pub extern "C" fn mb_alloc(n: u32) -> *mut u8 {
+    let mut v = vec![0u64; (n as usize).div_ceil(8)];
+    let p = v.as_mut_ptr() as *mut u8;
+    std::mem::forget(v);
+    p
+}
+
+/// # Safety
+/// `p` and `n` as `mb_alloc` gave and took them, freed once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_free(p: *mut u8, n: u32) {
+    let words = (n as usize).div_ceil(8);
+    // SAFETY: the caller's
+    drop(unsafe { Vec::from_raw_parts(p as *mut u64, words, words) });
+}
+
+/// The recordings' tables (pack.bin: `n` bytes at `p`): 1, else 0 and why
+/// in `mb_text`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` holds `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_pack(w: *mut Web, p: *const u8, n: u32) -> u32 {
+    let w = unsafe { web(w) };
+    // SAFETY: the caller's
+    let meta = unsafe { std::slice::from_raw_parts(p, n as usize) };
+    match samples::Partial::new(meta) {
+        Ok(pt) => {
+            // SAFETY: between calls: nothing holds the bank
+            unsafe { *samples::web() = Some(pt) };
+            1
+        }
+        Err(e) => {
+            w.text = e;
+            0
+        }
+    }
+}
+
+/// Group `g`'s recordings (`frames` 16-bit samples at `p`, mono): its
+/// instruments playable from the next song made. 1, else 0 and why in `mb_text`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` holds `frames` samples, aligned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_group(w: *mut Web, g: u32, p: *const i16, frames: u32) -> u32 {
+    let w = unsafe { web(w) };
+    // SAFETY: the caller's
+    let pcm = unsafe { std::slice::from_raw_parts(p, frames as usize) };
+    // SAFETY: between calls: nothing holds the bank
+    let r = match unsafe { samples::web() } {
+        Some(pt) => pt.add(g as usize, pcm),
+        None => Err("no tables yet".into()),
+    };
+    match r {
+        Ok(()) => 1,
+        Err(e) => {
+            w.text = e;
+            0
+        }
+    }
+}
+
+/// A network instrument: its line of the networks' index (`ln` bytes at
+/// `lp`) and its file (`n` bytes at `p`), playing the recording it names
+/// once the tables are in (`mb_pack`). 1, else 0 and why in `mb_text`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `lp` and `p` hold `ln` and `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_net(w: *mut Web, lp: *const u8, ln: u32, p: *const u8, n: u32) -> u32 {
+    let w = unsafe { web(w) };
+    // SAFETY: the caller's
+    let (line, file) =
+        unsafe { (std::slice::from_raw_parts(lp, ln as usize), std::slice::from_raw_parts(p, n as usize)) };
+    let r = (|| {
+        let line = std::str::from_utf8(line).map_err(|_| "an index line not UTF-8".to_string())?;
+        let (kind, name, art, _) = net::index_line(line).ok_or_else(|| format!("not an index line: {line}"))?;
+        // SAFETY: between calls: nothing holds the bank or the networks
+        let pt = unsafe { samples::web() }.as_ref().ok_or("no tables yet")?;
+        let id = pt.find(kind, name, art).ok_or_else(|| format!("{kind} {name} {art}: not in the recordings"))?;
+        let net = net::Net::parse(file, pt.bank.release(id))?;
+        unsafe { net::web() }.add(id, net);
+        Ok::<(), String>(())
+    })();
+    match r {
+        Ok(()) => 1,
+        Err(e) => {
+            w.text = e;
+            0
+        }
+    }
+}
+
+/// The last text handed out (`mb_now`'s, an error's), its length from `mb_text_len`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_text(w: *mut Web) -> *const u8 {
+    unsafe { web(w) }.text.as_ptr()
+}
+
 /// What is playing, as JSON (its length from `mb_text_len`).
 ///
 /// # Safety
@@ -115,7 +235,7 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         concat!(
             "{{\"id\":{},\"name\":\"{}\",\"piece\":{},\"bpm\":{:.2},\"key\":\"{}\",\"mode\":\"{}\",\"meter\":\"{}\",",
             "\"section\":\"{}\",\"bar\":{},\"bars\":{},\"stopped\":{},\"elapsed\":{:.3},\"length\":{:.1},",
-            "\"planned\":{:.1},\"seed\":\"{}\",\"song\":{}}}"
+            "\"planned\":{:.1},\"seed\":\"{}\",\"song\":{},\"opts\":{}}}"
         ),
         n.id,
         music::name(n.id).to_lowercase(),
@@ -132,7 +252,8 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         n.length,
         n.planned,
         n.seed,
-        n.song
+        n.song,
+        n.opts.code()
     );
     w.text.as_ptr()
 }
@@ -176,9 +297,11 @@ pub unsafe extern "C" fn mb_song_wav(
     seed_hi: u32,
     song: u32,
     length: f64,
+    opts: u32,
 ) -> *const u8 {
     let w = unsafe { web(w) };
-    w.bytes = music::song_wav(genre as usize, seed(seed_lo, seed_hi), song as usize, length);
+    w.bytes =
+        music::song_wav(genre as usize, seed(seed_lo, seed_hi), song as usize, length, music::Opts::from_code(opts));
     w.bytes.as_ptr()
 }
 

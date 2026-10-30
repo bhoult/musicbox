@@ -179,7 +179,7 @@ impl Term {
             l.push(&music::name(st.id()).to_lowercase(), "36");
             l.push(" at the next bar", "2");
         }
-        let right = format!("seed {}{}", st.seed, if st.sampled { "" } else { " · synthesiser" });
+        let right = format!("seed {}", st.seed);
         l.right(&right, "2");
         lines.push(l);
 
@@ -273,6 +273,22 @@ impl Term {
         l.push(&show_length(st.length), "36");
         l.push("  t type a length  e equalizer  ", "2");
         l.push(if window { "g close window" } else { "g window" }, "2");
+        lines.push(l);
+        // how it is made: each choice lit when it is not the music as written
+        let mut l = Line::new(cols);
+        let o = st.opts;
+        let lit = |on: bool| if on { "1;36" } else { "36" };
+        l.push("  o tuning ", "2");
+        l.push(if o.tuned { "optimised" } else { "as written" }, lit(o.tuned));
+        l.push("  m tunes ", "2");
+        l.push(if o.net_tunes { "network" } else { "rules" }, lit(o.net_tunes));
+        l.push("  i instruments ", "2");
+        let voices = match o.voices {
+            music::Voices::Recorded if !st.sampled => "recorded (none installed)".to_string(),
+            music::Voices::Net => format!("network ({} learned, the rest recorded)", crate::net::count()),
+            v => v.name().to_string(),
+        };
+        l.push(&voices, lit(o.voices != music::Voices::Recorded));
         lines.push(l);
 
         let text: String = lines.iter().map(|l| l.out.as_str()).collect::<Vec<_>>().join("\n");
@@ -384,6 +400,9 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b'[' => Some(Action::Longer(-1)),
         b']' => Some(Action::Longer(1)),
         b'e' | b'E' => Some(Action::Eq),
+        b'o' | b'O' => Some(Action::Tuned),
+        b'm' | b'M' => Some(Action::NetTunes),
+        b'i' | b'I' => Some(Action::Voices),
         b'g' | b'G' => Some(Action::Window),
         _ => None,
     };
@@ -437,6 +456,7 @@ mod tests {
         assert_eq!(parse_keys(b"\x1bOA"), vec![Action::Drums(1)]);
         assert_eq!(parse_keys(b"eg"), vec![Action::Eq, Action::Window]);
         assert_eq!(parse_keys(b"sr[]"), vec![Action::Play, Action::Replay, Action::Longer(-1), Action::Longer(1)]);
+        assert_eq!(parse_keys(b"omi"), vec![Action::Tuned, Action::NetTunes, Action::Voices]);
     }
 
     #[test]

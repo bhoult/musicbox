@@ -39,6 +39,9 @@ pub struct Now {
     pub seed: u64,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub song: usize,
+    /// how the piece playing is made (the browser's buttons)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub opts: crate::music::Opts,
 }
 
 pub struct Tap {

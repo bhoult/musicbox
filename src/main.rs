@@ -6,6 +6,7 @@ mod font;
 mod gui;
 mod mp3;
 mod music;
+mod net;
 mod samples;
 mod sdl;
 mod spectrum;
@@ -45,6 +46,12 @@ pub enum Action {
     Longer(i32),
     /// the piece playing saved as an MP3
     Export,
+    /// how the music is made: the optimiser's settings on or off, the
+    /// network's tunes on or off, the next to play the instruments; all three as given
+    Tuned,
+    NetTunes,
+    Voices,
+    SetOpts(music::Opts),
     /// the terminal's equalizer on or off, the window open or closed, fullscreen
     Eq,
     Window,
@@ -59,6 +66,8 @@ pub struct State {
     pub seed: u64,
     /// the recorded instruments loaded (else the synthesiser plays everything)
     pub sampled: bool,
+    /// how the music is to be made
+    pub opts: music::Opts,
     /// the terminal's equalizer rows
     pub eq: bool,
     /// the length asked of each piece (seconds; 0: as long as it was written)
@@ -151,12 +160,15 @@ fn usage() -> ! {
 
 /// The usage, then exit with `code` (0 when asked for).
 fn help(code: i32) -> ! {
-    eprintln!("usage: musicbox [GENRE[+DRUMS]] [--seed N] [--length L] [--gui] [--eq] [--samples DIR] [--no-samples]");
+    eprintln!(
+        "usage: musicbox [GENRE[+DRUMS]] [--seed N] [--length L] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
+    );
     eprintln!(
         "       musicbox --wav GENRE[+DRUMS] SECONDS OUT.wav [--seed N] [--length L] [--ending natural|fade|cut] [--fade SECS]"
     );
     eprintln!("       musicbox --export GENRE[+DRUMS] OUT.mp3 [--seed N] [--song K] [--length L]");
-    eprintln!("       musicbox --list | --samples-list");
+    eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
+    eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
     eprintln!();
     eprintln!("  GENRE: {} (or its number, 0-11)", music::cli_names());
     eprintln!("         two joined with + (polka+techno): the first writes the music, the second drums it");
@@ -170,9 +182,14 @@ fn help(code: i32) -> ! {
     eprintln!("         (or a WAV, named .wav); X exports the song playing to ~/Music/musicbox");
     eprintln!("  --wav: SECONDS of the music to a 48 kHz WAV; --ending: how it ends (cut by default);");
     eprintln!("         --fade: faded in over half of SECS");
+    eprintln!("  --tuned: each genre's settings as the optimiser tuned them against real music (O)");
+    eprintln!("  --net-tunes: tunes written by the network where the genre has one, else by its rules (M)");
+    eprintln!("  --voices: what plays the instruments: the synthesiser, the recordings (the default), or the");
+    eprintln!("         network's instruments where it has one, else the recording (I)");
     eprintln!();
     eprintln!("  keys: left/right genre, up/down drums, space next song, S stop/start, R replay, [ ] length,");
-    eprintln!("        T type a length, X export the song, E equalizer, G window, Q quit");
+    eprintln!("        T type a length, X export the song, O tuned, M network tunes, I instruments,");
+    eprintln!("        E equalizer, G window, Q quit");
     std::process::exit(code);
 }
 
@@ -188,6 +205,8 @@ fn main() {
     let mut fade = 0.0f64;
     let mut length = 0.0f64;
     let mut genre: Option<usize> = None;
+    let mut opts = music::Opts::default();
+    let mut voices: Option<music::Voices> = None;
     let mut i = 0;
     let value = |i: usize| args.get(i).cloned().unwrap_or_else(|| usage());
     while i < args.len() {
@@ -227,6 +246,12 @@ fn main() {
                 i += 1;
                 length = parse_length(&value(i)).unwrap_or_else(|| usage());
             }
+            "--tuned" => opts.tuned = true,
+            "--net-tunes" => opts.net_tunes = true,
+            "--voices" => {
+                i += 1;
+                voices = Some(music::Voices::parse(&value(i)).unwrap_or_else(|| usage()));
+            }
             "--list" => {
                 for (n, g) in music::GENRES.iter().enumerate() {
                     println!("{n:2} {}", g.to_lowercase());
@@ -236,6 +261,27 @@ fn main() {
             "--samples-list" => {
                 samples::configure(samples_dir, false);
                 samples::list_cli();
+                return;
+            }
+            "--voice-data" => {
+                // DIR, then the instruments' names
+                let dir = value(i + 1);
+                let names: Vec<String> = args[i + 2..].to_vec();
+                samples::configure(samples_dir, false);
+                if !samples::load_now() {
+                    std::process::exit(1);
+                }
+                if let Err(e) = samples::voice_data(std::path::Path::new(&dir), &names, 2) {
+                    eprintln!("musicbox: --voice-data: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "--web-pack" => {
+                i += 1;
+                let dir = value(i);
+                samples::configure(samples_dir, false);
+                music::web_pack_cli(&dir);
                 return;
             }
             "-h" | "--help" => help(0),
@@ -251,19 +297,21 @@ fn main() {
         i += 1;
     }
     samples::configure(samples_dir, no_samples);
+    // without the recordings, the synthesiser plays (as it would anyway)
+    opts.voices = voices.unwrap_or(if no_samples { music::Voices::Synth } else { music::Voices::Recorded });
     let seed = seed.unwrap_or_else(|| {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u32 as u64)
     });
     if let Some(w) = wav {
-        music::cli(&w, seed, ending, fade * 0.5, length);
+        music::cli(&w, seed, ending, fade * 0.5, length, opts);
         return;
     }
     if let Some(x) = export {
-        music::export_cli(&x, seed, song, length);
+        music::export_cli(&x, seed, song, length, opts);
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, length);
+    play(id, seed, gui, eq, length, opts);
 }
 
 /// Where X saves songs: ~/Music/musicbox.
@@ -273,7 +321,7 @@ fn export_dir() -> std::path::PathBuf {
 }
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
-fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64) {
+fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opts) {
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -282,7 +330,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64) {
     sdl::no_signal_handlers();
     // the recorded instruments before the first note: every piece played on them
     let sampled = samples::load_now();
-    let player = match music::Player::start(id, seed) {
+    let player = match music::Player::start(id, seed, opts) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("musicbox: no sound: {e}");
@@ -292,7 +340,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64) {
     player.set_length(length);
     let tap = player.tap();
     let (primary, drums) = music::parts(id);
-    let mut st = State { primary, drums, seed, sampled, eq, length, msg: None, note: None };
+    let mut st = State { primary, drums, seed, sampled, opts, eq, length, msg: None, note: None };
     let mut term = term::Term::start();
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {
@@ -338,6 +386,19 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64) {
                     player.set_length(st.length);
                 }
                 Action::Export => player.export(export_dir()),
+                Action::Tuned | Action::NetTunes | Action::Voices | Action::SetOpts(_) => {
+                    match a {
+                        Action::Tuned => st.opts.tuned = !st.opts.tuned,
+                        Action::NetTunes => st.opts.net_tunes = !st.opts.net_tunes,
+                        Action::Voices => st.opts.voices = st.opts.voices.next(),
+                        Action::SetOpts(o) => st.opts = o,
+                        _ => {}
+                    }
+                    // (the song made again from its start, the new way: a
+                    // stopped player starts on it)
+                    player.set_opts(st.opts);
+                    player.set_playing(true);
+                }
                 Action::Eq => st.eq = !st.eq,
                 Action::Window => {
                     toggle_window(&mut win, &mut st);

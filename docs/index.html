@@ -56,6 +56,9 @@
   button.mark { box-shadow: inset 0 -2px 0 var(--amber); }
   button.off { background: #1c2027; color: var(--faint); }
   .length { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: 260px; }
+  .group { display: inline-flex; align-items: center; gap: 2px; margin-right: 14px; }
+  .group > span { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-right: 6px; }
+  .group > span .key { color: #9aa6b8; margin-right: 6px; }
   .length label { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
   input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
   input[type=text] {
@@ -100,13 +103,18 @@
       <input type="text" id="typed" value="auto" aria-label="Song length, typed (3:30, 3.5m, 210s or auto)" title="3:30, 3.5m, 210s or auto; Enter sets it">
     </div>
   </div>
+  <div class="row" id="made">
+    <span class="group"><span><span class="key">O</span>tuning</span><button data-k="tuned" data-v="false">as written</button><button data-k="tuned" data-v="true">optimised</button></span>
+    <span class="group"><span><span class="key">M</span>tunes</span><button data-k="netTunes" data-v="false">rules</button><button data-k="netTunes" data-v="true">network</button></span>
+    <span class="group"><span><span class="key">I</span>instruments</span><button data-k="voices" data-v="synth">synth</button><button data-k="voices" data-v="recorded">recorded</button><button data-k="voices" data-v="network">network</button></span>
+  </div>
   <h2>music by <span>(right click: drums by)</span></h2>
   <div class="grid" id="genres"></div>
   <h2>drums by</h2>
   <div class="grid" id="drummers"></div>
   <footer>
     <p>Music made up as it plays, without end, in twelve genres and any pair of them. No AI model makes the sound and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, and a small synthesiser plays it, here as WebAssembly. The desktop app also plays recorded instruments and saves MP3s.</p>
-    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, S stop/start, R replay, [ ] length, T type a length, X export. GPL-3.0.</p>
+    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, S stop/start, R replay, [ ] length, T type a length, X export, O tuning, M tunes, I instruments. GPL-3.0.</p>
   </footer>
 </main>
 <div id="start">

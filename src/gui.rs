@@ -52,6 +52,10 @@ pub struct Gui {
     note: Option<(String, std::time::Instant)>,
 }
 
+/// An option of a choice of how the music is made: its label, and the
+/// settings it asks for.
+type Choice = (&'static str, music::Opts);
+
 fn inside(r: Option<(i32, i32, i32, i32)>, (x, y): (i32, i32)) -> bool {
     r.is_some_and(|(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
 }
@@ -200,6 +204,9 @@ impl Gui {
                             Ok('p' | 'h') => Some(Action::Genre(-1)),
                             Ok('j') => Some(Action::Drums(1)),
                             Ok('e') => Some(Action::Eq),
+                            Ok('o') => Some(Action::Tuned),
+                            Ok('m') => Some(Action::NetTunes),
+                            Ok('i') => Some(Action::Voices),
                             Ok('g') => Some(Action::Window),
                             Ok('f') => Some(Action::Fullscreen),
                             Ok('q') => Some(Action::Quit),
@@ -233,7 +240,7 @@ impl Gui {
         self.text(m, m, "MUSICBOX", ACCENT, 2);
         let mut right = format!("SEED {}", st.seed);
         if !st.sampled {
-            right += "  SYNTHESISER";
+            right += "  NO RECORDINGS";
         }
         let rw = font::width(&right, 1);
         self.text(w - m - rw, m + 4, &right, DIM, 1);
@@ -298,7 +305,7 @@ impl Gui {
         let bw = (w - 2 * m - (cols - 1) * gap) / cols;
         let rows = |n: i32| (n + cols - 1) / cols;
         let ng = music::GENRES.len() as i32;
-        let height = (bh + 8) + 2 * 11 + (rows(ng) + rows(ng + 1)) * (bh + gap) + 6 + bh;
+        let height = 2 * (bh + 8) + 2 * 11 + (rows(ng) + rows(ng + 1)) * (bh + gap) + 6 + bh;
         let mut y = h - m - height;
         let bottom = y - 6;
 
@@ -337,6 +344,8 @@ impl Gui {
         };
         let tw = font::width(&shown, 1);
         self.text(fx + (fw - tw).max(4) / 2, y + 3, &shown, if editing { TEXT } else { ACCENT }, 1);
+        y += bh + 8;
+        self.made(st.opts, m, y, bh);
         y += bh + 8;
 
         self.text(m, y, "MUSIC BY", DIM, 1);
@@ -391,6 +400,51 @@ impl Gui {
             self.equalizer(tap, m, top, w - m, bottom);
         }
         self.win.present(&self.px);
+    }
+
+    /// How the music is made, a row of three choices, each a key and its
+    /// options side by side, the one chosen lit: the settings as written
+    /// or tuned, the tunes by the rules or the network, the instruments.
+    fn made(&mut self, o: music::Opts, x0: i32, y: i32, bh: i32) {
+        use music::Voices;
+        let groups: [(&str, &str, Vec<Choice>); 3] = [
+            (
+                "O",
+                "TUNING",
+                vec![
+                    ("AS WRITTEN", music::Opts { tuned: false, ..o }),
+                    ("OPTIMISED", music::Opts { tuned: true, ..o }),
+                ],
+            ),
+            (
+                "M",
+                "TUNES",
+                vec![
+                    ("RULES", music::Opts { net_tunes: false, ..o }),
+                    ("NETWORK", music::Opts { net_tunes: true, ..o }),
+                ],
+            ),
+            (
+                "I",
+                "INSTRUMENTS",
+                Voices::ALL
+                    .iter()
+                    .map(|&v| (["SYNTH", "RECORDED", "NETWORK"][v as usize], music::Opts { voices: v, ..o }))
+                    .collect(),
+            ),
+        ];
+        let mut x = x0;
+        for (key, label, opts) in groups {
+            x += self.text(x, y + 3, key, 0x9AA6B8, 1) + ADVANCE;
+            x += self.text(x, y + 3, label, DIM, 1) + 6;
+            for (name, to) in opts {
+                let bw = font::width(name, 1) + 8;
+                let fill = if to == o { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
+                self.button(x, y, bw, bh, name, "", fill, None, Action::SetOpts(to), None);
+                x += bw + 2;
+            }
+            x += 14;
+        }
     }
 
     /// The length slider between x0 and x1: a tick a minute, the length

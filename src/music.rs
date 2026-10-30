@@ -21,15 +21,16 @@
 
 use std::collections::VecDeque;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::clock;
 use crate::mp3;
+use crate::net::{self, NET_VOICE, NetVoice};
 use crate::samples::{self, Bank, SAMPLER, Sampler};
 use crate::tap::{Now, Tap};
 
@@ -599,8 +600,10 @@ struct Voice {
     fix: bool,
     /// the formants: three band-passes a side
     ff: [Svf; 6],
-    /// a sampled patch's zones playing (none: the oscillators)
+    /// a sampled patch's zones playing (none: the oscillators), or a
+    /// network playing in their place
     sm: Sampler,
+    nv: NetVoice,
 }
 
 /// The per-sample step of a voice's gain glide.
@@ -639,6 +642,7 @@ const VOICE: Voice = Voice {
     fix: false,
     ff: [Svf { ic1: 0.0, ic2: 0.0, a1: 0.0, a2: 0.0, a3: 0.0, k: 2.0 }; 6],
     sm: SAMPLER,
+    nv: NET_VOICE,
 };
 
 impl Voice {
@@ -668,9 +672,19 @@ impl Voice {
             return;
         }
         let fresh = !self.on;
-        let sampled = p.samp != 0 && bank.is_some_and(|b| self.sm.start(b, p.samp, note, vel, len, rr));
+        let mut sampled = p.samp != 0 && bank.is_some_and(|b| self.sm.start(b, p.samp, note, vel, len, rr));
         if !sampled {
             self.sm.n = 0;
+        }
+        // the network's instrument in the recording's place, where it has one
+        self.nv.on = false;
+        if p.samp != 0
+            && samples::nets_on()
+            && let Some(k) = bank.and_then(|b| net::find(b.resolve(p.samp, len)))
+        {
+            self.sm.n = 0;
+            self.nv.start(k, vel, seed);
+            sampled = true;
         }
         if fresh {
             // a fresh voice: oscillators at scattered phases (the attack
@@ -747,7 +761,8 @@ impl Voice {
         if sampled {
             // the attack, level 1 while held (or the patch's decay to its
             // sustain), the release (or the instrument's own)
-            self.amp.set(p.a, p.d, if p.shaped { p.s } else { 1.0 }, if p.r > 0.0 { p.r } else { self.sm.rel });
+            let own = if self.nv.on { net::rel(self.nv.net) } else { self.sm.rel };
+            self.amp.set(p.a, p.d, if p.shaped { p.s } else { 1.0 }, if p.r > 0.0 { p.r } else { own });
         } else {
             self.amp.set(p.a, p.d, p.s, p.r);
         }
@@ -800,7 +815,7 @@ impl Voice {
         let f = mtof(pitch);
         let dt0 = (f / SR).min(0.45);
         let mut gain = self.vel * p.gain * (1.0 - p.trem * (0.5 + 0.5 * lfo)) * (1.0 + 0.3 * self.accent);
-        let sampled = self.sm.n > 0;
+        let sampled = self.sm.n > 0 || self.nv.on;
         if sampled {
             gain *= samples::CAL;
         }
@@ -831,7 +846,11 @@ impl Voice {
             let mut tmp = [[0.0f32; 2]; BLOCK];
             for chunk in buf.chunks_mut(BLOCK) {
                 let t = &mut tmp[..chunk.len()];
-                live &= bank.is_some_and(|b| self.sm.fill(b, pitch, gate, t));
+                if self.nv.on {
+                    self.nv.fill(pitch, t);
+                } else {
+                    live &= bank.is_some_and(|b| self.sm.fill(b, pitch, gate, t));
+                }
                 for (o, s) in chunk.iter_mut().zip(t.iter()) {
                     let (mut l, mut r) = (s[0], s[1]);
                     if p.vowel > 0 {
@@ -1724,7 +1743,7 @@ const TOM_HI: u8 = 3;
 const SHAKER: u8 = 4;
 
 /// What the composer asks of the synthesiser.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Ev {
     Hit {
         ch: u8,
@@ -2858,10 +2877,17 @@ struct Song {
     guest: Option<usize>,
     scratch: Option<Box<Synth>>,
     dr: Drummer,
+    /// how it is made (the settings tuned or not, the tunes' writer)
+    opts: Opts,
 }
 
 impl Song {
+    #[cfg(test)]
     fn new(genre: usize, seed: u64, s: &mut Synth) -> Song {
+        Song::with(genre, seed, s, Opts::default())
+    }
+
+    fn with(genre: usize, seed: u64, s: &mut Synth, opts: Opts) -> Song {
         let (writer, guest) = parts(genre);
         let mut song = Song {
             genre: writer,
@@ -2936,6 +2962,7 @@ impl Song {
             guest,
             scratch: guest.map(|g| Box::new(Synth::new(g))),
             dr: Drummer::default(),
+            opts,
         };
         song.new_piece(s);
         song.section_start(s);
@@ -15279,14 +15306,102 @@ fn sounds_mariachi(r: &mut Rng, s: &mut Synth) {
     s.m.target = 0.23;
 }
 
+// ---------------------------------------------------------------- how it is made
+
+/// What plays the instruments: the synthesiser alone, the recordings (as
+/// the genres place them, when they are installed), or the network's
+/// instruments (where there is one for a recording; else the recording).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Voices {
+    Synth,
+    #[default]
+    Recorded,
+    Net,
+}
+
+impl Voices {
+    pub const ALL: [Voices; 3] = [Voices::Synth, Voices::Recorded, Voices::Net];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Voices::Synth => "synth",
+            Voices::Recorded => "recorded",
+            Voices::Net => "network",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Voices> {
+        let s = s.to_ascii_lowercase();
+        Voices::ALL.into_iter().find(|v| v.name() == s || (s == "net" && *v == Voices::Net))
+    }
+
+    /// The one after it, round again (I).
+    pub fn next(self) -> Voices {
+        Voices::ALL[(self as usize + 1) % Voices::ALL.len()]
+    }
+}
+
+/// How the music is made, besides its genre and seed: each genre's settings
+/// as written or as the optimiser tuned them (`tuned`), its tunes by the
+/// rules or by the network (`net_tunes`), and what plays its instruments.
+/// The default is the music as written (a seed's music as it always was).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Opts {
+    pub tuned: bool,
+    pub net_tunes: bool,
+    pub voices: Voices,
+}
+
+impl Opts {
+    /// As one number (for an atomic, and the browser), and back.
+    pub fn code(self) -> u32 {
+        self.tuned as u32 | (self.net_tunes as u32) << 1 | (self.voices as u32) << 2
+    }
+
+    pub fn from_code(c: u32) -> Opts {
+        Opts {
+            tuned: c & 1 != 0,
+            net_tunes: c & 2 != 0,
+            voices: Voices::ALL[((c >> 2) as usize).min(Voices::ALL.len() - 1)],
+        }
+    }
+
+    /// The flags that ask for them (none for the default), as `--export`'s
+    /// tag gives the command again.
+    pub fn flags(self) -> String {
+        let mut s = String::new();
+        if self.tuned {
+            s += " --tuned";
+        }
+        if self.net_tunes {
+            s += " --net-tunes";
+        }
+        if self.voices != Voices::Recorded {
+            s += &format!(" --voices {}", self.voices.name());
+        }
+        s
+    }
+
+    /// Whether an engine made so hides the recordings (the synthesiser
+    /// alone), and whether the network's instruments play in their place.
+    fn synth(self) -> bool {
+        self.voices == Voices::Synth
+    }
+
+    fn nets(self) -> bool {
+        self.voices == Voices::Net
+    }
+}
+
 // ---------------------------------------------------------------- the engine
 
 /// A genre's music: the composer writing a bar at a time, the synthesiser playing it.
 #[derive(Clone)]
 struct Engine {
     genre: usize,
-    /// the seed it was made with
+    /// the seed it was made with, and how
     seed: u64,
+    opts: Opts,
     syn: Synth,
     song: Song,
     ev: Vec<(u64, Ev)>,
@@ -15305,27 +15420,40 @@ struct Engine {
 }
 
 impl Engine {
+    #[cfg(test)]
     fn new(genre: usize, seed: u64) -> Engine {
+        Engine::with(genre, seed, Opts::default())
+    }
+
+    /// The music `genre` from `seed`, made as `opts` asks.
+    fn with(genre: usize, seed: u64, opts: Opts) -> Engine {
         let genre = canon(genre);
-        let mut syn = Synth::new(genre);
-        let song = Song::new(genre, seed, &mut syn);
-        Engine {
-            genre,
-            seed,
-            syn,
-            song,
-            ev: Vec::with_capacity(1024),
-            evi: 0,
-            t: 0,
-            pos: 0.0,
-            cur: (0.0, 1.0),
-            done: false,
-            snap: None,
-        }
+        samples::hidden(opts.synth(), opts.nets(), || {
+            let mut syn = Synth::new(genre);
+            let song = Song::with(genre, seed, &mut syn, opts);
+            Engine {
+                genre,
+                seed,
+                opts,
+                syn,
+                song,
+                ev: Vec::with_capacity(1024),
+                evi: 0,
+                t: 0,
+                pos: 0.0,
+                cur: (0.0, 1.0),
+                done: false,
+                snap: None,
+            }
+        })
     }
 
     /// Fills `out` (interleaved stereo).
     fn render(&mut self, out: &mut [f32]) {
+        samples::hidden(self.opts.synth(), self.opts.nets(), || self.render_in(out));
+    }
+
+    fn render_in(&mut self, out: &mut [f32]) {
         let frames = out.len() / 2;
         let mut done = 0;
         while done < frames {
@@ -15379,6 +15507,33 @@ impl Engine {
         Some(e)
     }
 
+    /// The piece playing made again, from its start, as `opts` asks: the
+    /// same genre and seed, the pieces before it composed (not played) to
+    /// get there, as long as asked now. Before it has begun, the first.
+    fn remake(&self, opts: Opts) -> Engine {
+        let piece = self.snap.as_ref().map_or(1, |s| s.song.log.len());
+        let mut e = Engine::with(self.genre, self.seed, opts);
+        e.song.length = self.song.length;
+        samples::hidden(opts.synth(), opts.nets(), || {
+            loop {
+                let start = e.pos;
+                e.ev.clear();
+                let len = e.song.bar(&mut e.syn, start, &mut e.ev);
+                e.cur = (start, len);
+                e.pos += len;
+                if e.song.piece_t0 == start && e.song.log.len() >= piece {
+                    break;
+                }
+            }
+        });
+        // where `render` would keep it: the piece's first bar made, nothing played
+        e.ev.sort_by_key(|x| x.0);
+        e.evi = 0;
+        e.t = e.cur.0.ceil() as u64;
+        e.snap = Some(Box::new(e.clone()));
+        e
+    }
+
     /// Where a genre switch can start: the next bar line, or the next beat
     /// when the bar line is more than 2.5 s away.
     fn switch_point(&self) -> u64 {
@@ -15422,11 +15577,19 @@ struct Mix {
     /// exports asked for (counted from outside), and those handed over
     export: u64,
     exported: u64,
+    /// how the music is to be made (set from outside): when it changes, the
+    /// piece playing is made again from its start, the new way
+    opts: Opts,
 }
 
 impl Mix {
+    #[cfg(test)]
     fn new(genre: usize, seed: u64) -> Mix {
-        let cur = Engine::new(genre, seed);
+        Mix::with(genre, seed, Opts::default())
+    }
+
+    fn with(genre: usize, seed: u64, opts: Opts) -> Mix {
+        let cur = Engine::with(genre, seed, opts);
         let want = cur.genre;
         Mix {
             cur,
@@ -15447,6 +15610,7 @@ impl Mix {
             length: 0.0,
             export: 0,
             exported: 0,
+            opts,
         }
     }
 
@@ -15460,26 +15624,36 @@ impl Mix {
         self.next.as_ref().unwrap_or(&self.cur).snap.clone()
     }
 
-    /// Whether a genre switch, a skip or a replay waits.
+    /// Whether a genre switch, a skip, a replay or another way of making
+    /// it waits.
     fn asked(&self) -> bool {
-        canon(self.want) != self.cur.genre || self.skip != self.skipped || self.replay != self.replayed
+        canon(self.want) != self.cur.genre
+            || self.skip != self.skipped
+            || self.replay != self.replayed
+            || self.opts != self.cur.opts
     }
 
     /// What was asked for, to switch to: the piece playing again from its
-    /// start (when a replay is all that was asked), else a new engine.
+    /// start (when a replay is all that was asked; made again when it is to
+    /// be made another way), else a new engine.
     fn incoming(&mut self) -> Engine {
         let again = canon(self.want) == self.cur.genre && self.skip == self.skipped;
         // presses before now are this piece's; one during the crossfade
         // skips (or replays) the piece coming in
         self.skipped = self.skip;
         self.replayed = self.replay;
-        if again && let Some(e) = self.cur.replay() {
-            return e;
+        if again {
+            if self.opts != self.cur.opts {
+                return self.cur.remake(self.opts);
+            }
+            if let Some(e) = self.cur.replay() {
+                return e;
+            }
         }
         self.switches += 1;
         let seed = self.seed.wrapping_add(self.switches.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         self.begun += self.cur.song.log.len() as u64;
-        let mut e = Engine::new(self.want, seed);
+        let mut e = Engine::with(self.want, seed, self.opts);
         e.song.length = self.length;
         e
     }
@@ -15583,6 +15757,7 @@ impl Mix {
                 / SR as f64,
             seed: e.seed,
             song: s.log.len(),
+            opts: e.opts,
         }
     }
 }
@@ -15664,11 +15839,13 @@ struct Controls {
     /// exports asked for, and the piece to export, handed over
     export: AtomicU64,
     slot: Mutex<Option<Box<Engine>>>,
+    /// how the music is made (`Opts::code`)
+    opts: AtomicU32,
 }
 
 impl Controls {
-    fn new(genre: usize) -> Arc<Controls> {
-        Arc::new(Controls { want: AtomicUsize::new(genre), ..Default::default() })
+    fn new(genre: usize, opts: Opts) -> Arc<Controls> {
+        Arc::new(Controls { want: AtomicUsize::new(genre), opts: AtomicU32::new(opts.code()), ..Default::default() })
     }
 
     fn apply(&self, mix: &mut Mix) {
@@ -15678,6 +15855,7 @@ impl Controls {
         mix.run = !self.stopped.load(Ordering::Relaxed);
         mix.length = f64::from_bits(self.length.load(Ordering::Relaxed));
         mix.export = self.export.load(Ordering::Relaxed);
+        mix.opts = Opts::from_code(self.opts.load(Ordering::Relaxed));
     }
 
     /// After a buffer: the piece to export, if one was asked for.
@@ -15720,13 +15898,14 @@ unsafe extern "C" fn fill(user: *mut std::ffi::c_void, stream: *mut u8, len: std
 impl Player {
     /// Starts playing the music `genre` (an id: `mix_id`), seeded: through the
     /// sound device, else pacat. Error if neither plays.
-    pub fn start(genre: usize, seed: u64) -> Result<Player, String> {
-        Player::device(genre, seed).or_else(|e| {
+    pub fn start(genre: usize, seed: u64, opts: Opts) -> Result<Player, String> {
+        Player::device(genre, seed, opts).or_else(|e| {
             eprintln!("musicbox: music through pacat ({e})");
             Player::spawn(
                 &["pacat", "--raw", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=200"],
                 genre,
                 seed,
+                opts,
             )
         })
     }
@@ -15734,14 +15913,14 @@ impl Player {
     /// Plays through SDL's default output, made in its callback (4096 frames,
     /// 85 ms, at a time). With PulseAudio's (PipeWire's) server SDL runs the
     /// callback on a real-time thread (round robin, priority 20 here).
-    fn device(genre: usize, seed: u64) -> Result<Player, String> {
+    fn device(genre: usize, seed: u64, opts: Opts) -> Result<Player, String> {
         let genre = canon(genre);
-        let ctl = Controls::new(genre);
+        let ctl = Controls::new(genre, opts);
         let frames = Arc::new(AtomicU64::new(0));
         // the callback's buffer ahead of the one playing, about
         let tap = Arc::new(Tap::new(RATE, 2 * 4096));
         let live = Box::new(Live {
-            mix: std::sync::Mutex::new((Mix::new(genre, seed), Vec::new())),
+            mix: std::sync::Mutex::new((Mix::with(genre, seed, opts), Vec::new())),
             ctl: ctl.clone(),
             frames: frames.clone(),
             tap: tap.clone(),
@@ -15763,7 +15942,7 @@ impl Player {
     }
 
     /// The same, writing to `cmd`'s stdin.
-    fn spawn(cmd: &[&str], genre: usize, seed: u64) -> Result<Player, String> {
+    fn spawn(cmd: &[&str], genre: usize, seed: u64, opts: Opts) -> Result<Player, String> {
         let mut child = Command::new(cmd[0])
             .args(&cmd[1..])
             .stdin(Stdio::piped())
@@ -15773,14 +15952,14 @@ impl Player {
             .map_err(|e| format!("{}: {e}", cmd[0]))?;
         let mut pipe = child.stdin.take().expect("piped stdin");
         let genre = canon(genre);
-        let ctl = Controls::new(genre);
+        let ctl = Controls::new(genre, opts);
         let stop = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(AtomicU64::new(0));
         // pacat's 200 ms, and the chunk being written
         let tap = Arc::new(Tap::new(RATE, RATE as u64 / 5 + CHUNK as u64));
         let (c, st, fr, tp) = (ctl.clone(), stop.clone(), frames.clone(), tap.clone());
         let thread = std::thread::Builder::new().name("music".into()).spawn(move || {
-            let mut mix = Mix::new(genre, seed);
+            let mut mix = Mix::with(genre, seed, opts);
             let mut f = vec![0.0f32; 2 * CHUNK];
             let mut bytes = vec![0u8; 4 * CHUNK];
             // blocking writes pace the generator to the sound server
@@ -15867,6 +16046,13 @@ impl Player {
     /// section, at its next chance.
     pub fn set_length(&self, secs: f64) {
         self.ctl.length.store(secs.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// How the music is to be made: the piece playing made again from its
+    /// start the new way (at the next bar line, with a crossfade; at once
+    /// when stopped), and every piece after it.
+    pub fn set_opts(&self, opts: Opts) {
+        self.ctl.opts.store(opts.code(), Ordering::Relaxed);
     }
 
     /// Saves the piece playing, from its start to its end, as an MP3 in
@@ -15985,6 +16171,7 @@ pub const FADE_OUT: f64 = 4.0;
 /// soundtrack not the shorter stream), faded in over `fade_in` seconds. Ok:
 /// where a natural ending's last bar ended (seconds), None when it was faded
 /// instead (or cut).
+#[allow(clippy::too_many_arguments)]
 pub fn render_wav(
     genre: usize,
     seed: u64,
@@ -15993,6 +16180,7 @@ pub fn render_wav(
     ending: Ending,
     fade_in: f64,
     length: f64,
+    opts: Opts,
 ) -> Result<Option<f64>, String> {
     let pad = if ending == Ending::Cut { 0.0 } else { 0.1 };
     let end = (secs.max(0.0) * RATE as f64).round() as usize;
@@ -16011,7 +16199,7 @@ pub fn render_wav(
     data.extend_from_slice(&16u16.to_le_bytes());
     data.extend_from_slice(b"data");
     data.extend_from_slice(&(bytes as u32).to_le_bytes());
-    let mut mix = Mix::new(genre, seed);
+    let mut mix = Mix::with(genre, seed, opts);
     mix.length = length;
     if ending == Ending::Natural {
         let tail = end_tail(genre);
@@ -16065,8 +16253,8 @@ pub struct Stream {
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 impl Stream {
-    pub fn new(genre: usize, seed: u64) -> Stream {
-        Stream { mix: Mix::new(canon(genre), seed) }
+    pub fn new(genre: usize, seed: u64, opts: Opts) -> Stream {
+        Stream { mix: Mix::with(canon(genre), seed, opts) }
     }
 
     /// The next frames, interleaved stereo at 48 kHz.
@@ -16095,6 +16283,10 @@ impl Stream {
         self.mix.length = secs.max(0.0);
     }
 
+    pub fn set_opts(&mut self, opts: Opts) {
+        self.mix.opts = opts;
+    }
+
     pub fn now(&self) -> Now {
         self.mix.now()
     }
@@ -16104,8 +16296,8 @@ impl Stream {
 /// (as `Now` gives them), on its own in the length `length` asks: a WAV
 /// file's bytes (`--export`'s, for the browser).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub fn song_wav(genre: usize, seed: u64, song: usize, length: f64) -> Vec<u8> {
-    let mut e = Engine::new(genre, seed);
+pub fn song_wav(genre: usize, seed: u64, song: usize, length: f64, opts: Opts) -> Vec<u8> {
+    let mut e = Engine::with(genre, seed, opts);
     e.song.length = length;
     let mut buf = vec![0.0f32; 2 * CHUNK];
     while !e.snap.as_ref().is_some_and(|s| s.song.log.len() >= song.max(1)) {
@@ -16185,7 +16377,7 @@ fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
 /// Renders the piece `e` begins (see `render_piece`) to `path`: an MP3,
 /// tagged, or a WAV when the name ends in .wav. Ok: its length in seconds.
 fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
-    let (genre, seed, piece) = (e.genre, e.seed, e.song.log.len());
+    let (genre, seed, piece, opts) = (e.genre, e.seed, e.song.log.len(), e.opts);
     let (bpm, root, mode, meter) = e.song.log.last().copied().unwrap_or((e.song.bpm, 0, 0, ""));
     let pcm: Vec<i16> = render_piece(e, length).into_iter().map(to_i16).collect();
     let secs = pcm.len() as f64 / 2.0 / SR as f64;
@@ -16202,6 +16394,7 @@ fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
         if length > 0.0 {
             again += &format!(" --length {}", clock(length));
         }
+        again += &opts.flags();
         let year = 1970
             + std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -16221,7 +16414,7 @@ fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
 
 /// `--export GENRE OUT.mp3`: the `song`th piece of the music `genre` with
 /// `seed`, on its own, to an MP3 (or a WAV).
-pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64) {
+pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64, opts: Opts) {
     let genre = args.first().and_then(|g| find(g));
     let (Some(genre), Some(path)) = (genre, args.get(1)) else {
         eprintln!("musicbox: --export GENRE OUT.mp3, GENRE one of {} or two (polka+techno)", cli_names());
@@ -16230,7 +16423,7 @@ pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64) {
     samples::load_now();
     let t0 = Instant::now();
     // on to the piece's start (the engine keeps each piece's as it begins)
-    let mut e = Engine::new(genre, seed);
+    let mut e = Engine::with(genre, seed, opts);
     e.song.length = length;
     let mut buf = vec![0.0f32; 2 * CHUNK];
     while !e.snap.as_ref().is_some_and(|s| s.song.log.len() >= song.max(1)) {
@@ -16255,6 +16448,45 @@ pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64) {
     }
 }
 
+/// Songs of each genre `--web-pack` plays to see which recordings it uses
+/// (30 s each: the instruments are chosen as a song begins).
+const CENSUS_SONGS: usize = 60;
+
+/// `--web-pack DIR`: the recordings for the browser (`Bank::web_pack`),
+/// with the groups each genre plays, from a census of its songs.
+pub fn web_pack_cli(dir: &str) {
+    if !samples::load_now() {
+        eprintln!("musicbox: --web-pack: no recordings to pack");
+        std::process::exit(1);
+    }
+    let bank = samples::bank().expect("loaded");
+    let t0 = Instant::now();
+    let mut used = Vec::new();
+    let mut buf = vec![0.0f32; 2 * CHUNK];
+    for g in 0..GENRES.len() {
+        samples::census(true);
+        let mut e = Engine::with(g, 0x5EED + g as u64, Opts::default());
+        e.song.length = 30.0;
+        while e.song.log.len() <= CENSUS_SONGS {
+            e.render(&mut buf);
+        }
+        let ids = samples::census(false);
+        eprintln!("{}: {} instruments in {CENSUS_SONGS} songs", name(g).to_lowercase(), ids.len());
+        used.push((name(g).to_lowercase(), ids));
+    }
+    let r = bank.web_pack(Path::new(dir), &used).and_then(|json| {
+        let path = Path::new(dir).join("pack.json");
+        std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
+    });
+    match r {
+        Ok(()) => eprintln!("musicbox: packed into {dir} in {:.0} s", t0.elapsed().as_secs_f64()),
+        Err(e) => {
+            eprintln!("musicbox: --web-pack: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// A smoothstep from 0 (at 0) to 1 (at 1).
 pub fn smooth(x: f64) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -16263,21 +16495,23 @@ pub fn smooth(x: f64) -> f32 {
 
 /// The pieces (start in seconds, tempo, tonic, mode) the first `secs` of a
 /// genre and seed hold: the composer run alone, without the sound.
-fn pieces(genre: usize, seed: u64, secs: f64, length: f64) -> Vec<(f64, f64, i32, usize, &'static str)> {
-    let mut e = Engine::new(genre, seed);
-    e.song.length = length;
-    let mut ev = Vec::new();
-    let mut starts = vec![0.0];
-    while e.pos < secs * SR as f64 {
-        let n = e.song.log.len();
-        let at = e.pos;
-        e.pos += e.song.bar(&mut e.syn, e.pos, &mut ev);
-        if e.song.log.len() > n {
-            starts.push(at / SR as f64);
+fn pieces(genre: usize, seed: u64, secs: f64, length: f64, opts: Opts) -> Vec<(f64, f64, i32, usize, &'static str)> {
+    samples::hidden(opts.synth(), opts.nets(), || {
+        let mut e = Engine::with(genre, seed, opts);
+        e.song.length = length;
+        let mut ev = Vec::new();
+        let mut starts = vec![0.0];
+        while e.pos < secs * SR as f64 {
+            let n = e.song.log.len();
+            let at = e.pos;
+            e.pos += e.song.bar(&mut e.syn, e.pos, &mut ev);
+            if e.song.log.len() > n {
+                starts.push(at / SR as f64);
+            }
+            ev.clear();
         }
-        ev.clear();
-    }
-    starts.iter().zip(&e.song.log).map(|(&t, &(bpm, k, m, meter))| (t, bpm, k, m, meter)).collect()
+        starts.iter().zip(&e.song.log).map(|(&t, &(bpm, k, m, meter))| (t, bpm, k, m, meter)).collect()
+    })
 }
 
 /// What the composer wrote in a stretch of music, to compare versions by:
@@ -16292,83 +16526,88 @@ struct Stats {
     sim: [f64; 4],
 }
 
-fn stats(genre: usize, seed: u64, secs: f64, length: f64) -> Stats {
-    let mut e = Engine::new(genre, seed);
-    e.song.length = length;
-    let mut ev = Vec::new();
-    // per bar: piece, start (s), all events, notes alone
-    let mut bars: Vec<(usize, f64, Vec<u32>, Vec<u32>)> = Vec::new();
-    let mut chords: Vec<(f64, u16)> = Vec::new();
-    let (mut notes, mut hits) = (0usize, 0usize);
-    while e.pos < secs * SR as f64 {
-        let t0 = e.pos;
-        let len = e.song.bar(&mut e.syn, t0, &mut ev);
-        let step = e.song.step_len();
-        let (mut all, mut pitched) = (Vec::new(), Vec::new());
-        for &(t, x) in &ev {
-            let st = ((t as f64 - t0) / step).round().max(0.0) as u32;
-            match x {
-                Ev::Note { ch, note, .. } => {
-                    let k = st << 16 | (ch as u32) << 8 | note as u32;
-                    all.push(k);
-                    pitched.push(k);
-                    notes += 1;
+fn stats(genre: usize, seed: u64, secs: f64, length: f64, opts: Opts) -> Stats {
+    samples::hidden(opts.synth(), opts.nets(), || {
+        let mut e = Engine::with(genre, seed, opts);
+        e.song.length = length;
+        let mut ev = Vec::new();
+        // per bar: piece, start (s), all events, notes alone
+        let mut bars: Vec<(usize, f64, Vec<u32>, Vec<u32>)> = Vec::new();
+        let mut chords: Vec<(f64, u16)> = Vec::new();
+        let (mut notes, mut hits) = (0usize, 0usize);
+        while e.pos < secs * SR as f64 {
+            let t0 = e.pos;
+            let len = e.song.bar(&mut e.syn, t0, &mut ev);
+            let step = e.song.step_len();
+            let (mut all, mut pitched) = (Vec::new(), Vec::new());
+            for &(t, x) in &ev {
+                let st = ((t as f64 - t0) / step).round().max(0.0) as u32;
+                match x {
+                    Ev::Note { ch, note, .. } => {
+                        let k = st << 16 | (ch as u32) << 8 | note as u32;
+                        all.push(k);
+                        pitched.push(k);
+                        notes += 1;
+                    }
+                    Ev::Hit { ch, kind, .. } => {
+                        all.push(st << 16 | (ch as u32 + 100) << 8 | kind as u32);
+                        hits += 1;
+                    }
+                    Ev::Riser { .. } => {}
                 }
-                Ev::Hit { ch, kind, .. } => {
-                    all.push(st << 16 | (ch as u32 + 100) << 8 | kind as u32);
-                    hits += 1;
-                }
-                Ev::Riser { .. } => {}
             }
+            for v in [&mut all, &mut pitched] {
+                v.sort_unstable();
+                v.dedup();
+            }
+            for m in e.song.bar_chords() {
+                chords.push((t0 / SR as f64, m));
+            }
+            bars.push((e.song.log.len(), t0 / SR as f64, all, pitched));
+            e.pos += len;
+            ev.clear();
         }
-        for v in [&mut all, &mut pitched] {
-            v.sort_unstable();
-            v.dedup();
+        let jaccard = |a: &[u32], b: &[u32]| {
+            let common = a.iter().filter(|x| b.binary_search(x).is_ok()).count();
+            common as f64 / (a.len() + b.len() - common).max(1) as f64
+        };
+        let sim = |lag: usize, notes_only: bool| {
+            let v: Vec<f64> = (0..bars.len().saturating_sub(lag))
+                .filter(|&i| bars[i].0 == bars[i + lag].0)
+                .map(|i| if notes_only { (&bars[i].3, &bars[i + lag].3) } else { (&bars[i].2, &bars[i + lag].2) })
+                .filter(|(a, b)| !a.is_empty() || !b.is_empty())
+                .map(|(a, b)| jaccard(a, b))
+                .collect();
+            v.iter().sum::<f64>() / v.len().max(1) as f64
+        };
+        let minutes = secs / 60.0;
+        let changes = chords.windows(2).filter(|w| w[0].1 != w[1].1).count();
+        let full = (secs / 60.0).floor().max(1.0) as usize;
+        let distinct: usize = (0..full)
+            .map(|m| {
+                let mut v: Vec<u16> = chords
+                    .iter()
+                    .filter(|c| c.0 >= m as f64 * 60.0 && c.0 < (m + 1) as f64 * 60.0)
+                    .map(|c| c.1)
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v.len()
+            })
+            .sum();
+        Stats {
+            changes_per_min: changes as f64 / minutes,
+            distinct_per_min: distinct as f64 / full as f64,
+            notes_per_s: notes as f64 / secs,
+            hits_per_s: hits as f64 / secs,
+            sim: [sim(4, false), sim(8, false), sim(4, true), sim(8, true)],
         }
-        for m in e.song.bar_chords() {
-            chords.push((t0 / SR as f64, m));
-        }
-        bars.push((e.song.log.len(), t0 / SR as f64, all, pitched));
-        e.pos += len;
-        ev.clear();
-    }
-    let jaccard = |a: &[u32], b: &[u32]| {
-        let common = a.iter().filter(|x| b.binary_search(x).is_ok()).count();
-        common as f64 / (a.len() + b.len() - common).max(1) as f64
-    };
-    let sim = |lag: usize, notes_only: bool| {
-        let v: Vec<f64> = (0..bars.len().saturating_sub(lag))
-            .filter(|&i| bars[i].0 == bars[i + lag].0)
-            .map(|i| if notes_only { (&bars[i].3, &bars[i + lag].3) } else { (&bars[i].2, &bars[i + lag].2) })
-            .filter(|(a, b)| !a.is_empty() || !b.is_empty())
-            .map(|(a, b)| jaccard(a, b))
-            .collect();
-        v.iter().sum::<f64>() / v.len().max(1) as f64
-    };
-    let minutes = secs / 60.0;
-    let changes = chords.windows(2).filter(|w| w[0].1 != w[1].1).count();
-    let full = (secs / 60.0).floor().max(1.0) as usize;
-    let distinct: usize = (0..full)
-        .map(|m| {
-            let mut v: Vec<u16> =
-                chords.iter().filter(|c| c.0 >= m as f64 * 60.0 && c.0 < (m + 1) as f64 * 60.0).map(|c| c.1).collect();
-            v.sort_unstable();
-            v.dedup();
-            v.len()
-        })
-        .sum();
-    Stats {
-        changes_per_min: changes as f64 / minutes,
-        distinct_per_min: distinct as f64 / full as f64,
-        notes_per_s: notes as f64 / secs,
-        hits_per_s: hits as f64 / secs,
-        sim: [sim(4, false), sim(8, false), sim(4, true), sim(8, true)],
-    }
+    })
 }
 
 /// `--musicwav GENRE SECONDS OUT.wav`: renders and says how long it took
 /// (ending as `ending` says, faded in over `fade_in` seconds).
-pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64) {
+pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64, opts: Opts) {
     let genre = args.first().and_then(|g| find(g));
     let secs = args.get(1).and_then(|s| s.parse::<f64>().ok());
     let (Some(genre), Some(secs), Some(path)) = (genre, secs, args.get(2)) else {
@@ -16381,7 +16620,7 @@ pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64
     // the recorded instruments before the first note: a seed's music the same every time
     samples::load_now();
     let t0 = Instant::now();
-    let done = match render_wav(genre, seed, secs, path, ending, fade_in, length) {
+    let done = match render_wav(genre, seed, secs, path, ending, fade_in, length, opts) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("musicbox: {e}");
@@ -16396,7 +16635,7 @@ pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64
         }
         _ => {}
     }
-    let pieces = pieces(genre, seed, secs, length);
+    let pieces = pieces(genre, seed, secs, length, opts);
     let p: Vec<String> = pieces
         .iter()
         .map(|&(t, bpm, k, m, meter)| {
@@ -16409,7 +16648,7 @@ pub fn cli(args: &[String], seed: u64, ending: Ending, fade_in: f64, length: f64
         secs / took.max(1e-9),
         p.join(", ")
     );
-    let st = stats(genre, seed, secs, length);
+    let st = stats(genre, seed, secs, length, opts);
     println!(
         "  composition: {:.1} chord changes and {:.1} distinct chords a minute, {:.1} notes and {:.1} drum hits a second; \
          bars 4 / 8 apart alike {:.2} / {:.2} (notes alone {:.2} / {:.2})",
@@ -16440,7 +16679,7 @@ mod tests {
     /// Each piece's length (seconds) in the first `secs` of the music, the
     /// composer run alone, asked for `length`.
     fn piece_lengths(genre: usize, seed: u64, secs: f64, length: f64) -> Vec<f64> {
-        let p = pieces(genre, seed, secs, length);
+        let p = pieces(genre, seed, secs, length, Opts::default());
         p.windows(2).map(|w| w[1].0 - w[0].0).collect()
     }
 
@@ -16452,7 +16691,7 @@ mod tests {
             let mut keys: std::collections::BTreeMap<String, usize> = Default::default();
             let mut bpm: Vec<f64> = Vec::new();
             for seed in 1..300 {
-                for (_, b, k, m, meter) in pieces(g, seed, 400.0, 0.0) {
+                for (_, b, k, m, meter) in pieces(g, seed, 400.0, 0.0, Opts::default()) {
                     *forms.entry(meter.to_string()).or_default() += 1;
                     *keys.entry(format!("{} {}", KEY_NAMES[k.rem_euclid(12) as usize], MODE_NAMES[m])).or_default() +=
                         1;
@@ -16550,6 +16789,96 @@ mod tests {
     }
 
     #[test]
+    fn a_piece_made_again_the_same_way_is_the_same_piece() {
+        for (g, seed) in [(TECHNO, 5), (CELTIC, 2), (MARIACHI, 7), (INDONESIAN, 3), (mix_id(POLKA, Some(SKA)), 4)] {
+            let mut e = Engine::new(g, seed);
+            e.song.length = 30.0;
+            let mut buf = vec![0.0f32; 2 * CHUNK];
+            while e.snap.as_ref().is_none_or(|s| s.song.log.len() < 3) {
+                e.render(&mut buf);
+            }
+            let snap = e.snap.as_ref().expect("a snapshot");
+            let again = e.remake(Opts::default());
+            let n = name(g);
+            assert_eq!(again.song.log, snap.song.log, "{n}: the pieces");
+            assert_eq!(again.song.rng.0, snap.song.rng.0, "{n}: the dice where they were");
+            assert_eq!((again.t, again.pos, again.cur), (snap.t, snap.pos, snap.cur), "{n}: the clock");
+            let first =
+                |e: &Engine| e.ev[e.evi..].iter().filter(|x| x.0 >= e.cur.0.ceil() as u64).copied().collect::<Vec<_>>();
+            assert_eq!(first(&again), first(snap), "{n}: the first bar");
+        }
+    }
+
+    #[test]
+    fn another_way_of_making_it_makes_the_piece_playing_again() {
+        let mut m = Mix::new(CELTIC, 6);
+        m.length = 30.0;
+        let mut buf = vec![0.0f32; 2 * CHUNK];
+        while m.cur.snap.as_ref().is_none_or(|s| s.song.log.len() < 2) {
+            m.render(&mut buf);
+        }
+        let (piece, log) = (m.now().piece, m.cur.song.log.clone());
+        let to = Opts { voices: Voices::Synth, ..Opts::default() };
+        m.opts = to;
+        let mut n = 0;
+        while m.cur.opts != to {
+            m.render(&mut buf);
+            n += 1;
+            assert!(n < 400, "made again within a bar or two");
+        }
+        assert_eq!(m.now().piece, piece, "the same piece, not the next");
+        assert_eq!(m.cur.song.log, log);
+        assert_eq!(m.now().opts, to);
+        // and every piece after it made so
+        m.skip += 1;
+        while m.skip != m.skipped || m.next.is_some() {
+            m.render(&mut buf);
+        }
+        assert_eq!(m.cur.opts, to);
+    }
+
+    /// How long making a piece again takes, the pieces before it composed
+    /// to get there (it runs in the audio thread): `cargo test --release
+    /// remake_survey -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn remake_survey() {
+        for g in 0..GENRES.len() {
+            let mut e = Engine::new(g, 9);
+            let mut buf = vec![0.0f32; 2 * CHUNK];
+            while e.snap.as_ref().is_none_or(|s| s.song.log.len() < 6) {
+                e.render(&mut buf);
+            }
+            let t0 = Instant::now();
+            let again = e.remake(Opts::default());
+            let took = t0.elapsed().as_secs_f64() * 1e3;
+            let t1 = Instant::now();
+            let _first = Engine::new(g, 10);
+            println!(
+                "{:>13}: piece 6 at {:.0} s made again in {took:.1} ms (a new engine: {:.1} ms)",
+                name(g),
+                again.t as f64 / SR as f64,
+                t1.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    }
+
+    #[test]
+    fn opts_survive_their_code() {
+        for tuned in [false, true] {
+            for net_tunes in [false, true] {
+                for voices in Voices::ALL {
+                    let o = Opts { tuned, net_tunes, voices };
+                    assert_eq!(Opts::from_code(o.code()), o);
+                }
+            }
+        }
+        assert_eq!(Opts::default().flags(), "");
+        assert_eq!(Voices::parse("net"), Some(Voices::Net));
+        assert_eq!(Voices::Net.next(), Voices::Synth);
+    }
+
+    #[test]
     fn stopping_holds_the_music_and_starting_goes_on() {
         let mut m = Mix::new(TECHNO, 3);
         let mut buf = vec![0.0f32; 2 * CHUNK];
@@ -16617,7 +16946,7 @@ mod tests {
 
     #[test]
     fn player_starts_and_drops_cleanly() {
-        let p = Player::spawn(&["sh", "-c", "exec cat > /dev/null"], 1, 7).expect("player");
+        let p = Player::spawn(&["sh", "-c", "exec cat > /dev/null"], 1, 7, Opts::default()).expect("player");
         std::thread::sleep(Duration::from_secs(1));
         p.set_genre(2);
         assert_eq!(p.genre(), 2);
@@ -16634,8 +16963,8 @@ mod tests {
 
     #[test]
     fn player_fails_when_the_server_is_not_there() {
-        assert!(Player::spawn(&["sh", "-c", "exit 1"], 0, 1).is_err());
-        assert!(Player::spawn(&["/nonexistent/pacat"], 0, 1).is_err());
+        assert!(Player::spawn(&["sh", "-c", "exit 1"], 0, 1, Opts::default()).is_err());
+        assert!(Player::spawn(&["/nonexistent/pacat"], 0, 1, Opts::default()).is_err());
     }
 
     #[test]
@@ -16988,7 +17317,7 @@ mod device_tests {
             std::env::set_var("SDL_AUDIODRIVER", "disk");
             std::env::set_var("SDL_DISKAUDIOFILE", &path);
         }
-        let p = Player::device(1, 3).expect("device");
+        let p = Player::device(1, 3, Opts::default()).expect("device");
         std::thread::sleep(Duration::from_millis(1500));
         let frames = p.frames.load(Ordering::Relaxed);
         drop(p);

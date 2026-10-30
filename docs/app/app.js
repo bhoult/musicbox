@@ -15,11 +15,20 @@ const st = {
   stopped: false,
   seed: Math.floor(Math.random() * 0xffffffff),
   now: null,
+  // how the music is made (as the engine's Opts): the optimiser's settings,
+  // the network's tunes, and what plays the instruments
+  opts: { tuned: false, netTunes: false, voices: 'synth' },
 };
+const VOICES = ['synth', 'recorded', 'network'];
+const optsCode = (o) => (o.tuned ? 1 : 0) | (o.netTunes ? 2 : 0) | (VOICES.indexOf(o.voices) << 2);
 let worker = null;
 let exporter = null;
 let module = null;
 let analyser = null;
+let audio = null;
+
+// where the recordings are (tools/web-samples.sh makes them)
+const SAMPLES = 'samples/';
 
 // a length as typed: auto (or 0); M:SS; 3.5m or 210s; a bare number in
 // minutes under 30, else seconds (as the desktop app reads it)
@@ -54,8 +63,12 @@ function say(text, kind = 'note') {
 function setGenre(primary, drums) {
   st.primary = primary;
   st.drums = drums === primary ? null : drums;
-  worker?.postMessage({ type: 'genre', primary: st.primary, drums: st.drums });
   drawButtons();
+  // its recordings first, when they play
+  const [p, d] = [st.primary, st.drums];
+  const go = () => worker?.postMessage({ type: 'genre', primary: p, drums: d });
+  if (st.opts.voices === 'synth') go();
+  else loadRecordings(p, d).then(go, go);
 }
 
 function stepGenre(by) {
@@ -96,26 +109,163 @@ function replay() {
   setPlaying(true);
 }
 
-function exportSong() {
+// another way of making it: the song playing made again from its start
+// (the recordings it plays loaded first)
+async function setOpts(change) {
+  const next = { ...st.opts, ...change };
+  if (next.voices !== 'synth') {
+    try {
+      await loadRecordings(st.primary, st.drums);
+      if (next.voices === 'network') await loadNets();
+    } catch (e) {
+      say(`no recordings: ${e.message}`, 'error');
+      return;
+    }
+  }
+  Object.assign(st.opts, next);
+  worker?.postMessage({ type: 'opts', code: optsCode(st.opts) });
+  drawMade();
+  setPlaying(true);
+}
+
+// ---- the recordings: the tables, then each group a genre plays, fetched,
+// decoded here (a worker has no decoder) and handed to the engine (moved,
+// not copied: a genre's come to tens of megabytes decoded); one load at a time
+
+const rec = { index: null, meta: null, have: new Set(), queue: Promise.resolve(), nets: null };
+
+function groupsFor(primary, drums) {
+  const names = [st.genres[primary], drums === null ? null : st.genres[drums]].filter((n) => n);
+  return [...new Set(names.flatMap((n) => rec.index.genres[n] ?? []))].sort((a, b) => a - b);
+}
+
+function loadRecordings(primary, drums) {
+  rec.queue = rec.queue.catch(() => {}).then(() => fetchRecordings(primary, drums));
+  return rec.queue;
+}
+
+async function tables() {
+  if (rec.index) return;
+  const [j, b] = await Promise.all([fetch(`${SAMPLES}pack.json`), fetch(`${SAMPLES}pack.bin`)]);
+  if (!j.ok || !b.ok) throw new Error(`the tables did not load (${j.status} ${b.status})`);
+  rec.index = await j.json();
+  rec.meta = await b.arrayBuffer();
+}
+
+// group `g`'s stream, decoded to 16-bit (empty for a group whose
+// recordings are all in groups before it)
+async function decodeGroup(g) {
+  const info = rec.index.groups[g];
+  const pcm = new Int16Array(info.frames);
+  if (!info.frames) return pcm;
+  const r = await fetch(`${SAMPLES}${info.file}`);
+  if (!r.ok) throw new Error(`${info.name}: ${r.status}`);
+  const f = (await audio.decodeAudioData(await r.arrayBuffer())).getChannelData(0);
+  const n = Math.min(f.length, pcm.length);
+  for (let k = 0; k < n; k++) pcm[k] = Math.max(-32768, Math.min(32767, Math.round(f[k] * 32768)));
+  return pcm;
+}
+
+// the groups `todo` (in order) decoded four at a time, handed to `to` in
+// order (a group's recordings may be in one before it)
+async function sendGroups(todo, to, progress) {
+  const got = new Map();
+  const left = [...todo];
+  let done = 0;
+  await Promise.all(
+    [0, 1, 2, 3].map(async () => {
+      while (left.length) {
+        const g = left.shift();
+        got.set(g, await decodeGroup(g));
+        progress?.(++done);
+      }
+    }),
+  );
+  for (const g of todo) {
+    const pcm = got.get(g);
+    to.postMessage({ type: 'group', g, pcm }, [pcm.buffer]);
+  }
+}
+
+async function fetchRecordings(primary, drums) {
+  if (!rec.index) {
+    await tables();
+    worker.postMessage({ type: 'pack', meta: rec.meta.slice(0) });
+  }
+  const todo = groupsFor(primary, drums).filter((g) => !rec.have.has(g));
+  if (!todo.length) return;
+  const mb = todo.map((g) => rec.index.groups[g].bytes ?? 0).reduce((a, b) => a + b, 0) / 1e6;
+  const of = `${todo.length} groups${mb ? `, ${mb.toFixed(1)} MB` : ''}`;
+  say(`loading recordings: 0 of ${of}`);
+  await sendGroups(todo, worker, (n) => say(`loading recordings: ${n} of ${of}`));
+  todo.forEach((g) => rec.have.add(g));
+  say('recordings loaded');
+}
+
+// the network's instruments (models/index.tsv: kind, name, articulation,
+// file), once, after the tables
+async function loadNets() {
+  if (rec.nets) return;
+  const r = await fetch('app/models/index.tsv');
+  const lines = r.ok ? (await r.text()).split('\n').filter((l) => /^(multi|gm)\t/.test(l)) : [];
+  rec.nets = [];
+  for (const line of lines) {
+    const f = await fetch(`app/models/${line.split('\t')[3].trim()}`);
+    if (!f.ok) continue;
+    const bytes = await f.arrayBuffer();
+    rec.nets.push({ line, bytes });
+    worker.postMessage({ type: 'net', line, bytes: bytes.slice(0) });
+  }
+  say(rec.nets.length ? `${rec.nets.length} network instruments` : 'no network instruments here yet: recordings play');
+}
+
+function drawMade() {
+  for (const b of document.querySelectorAll('#made button')) {
+    const [k, v] = [b.dataset.k, b.dataset.v];
+    const on = k === 'voices' ? st.opts.voices === v : String(st.opts[k]) === v;
+    b.classList.toggle('lit', on);
+  }
+}
+
+async function exportSong() {
   const n = st.now;
   if (!n || !module) return;
   const name = `${n.name}-${n.seed}-${n.song}.wav`;
-  if (!exporter) {
-    exporter = new Worker('app/worker.js');
-    exporter.onmessage = (e) => {
-      if (e.data.type !== 'wav') return;
-      const url = URL.createObjectURL(new Blob([e.data.bytes], { type: 'audio/wav' }));
-      const a = Object.assign(document.createElement('a'), { href: url, download: e.data.name });
-      document.body.append(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-      say(`saved ${e.data.name}`);
-    };
-    exporter.postMessage({ type: 'init', module, genre: 0, seed: 1 });
-  }
+  exporter ??= makeExporter();
   say(`exporting ${name}…`);
-  exporter.postMessage({ type: 'export', id: n.id, seed: n.seed, song: n.song, length: st.length, name });
+  // the recordings the song plays, decoded again for the exporter's engine
+  if ((n.opts >> 2) !== 0 && rec.index) {
+    if (!exporter.meta) {
+      exporter.postMessage({ type: 'pack', meta: rec.meta.slice(0) });
+      exporter.meta = true;
+    }
+    const todo = [...rec.have].filter((g) => !exporter.groups.has(g)).sort((a, b) => a - b);
+    await sendGroups(todo, exporter);
+    todo.forEach((g) => exporter.groups.add(g));
+    if (rec.nets && !exporter.nets) {
+      for (const { line, bytes } of rec.nets) exporter.postMessage({ type: 'net', line, bytes: bytes.slice(0) });
+      exporter.nets = true;
+    }
+  }
+  exporter.postMessage({ type: 'export', id: n.id, seed: n.seed, song: n.song, length: st.length, opts: n.opts, name });
+}
+
+function makeExporter() {
+  const ex = new Worker('app/worker.js');
+  ex.groups = new Set();
+  ex.onmessage = (e) => {
+    if (e.data.type === 'error') say(e.data.error, 'error');
+    if (e.data.type !== 'wav') return;
+    const url = URL.createObjectURL(new Blob([e.data.bytes], { type: 'audio/wav' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: e.data.name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    say(`saved ${e.data.name}`);
+  };
+  ex.postMessage({ type: 'init', module, genre: 0, seed: 1 });
+  return ex;
 }
 
 // ---- the buttons
@@ -256,7 +406,7 @@ function drawEq(t) {
 
 async function start() {
   $('start').remove();
-  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+  const ctx = (audio = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' }));
   // (a server that sends the module as anything but application/wasm:
   // compiled from its bytes instead)
   module = await WebAssembly.compileStreaming(fetch('app/musicbox.wasm')).catch(async () =>
@@ -276,10 +426,12 @@ async function start() {
     if (e.data.type === 'genres') {
       st.genres = e.data.genres;
       drawButtons();
+    } else if (e.data.type === 'error') {
+      say(e.data.error, 'error');
     }
   };
   st.primary = st.seed % 12;
-  worker.postMessage({ type: 'init', module, genre: st.primary, seed: st.seed, port: ch.port1 }, [ch.port1]);
+  worker.postMessage({ type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode(st.opts), port: ch.port1 }, [ch.port1]);
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   $('seed').textContent = `seed ${st.seed}`;
   await ctx.resume();
@@ -290,6 +442,11 @@ $('play').onclick = () => setPlaying(st.stopped);
 $('replay').onclick = replay;
 $('skip').onclick = () => worker?.postMessage({ type: 'skip' });
 $('export').onclick = exportSong;
+for (const b of document.querySelectorAll('#made button')) {
+  const [k, v] = [b.dataset.k, b.dataset.v];
+  b.onclick = () => setOpts({ [k]: k === 'voices' ? v : v === 'true' });
+}
+drawMade();
 $('auto').onclick = () => setLength(0);
 $('slider').oninput = (e) => setLength(Number(e.target.value));
 $('typed').onkeydown = (e) => {
@@ -323,6 +480,9 @@ document.addEventListener('keydown', (e) => {
     s: () => setPlaying(st.stopped),
     r: replay,
     x: exportSong,
+    o: () => setOpts({ tuned: !st.opts.tuned }),
+    m: () => setOpts({ netTunes: !st.opts.netTunes }),
+    i: () => setOpts({ voices: VOICES[(VOICES.indexOf(st.opts.voices) + 1) % VOICES.length] }),
     '[': () => longer(-1),
     ']': () => longer(1),
     t: () => {
