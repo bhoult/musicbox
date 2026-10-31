@@ -52,6 +52,9 @@ pub enum Action {
     /// written), or 15 s longer or shorter
     SetLength(f64),
     Longer(i32),
+    /// how loud it plays: set (per cent), or a step louder or quieter
+    SetVolume(u32),
+    Louder(i32),
     /// the piece playing saved as an MP3
     Export,
     /// how the music is made: the optimiser's settings on or off, the
@@ -80,6 +83,8 @@ pub struct State {
     pub eq: bool,
     /// the length asked of each piece (seconds; 0: as long as it was written)
     pub length: f64,
+    /// how loud it plays (per cent)
+    pub volume: u32,
     /// a message for a few seconds (a window that would not open), and a
     /// word on an export
     pub msg: Option<(String, Instant)>,
@@ -143,6 +148,14 @@ pub fn parse_length(s: &str) -> Option<f64> {
     (secs > 0.0).then(|| secs.clamp(MIN_LENGTH, MAX_LENGTH).round())
 }
 
+/// How far - and + turn the volume down and up (per cent).
+pub const VOLUME_STEP: u32 = 5;
+
+/// A step louder or quieter (`by` steps), from 0 to 100.
+fn louder(volume: u32, by: i32) -> u32 {
+    (volume as i32 + by * VOLUME_STEP as i32).clamp(0, 100) as u32
+}
+
 /// A length as shown: M:SS, or "auto".
 pub fn show_length(secs: f64) -> String {
     if secs <= 0.0 { "auto".into() } else { clock(secs) }
@@ -169,7 +182,7 @@ fn usage() -> ! {
 /// The usage, then exit with `code` (0 when asked for).
 fn help(code: i32) -> ! {
     eprintln!(
-        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
+        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--volume V] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
     );
     eprintln!(
         "       musicbox --wav GENRE[+DRUMS] SECONDS OUT.wav [--seed N] [--length L] [--ending natural|fade|cut] [--fade SECS]"
@@ -186,6 +199,7 @@ fn help(code: i32) -> ! {
     eprintln!("  --eq: the equalizer in the terminal as well; E turns it on and off");
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
     eprintln!("  --length L: how long each song is (3:00, 2.5m, 150s; auto, the default: as long as it was written)");
+    eprintln!("  --volume V: how loud it plays, 0 to 100 (100 by default); - and + turn it down and up");
     eprintln!("  --samples DIR: the recorded instruments (tools/get-samples.sh fetches them; default");
     eprintln!("         ~/.local/share/musicbox/samples); --no-samples: the synthesiser alone");
     eprintln!("  --export: the Kth song (1 by default) of the music and seed on its own, start to end, to an MP3");
@@ -198,7 +212,7 @@ fn help(code: i32) -> ! {
     eprintln!("         network's instruments where it has one, else the recording (I)");
     eprintln!();
     eprintln!("  keys: left/right genre, up/down drums, space next song, B back, , and . 10 s back and on,");
-    eprintln!("        S stop/start, R replay, [ ] length, T type a length, D type a song's id,");
+    eprintln!("        S stop/start, R replay, [ ] length, T type a length, D type a song's id, - + volume,");
     eprintln!("        X export the song, O tuned, M network tunes, I instruments, E equalizer, G window, Q quit");
     std::process::exit(code);
 }
@@ -214,6 +228,7 @@ fn main() {
     let mut ending = music::Ending::Cut;
     let mut fade = 0.0f64;
     let mut length = 0.0f64;
+    let mut volume = 100u32;
     let mut genre: Option<usize> = None;
     let mut from: Option<music::SongId> = None;
     let mut opts = music::Opts::default();
@@ -256,6 +271,10 @@ fn main() {
             "--length" => {
                 i += 1;
                 length = parse_length(&value(i)).unwrap_or_else(|| usage());
+            }
+            "--volume" => {
+                i += 1;
+                volume = value(i).trim_end_matches('%').parse().ok().filter(|&v| v <= 100).unwrap_or_else(|| usage());
             }
             "--tuned" => opts.tuned = true,
             "--net-tunes" => opts.net_tunes = true,
@@ -334,7 +353,16 @@ fn main() {
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, length, opts, from);
+    play(id, seed, gui, eq, Start { length, volume, opts, from });
+}
+
+/// How playing starts: the length asked of each piece, the volume, how the
+/// music is made, and a song to begin on.
+struct Start {
+    length: f64,
+    volume: u32,
+    opts: music::Opts,
+    from: Option<music::SongId>,
 }
 
 /// How far into a song Back still goes to the one before (seconds).
@@ -358,7 +386,8 @@ fn export_dir() -> std::path::PathBuf {
 }
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
-fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opts, from: Option<music::SongId>) {
+fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
+    let Start { length, volume, opts, from } = start;
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -367,7 +396,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
     sdl::no_signal_handlers();
     // the recorded instruments before the first note: every piece played on them
     let sampled = samples::load_now();
-    let player = match music::Player::start(id, seed, opts, from) {
+    let player = match music::Player::start(id, seed, opts, from, volume) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("musicbox: no sound: {e}");
@@ -377,7 +406,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
     player.set_length(length);
     let tap = player.tap();
     let (primary, drums) = music::parts(id);
-    let mut st = State { primary, drums, seed, sampled, opts, eq, length, msg: None, note: None };
+    let mut st = State { primary, drums, seed, sampled, opts, eq, length, volume, msg: None, note: None };
     let mut term = term::Term::start();
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {
@@ -435,6 +464,14 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
                 Action::Longer(by) => {
                     st.length = longer(st.length, now.planned, by);
                     player.set_length(st.length);
+                }
+                Action::SetVolume(v) => {
+                    st.volume = v.min(100);
+                    player.set_volume(st.volume);
+                }
+                Action::Louder(by) => {
+                    st.volume = louder(st.volume, by);
+                    player.set_volume(st.volume);
                 }
                 Action::Export => player.export(export_dir()),
                 Action::Tuned | Action::NetTunes | Action::Voices | Action::SetOpts(_) => {

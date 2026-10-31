@@ -6,7 +6,7 @@ Music made up as it plays, without end, in twelve genres and any pair of them. I
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it starts on its synthesiser, and fetches recorded instruments when they are asked for.
 
-[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the equalizer, the transport, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
+[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the equalizer, the transport, the song's bar, the volume, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
 
 As it comes, no AI model makes any of the sound or the music, and no song is sampled. The music comes from a composer that is ordinary code: for each genre, rules for its scales, chords, rhythms, song forms and who plays what, and a random number generator choosing among them. It is generated at random and without end by software that an AI wrote. A genre and a seed always give the same music.
 
@@ -22,6 +22,7 @@ target/release/musicbox polka+techno       # polka's music with techno's drums
 target/release/musicbox western --gui      # with the window open
 target/release/musicbox lo-fi --eq         # with an equalizer in the terminal
 target/release/musicbox ska --length 3:00  # each song three minutes long
+target/release/musicbox techno --volume 60 # quieter (0 to 100)
 target/release/musicbox --export celtic reel.mp3 --seed 7 --song 2   # one song, to an MP3
 target/release/musicbox ska.2817.1.2       # a song by its id, and on from it
 target/release/musicbox --export ska.2817.1.2 ska.mp3                # a song by its id, to an MP3
@@ -38,7 +39,7 @@ The terminal shows what is playing and the keys, redrawn in place:
   ambient techno synthwave lo-fi polka tavern ska mariachi indonesian starconflict celtic western
   ←/→ genre  ↑/↓ drums  space next song  b back  , . 10 s back and on
   s stop  r replay  x export mp3  d type a song's id  q quit
-  [ ] length 3:00  t type a length  e equalizer  g window
+  [ ] length 3:00  - + volume 100%  t type a length  e equalizer  g window
   o tuning as written  m tunes rules  i instruments recorded
 ```
 
@@ -54,6 +55,7 @@ The top line ends with the song's id ([below](#song-ids)). The third line is the
 | S | stop, and start again where it stopped |
 | R | replay: the song playing, from its start again |
 | [ / ] | each song 15 s shorter or longer (from auto: about the song's own length; below 0:30, auto again) |
+| - / + (also =) | the volume down or up, 5% a step ([below](#volume)) |
 | T | type a length: 3:30, 3.5m, 210s, or auto; Enter sets it, Esc cancels |
 | D | type a song's id: Enter plays it, Esc cancels |
 | X | export the song playing, from its start to its end, to an MP3 in ~/Music/musicbox |
@@ -68,7 +70,7 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 
 ## The window
 
-![The window: mariachi drummed by techno, on network instruments; the equalizer, the transport, the three settings and the genre selector](docs/window.png)
+![The window: mariachi drummed by techno, on network instruments; the equalizer, the transport, the three settings, the genre selector and the volume](docs/window.png)
 
 `--gui` or G opens it. It has six parts:
 
@@ -77,7 +79,7 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
 - **The transport and the length:** STOP / START, BACK, REPLAY, NEXT SONG and EXPORT MP3, then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
 - **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is marked in the accent colour.
-- **The genre selector:** click a genre under MUSIC BY to write the music, or right-click it to make it the drummer. The DRUMS BY row picks the drummer too, NONE for none. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc) and QUIT (Q).
+- **The genre selector:** click a genre under MUSIC BY to write the music, or right-click it to make it the drummer. The DRUMS BY row picks the drummer too, NONE for none. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc) and QUIT (Q), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
 
 The keys work in the window too. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
 
@@ -90,6 +92,10 @@ A song is as long as the composer writes it (about two minutes, from one to five
 ## Start, stop and replay
 
 Stop fades out in 30 ms and holds the music where it is; start goes on from there. A genre, drummer or next song chosen while stopped begins at once, from its start, when it plays again. Replay plays the song playing again from its start, crossfading at the next bar line as a genre change does: the engine is kept as it was when each song began, so the replay is the same music, note for note.
+
+## Volume
+
+`-` and `+` (or `=`) turn it down and up, 5% a step, from 0 to 100%; the window and the page have a slider for it, and `--volume 60` starts at 60%. The scale is cubic, as PulseAudio's volumes are, so each step sounds about as much louder: 50% is an eighth of the full level (−18 dB). A change eases in over the next buffer (85 ms), with no click. It is how loud it plays and nothing more: the equalizer shows the music at its full level, and an export is at full level whatever the volume. The page remembers its volume in the browser; the desktop app starts at 100% (or `--volume`) each time.
 
 ## Song ids
 
@@ -114,7 +120,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the three settings, song ids and the keys as the window has them. EXPORT (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; shift-X saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. EXPORT (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; shift-X saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
 It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 

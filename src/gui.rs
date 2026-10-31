@@ -3,14 +3,15 @@
 //! play (LED bars with peak markers over a frequency scale), the transport
 //! (stop, back, replay, next song) with the songs' length on a slider and in
 //! a field to type it into, and the genre selector, a grid of the genres to write the
-//! music and one of the drummers, with the window's keys as buttons below.
+//! music and one of the drummers, with the window's keys as buttons below and
+//! the volume on a slider beside them.
 //! Drawn on the CPU into a small picture that SDL scales up by a whole number.
 
 use crate::font::{self, ADVANCE};
 use crate::sdl::{self, Window};
 use crate::spectrum::{self, Spectrum};
 use crate::tap::{Now, Tap};
-use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, clock, music, parse_length, show_length};
+use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, VOLUME_STEP, clock, music, parse_length, show_length};
 
 const BG: u32 = 0x0E1116;
 const PANEL: u32 = 0x141A21;
@@ -46,6 +47,9 @@ pub struct Gui {
     field: Option<(i32, i32, i32, i32)>,
     /// the slider held, and the length it last set
     drag: Option<f64>,
+    /// the volume's slider, as last drawn, and (held) the volume it last set
+    vol: Option<(i32, i32, i32, i32)>,
+    vol_drag: Option<u32>,
     /// the song's bar, as last drawn, the seconds it spans, and the point
     /// in the song it is held at (gone to when let go)
     bar: Option<(i32, i32, i32, i32)>,
@@ -83,6 +87,8 @@ impl Gui {
             slider: None,
             field: None,
             drag: None,
+            vol: None,
+            vol_drag: None,
             bar: None,
             span: 0.0,
             scrub: None,
@@ -109,6 +115,19 @@ impl Gui {
         let Some((x0, _, x1, _)) = self.slider else { return 0 };
         let f = ((secs - MIN_LENGTH) / (SLIDER_LENGTH - MIN_LENGTH)).clamp(0.0, 1.0);
         x0 + (f * (x1 - x0 - 1) as f64).round() as i32
+    }
+
+    /// The volume at `x` on its slider: 0 to 100, in steps.
+    fn vol_at(&self, x: i32) -> u32 {
+        let Some((x0, _, x1, _)) = self.vol else { return 0 };
+        let f = ((x - x0) as f64 / (x1 - x0 - 1).max(1) as f64).clamp(0.0, 1.0);
+        ((f * 100.0 / VOLUME_STEP as f64).round() as u32 * VOLUME_STEP).min(100)
+    }
+
+    /// Where a volume sits on its slider.
+    fn vol_x(&self, volume: u32) -> i32 {
+        let Some((x0, _, x1, _)) = self.vol else { return 0 };
+        x0 + (volume.min(100) as f64 / 100.0 * (x1 - x0 - 1) as f64).round() as i32
     }
 
     /// The point in the song at `x` on its bar (seconds).
@@ -166,15 +185,26 @@ impl Gui {
                     if self.scrub.is_some() {
                         self.scrub = Some(self.bar_secs(x));
                     }
+                    if let Some(was) = self.vol_drag {
+                        let vol = self.vol_at(x);
+                        if vol != was {
+                            self.vol_drag = Some(vol);
+                            v.push(Action::SetVolume(vol));
+                        }
+                    }
                 }
                 sdl::SDL_MOUSEBUTTONUP => {
                     self.drag = None;
+                    self.vol_drag = None;
                     v.extend(self.scrub.take().map(Action::SeekTo));
                 }
                 sdl::SDL_MOUSEWHEEL => {
                     let over = self.mouse.is_some_and(|m| inside(self.slider, m) || inside(self.field, m));
                     if over && e.wheel() != 0 {
                         v.push(Action::Longer(e.wheel().signum()));
+                    }
+                    if self.mouse.is_some_and(|m| inside(self.vol, m)) && e.wheel() != 0 {
+                        v.push(Action::Louder(e.wheel().signum()));
                     }
                 }
                 sdl::SDL_TEXTINPUT => {
@@ -204,6 +234,10 @@ impl Gui {
                         let l = self.slider_length(x);
                         self.drag = Some(l);
                         v.push(Action::SetLength(l));
+                    } else if left && inside(self.vol, (x, y)) {
+                        let vol = self.vol_at(x);
+                        self.vol_drag = Some(vol);
+                        v.push(Action::SetVolume(vol));
                     } else if left && inside(self.field, (x, y)) {
                         if self.edit_song {
                             self.edit = None;
@@ -228,6 +262,8 @@ impl Gui {
                         sdl::K_DOWN => Some(Action::Drums(-1)),
                         sdl::K_ESCAPE => Some(Action::Window),
                         sdl::K_F11 => Some(Action::Fullscreen),
+                        sdl::K_KP_MINUS => Some(Action::Louder(-1)),
+                        sdl::K_KP_PLUS => Some(Action::Louder(1)),
                         k => match u8::try_from(k).map(|c| c as char) {
                             Ok(' ' | '\r' | 'y') => Some(Action::Skip),
                             Ok('s') => Some(Action::Play),
@@ -238,6 +274,8 @@ impl Gui {
                             Ok('x') => Some(Action::Export),
                             Ok('[') => Some(Action::Longer(-1)),
                             Ok(']') => Some(Action::Longer(1)),
+                            Ok('-') => Some(Action::Louder(-1)),
+                            Ok('=' | '+') => Some(Action::Louder(1)),
                             Ok(c @ ('t' | 'd')) => {
                                 self.edit = Some(String::new());
                                 self.edit_song = c == 'd';
@@ -467,6 +505,7 @@ impl Gui {
             self.button(x, y, bw, bh, label, hint, (0x30353F, 0x4A5160), None, a, None);
             x += bw + 6;
         }
+        self.volume(st.volume, x + 8, w - m, y, bh);
 
         // the equalizer
         if bottom - top > 24 {
@@ -526,6 +565,38 @@ impl Gui {
             }
             x += 14;
         }
+    }
+
+    /// The volume, at the right between x0 and x1: its keys and name, its
+    /// slider (a tick each 10 per cent, lit up to its handle), and how much.
+    fn volume(&mut self, volume: u32, x0: i32, x1: i32, y: i32, h: i32) {
+        let shown = format!("{volume}%");
+        let pw = font::width("100%", 1);
+        let label = font::width("- +", 1) + ADVANCE + font::width("VOLUME", 1) + 6;
+        let sw = (x1 - x0 - label - pw - 8).min(200);
+        if sw < 40 {
+            self.vol = None;
+            return;
+        }
+        let sx1 = x1 - pw - 8;
+        let sx0 = sx1 - sw;
+        let mut x = sx0 - label;
+        x += self.text(x, y + 3, "- +", 0x9AA6B8, 1) + ADVANCE;
+        self.text(x, y + 3, "VOLUME", DIM, 1);
+        self.vol = Some((sx0, y, sx1, y + h));
+        let mid = y + h / 2;
+        self.rect(sx0, mid - 1, sw, 3, LED_OFF);
+        for tick in 1..10 {
+            let tx = self.vol_x(tick * 10);
+            let tall = if tick == 5 { 4 } else { 2 };
+            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, 0x3A4350);
+        }
+        let hx = self.vol_x(volume);
+        self.rect(sx0, mid - 1, hx - sx0, 3, ACCENT);
+        let over = self.vol_drag.is_some() || self.mouse.is_some_and(|m| inside(self.vol, m));
+        self.rect(hx - 2, y + 1, 5, h - 2, if over { PEAK } else { TEXT });
+        let color = if volume == 0 { AMBER } else { ACCENT };
+        self.text(x1 - font::width(&shown, 1), y + 3, &shown, color, 1);
     }
 
     /// The length slider between x0 and x1: a tick a minute, the length

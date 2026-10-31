@@ -16217,12 +16217,19 @@ struct Controls {
     opts: AtomicU32,
     /// a song or a point in it to go to
     go: Mutex<Option<Go>>,
+    /// how loud it plays (per cent: `gain`)
+    volume: AtomicU32,
 }
 
 impl Controls {
-    /// (`from`: a song to go to before anything plays.)
-    fn new(genre: usize, opts: Opts, from: Option<SongId>) -> Arc<Controls> {
-        let c = Controls { want: AtomicUsize::new(genre), opts: AtomicU32::new(opts.code()), ..Default::default() };
+    /// (`from`: a song to go to before anything plays; `volume` as `gain` takes it.)
+    fn new(genre: usize, opts: Opts, from: Option<SongId>, volume: u32) -> Arc<Controls> {
+        let c = Controls {
+            want: AtomicUsize::new(genre),
+            opts: AtomicU32::new(opts.code()),
+            volume: AtomicU32::new(volume),
+            ..Default::default()
+        };
         if let Some(id) = from {
             *c.go.lock().unwrap_or_else(|e| e.into_inner()) = Some(Go::Song(id));
             c.want.store(id.music, Ordering::Relaxed);
@@ -16260,10 +16267,27 @@ impl Controls {
     }
 }
 
-/// What the device's callback plays: the mix (and its float buffer), and
-/// what the app asks of it.
+/// The gain of a volume (per cent, 100 the most): cubic, as PulseAudio's
+/// volumes are, so that each step sounds about as much louder.
+pub fn gain(volume: u32) -> f32 {
+    (volume.min(100) as f32 / 100.0).powi(3)
+}
+
+/// `buf` (interleaved stereo) as 16-bit samples, its gain going from
+/// `from` to `to` across it (a change of volume with no click; at the same
+/// gain, each sample times it).
+fn at_gain(buf: &[f32], from: f32, to: f32) -> impl Iterator<Item = i16> + '_ {
+    let n = (buf.len() / 2).max(1) as f32;
+    buf.iter().enumerate().map(move |(i, &x)| {
+        let g = if from == to { to } else { from + (to - from) * ((i / 2 + 1) as f32 / n) };
+        to_i16(x * g)
+    })
+}
+
+/// What the device's callback plays: the mix (its float buffer, and the
+/// gain it was last played at), and what the app asks of it.
 struct Live {
-    mix: std::sync::Mutex<(Mix, Vec<f32>)>,
+    mix: std::sync::Mutex<(Mix, Vec<f32>, Option<f32>)>,
     ctl: Arc<Controls>,
     frames: Arc<AtomicU64>,
     tap: Arc<Tap>,
@@ -16277,14 +16301,17 @@ unsafe extern "C" fn fill(user: *mut std::ffi::c_void, stream: *mut u8, len: std
         (&*(user as *const Live), std::slice::from_raw_parts_mut(stream as *mut i16, len.max(0) as usize / 2))
     };
     let mut g = live.mix.lock().unwrap_or_else(|e| e.into_inner());
-    let (mix, buf) = &mut *g;
+    let (mix, buf, was) = &mut *g;
     buf.resize(out.len(), 0.0);
     live.ctl.apply(mix);
     mix.render(buf);
     live.ctl.hand_over(mix);
-    for (o, &x) in out.iter_mut().zip(buf.iter()) {
-        *o = to_i16(x);
+    let to = gain(live.ctl.volume.load(Ordering::Relaxed));
+    for (o, x) in out.iter_mut().zip(at_gain(buf, was.unwrap_or(to), to)) {
+        *o = x;
     }
+    *was = Some(to);
+    // (the displays show the music as made, whatever the volume)
     live.tap.push(buf, || mix.now());
     live.frames.fetch_add(out.len() as u64 / 2, Ordering::Relaxed);
 }
@@ -16292,9 +16319,10 @@ unsafe extern "C" fn fill(user: *mut std::ffi::c_void, stream: *mut u8, len: std
 impl Player {
     /// Starts playing the music `genre` (an id: `mix_id`), seeded: through the
     /// sound device, else pacat. Error if neither plays.
-    /// (`from`: the song to begin on, from its start, instead.)
-    pub fn start(genre: usize, seed: u64, opts: Opts, from: Option<SongId>) -> Result<Player, String> {
-        let p = Player::device(genre, seed, opts, from).or_else(|e| {
+    /// (`from`: the song to begin on, from its start, instead; `volume`: how
+    /// loud, as `gain` takes it.)
+    pub fn start(genre: usize, seed: u64, opts: Opts, from: Option<SongId>, volume: u32) -> Result<Player, String> {
+        let p = Player::device(genre, seed, opts, from, volume).or_else(|e| {
             eprintln!("musicbox: music through pacat ({e})");
             Player::spawn(
                 &["pacat", "--raw", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=200"],
@@ -16302,6 +16330,7 @@ impl Player {
                 seed,
                 opts,
                 from,
+                volume,
             )
         })?;
         Ok(p)
@@ -16310,14 +16339,14 @@ impl Player {
     /// Plays through SDL's default output, made in its callback (4096 frames,
     /// 85 ms, at a time). With PulseAudio's (PipeWire's) server SDL runs the
     /// callback on a real-time thread (round robin, priority 20 here).
-    fn device(genre: usize, seed: u64, opts: Opts, from: Option<SongId>) -> Result<Player, String> {
+    fn device(genre: usize, seed: u64, opts: Opts, from: Option<SongId>, volume: u32) -> Result<Player, String> {
         let genre = canon(genre);
-        let ctl = Controls::new(genre, opts, from);
+        let ctl = Controls::new(genre, opts, from, volume);
         let frames = Arc::new(AtomicU64::new(0));
         // the callback's buffer ahead of the one playing, about
         let tap = Arc::new(Tap::new(RATE, 2 * 4096));
         let live = Box::new(Live {
-            mix: std::sync::Mutex::new((Mix::with(genre, seed, opts), Vec::new())),
+            mix: std::sync::Mutex::new((Mix::with(genre, seed, opts), Vec::new(), None)),
             ctl: ctl.clone(),
             frames: frames.clone(),
             tap: tap.clone(),
@@ -16339,7 +16368,14 @@ impl Player {
     }
 
     /// The same, writing to `cmd`'s stdin.
-    fn spawn(cmd: &[&str], genre: usize, seed: u64, opts: Opts, from: Option<SongId>) -> Result<Player, String> {
+    fn spawn(
+        cmd: &[&str],
+        genre: usize,
+        seed: u64,
+        opts: Opts,
+        from: Option<SongId>,
+        volume: u32,
+    ) -> Result<Player, String> {
         let mut child = Command::new(cmd[0])
             .args(&cmd[1..])
             .stdin(Stdio::piped())
@@ -16349,7 +16385,7 @@ impl Player {
             .map_err(|e| format!("{}: {e}", cmd[0]))?;
         let mut pipe = child.stdin.take().expect("piped stdin");
         let genre = canon(genre);
-        let ctl = Controls::new(genre, opts, from);
+        let ctl = Controls::new(genre, opts, from, volume);
         let stop = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(AtomicU64::new(0));
         // pacat's 200 ms, and the chunk being written
@@ -16359,14 +16395,17 @@ impl Player {
             let mut mix = Mix::with(genre, seed, opts);
             let mut f = vec![0.0f32; 2 * CHUNK];
             let mut bytes = vec![0u8; 4 * CHUNK];
+            let mut was = gain(c.volume.load(Ordering::Relaxed));
             // blocking writes pace the generator to the sound server
             while !st.load(Ordering::Relaxed) {
                 c.apply(&mut mix);
                 mix.render(&mut f);
                 c.hand_over(&mut mix);
-                for (o, &x) in bytes.chunks_exact_mut(2).zip(&f) {
-                    o.copy_from_slice(&to_i16(x).to_le_bytes());
+                let to = gain(c.volume.load(Ordering::Relaxed));
+                for (o, x) in bytes.chunks_exact_mut(2).zip(at_gain(&f, was, to)) {
+                    o.copy_from_slice(&x.to_le_bytes());
                 }
+                was = to;
                 if pipe.write_all(&bytes).is_err() {
                     break;
                 }
@@ -16443,6 +16482,12 @@ impl Player {
     /// section, at its next chance.
     pub fn set_length(&self, secs: f64) {
         self.ctl.length.store(secs.max(0.0).round().to_bits(), Ordering::Relaxed);
+    }
+
+    /// How loud it plays (per cent, as `gain` takes it), from the next
+    /// buffer, eased in across it.
+    pub fn set_volume(&self, volume: u32) {
+        self.ctl.volume.store(volume.min(100), Ordering::Relaxed);
     }
 
     /// Plays the song `id` from its start at once (crossfading), as the
@@ -17555,7 +17600,7 @@ mod tests {
 
     #[test]
     fn player_starts_and_drops_cleanly() {
-        let p = Player::spawn(&["sh", "-c", "exec cat > /dev/null"], 1, 7, Opts::default(), None).expect("player");
+        let p = Player::spawn(&["sh", "-c", "exec cat > /dev/null"], 1, 7, Opts::default(), None, 100).expect("player");
         std::thread::sleep(Duration::from_secs(1));
         p.set_genre(2);
         assert_eq!(p.genre(), 2);
@@ -17571,9 +17616,56 @@ mod tests {
     }
 
     #[test]
+    fn the_volume_eases_from_one_gain_to_the_next() {
+        assert_eq!((gain(100), gain(0), gain(50), gain(150)), (1.0, 0.0, 0.125, 1.0));
+        let buf: Vec<f32> = (0..2 * 1000).map(|i| ((i / 2) as f32 * 0.01).sin() * 0.5).collect();
+        // at full volume, the samples as they were
+        assert!(at_gain(&buf, 1.0, 1.0).zip(&buf).all(|(a, &x)| a == to_i16(x)));
+        // a change: from the old gain to the new by the last frame, a step
+        // of a thousandth of it a frame (no click)
+        let out: Vec<i16> = at_gain(&buf, 1.0, 0.125).collect();
+        assert_eq!(out[out.len() - 1], to_i16(buf[buf.len() - 1] * 0.125));
+        let steps: Vec<f32> =
+            out.iter().zip(&buf).filter(|(_, x)| x.abs() > 0.4).map(|(&o, &x)| o as f32 / 32767.0 / x).collect();
+        assert!(steps.windows(2).all(|w| w[1] <= w[0] + 0.002), "the gain only falls");
+    }
+
+    #[test]
+    fn the_player_plays_at_its_volume() {
+        let dir = std::env::temp_dir().join(format!("musicbox-volume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let heard = |volume: u32, change: Option<u32>| -> Vec<i16> {
+            let path = dir.join(format!("{volume}.raw"));
+            let cmd = format!("exec cat > {}", path.display());
+            let p = Player::spawn(&["sh", "-c", &cmd], 1, 7, Opts::default(), None, volume).expect("player");
+            std::thread::sleep(Duration::from_millis(600));
+            if let Some(v) = change {
+                p.set_volume(v);
+                std::thread::sleep(Duration::from_millis(600));
+            }
+            drop(p);
+            let b = std::fs::read(&path).expect("what it played");
+            b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()
+        };
+        let loud = |s: &[i16]| s.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / s.len().max(1) as f64;
+        let silent = heard(0, None);
+        assert!(silent.len() > RATE as usize / 2 && silent.iter().all(|&x| x == 0), "at 0, silence");
+        let (full, quiet) = (heard(100, None), heard(50, None));
+        let n = full.len().min(quiet.len());
+        assert!(loud(&full[..n]) > 0.0);
+        // the same music, an eighth as loud (to the sample, near enough)
+        let r = (loud(&quiet[..n]) / loud(&full[..n])).sqrt();
+        assert!((r - 0.125).abs() < 0.002, "{r}");
+        // turned down while it plays: silence after
+        let down = heard(100, Some(0));
+        assert!(loud(&down[..down.len() / 4]) > 0.0 && down[down.len() - 2 * CHUNK..].iter().all(|&x| x == 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn player_fails_when_the_server_is_not_there() {
-        assert!(Player::spawn(&["sh", "-c", "exit 1"], 0, 1, Opts::default(), None).is_err());
-        assert!(Player::spawn(&["/nonexistent/pacat"], 0, 1, Opts::default(), None).is_err());
+        assert!(Player::spawn(&["sh", "-c", "exit 1"], 0, 1, Opts::default(), None, 100).is_err());
+        assert!(Player::spawn(&["/nonexistent/pacat"], 0, 1, Opts::default(), None, 100).is_err());
     }
 
     #[test]
@@ -17926,7 +18018,7 @@ mod device_tests {
             std::env::set_var("SDL_AUDIODRIVER", "disk");
             std::env::set_var("SDL_DISKAUDIOFILE", &path);
         }
-        let p = Player::device(1, 3, Opts::default(), None).expect("device");
+        let p = Player::device(1, 3, Opts::default(), None, 100).expect("device");
         std::thread::sleep(Duration::from_millis(1500));
         let frames = p.frames.load(Ordering::Relaxed);
         drop(p);

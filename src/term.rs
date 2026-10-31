@@ -295,6 +295,8 @@ impl Term {
         let mut l = Line::new(cols);
         l.push("  [ ] length ", "2");
         l.push(&show_length(st.length), "36");
+        l.push("  - + volume ", "2");
+        l.push(&format!("{}%", st.volume), if st.volume == 0 { "1;33" } else { "36" });
         l.push("  t type a length  e equalizer  ", "2");
         l.push(if window { "g close window" } else { "g window" }, "2");
         lines.push(l);
@@ -439,6 +441,8 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b'x' | b'X' => Some(Action::Export),
         b'[' => Some(Action::Longer(-1)),
         b']' => Some(Action::Longer(1)),
+        b'-' | b'_' => Some(Action::Louder(-1)),
+        b'+' | b'=' => Some(Action::Louder(1)),
         b'e' | b'E' => Some(Action::Eq),
         b'o' | b'O' => Some(Action::Tuned),
         b'm' | b'M' => Some(Action::NetTunes),
@@ -498,6 +502,7 @@ mod tests {
         assert_eq!(parse_keys(b"sr[]"), vec![Action::Play, Action::Replay, Action::Longer(-1), Action::Longer(1)]);
         assert_eq!(parse_keys(b"omi"), vec![Action::Tuned, Action::NetTunes, Action::Voices]);
         assert_eq!(parse_keys(b"b,."), vec![Action::Back, Action::Seek(-SEEK_SECS), Action::Seek(SEEK_SECS)]);
+        assert_eq!(parse_keys(b"-+="), vec![Action::Louder(-1), Action::Louder(1), Action::Louder(1)]);
     }
 
     #[test]

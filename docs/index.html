@@ -60,6 +60,9 @@
   .group > span { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-right: 6px; }
   .group > span .key { color: #9aa6b8; margin-right: 6px; }
   .length label { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .group.volume { flex: 0 1 250px; min-width: 210px; margin: 0 0 0 8px; gap: 8px; }
+  #vol { min-width: 4ch; text-align: right; color: var(--accent); }
+  #vol.off { color: var(--amber); }
   input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
   input[type=text] {
     width: 74px; font: inherit; color: var(--accent); background: var(--panel);
@@ -114,6 +117,7 @@
     <span id="time" class="time">0:00 / 0:00</span>
     <button id="ff"><span class="key">.</span>10 s »</button>
     <input type="text" id="goto" class="id" placeholder="a song's id" aria-label="A song's id to play (D)" title="As shown at the top, ska.2817.0.3; Enter plays it">
+    <span class="group volume"><span><span class="key">- +</span>volume</span><input type="range" id="volume" min="0" max="100" step="5" value="100" aria-label="Volume"><span id="vol" class="time">100%</span></span>
   </div>
   <div class="row" id="made">
     <span class="group"><span><span class="key">O</span>tuning</span><button data-k="tuned" data-v="false">as written</button><button data-k="tuned" data-v="true">optimised</button></span>
@@ -126,7 +130,7 @@
   <div class="grid" id="drummers"></div>
   <footer>
     <p>Music made up as it plays, without end, in twelve genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, and a small synthesiser plays it, here as WebAssembly. RECORDED plays recordings of real instruments instead. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, indonesian, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
-    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, B back, , and . 10 s back and on, S stop/start, R replay, [ ] length, T type a length, D type a song's id, X export an MP3 (shift-X a WAV), O tuning, M tunes, I instruments. Each song has an id (at the top, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
+    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, B back, , and . 10 s back and on, S stop/start, R replay, [ ] length, T type a length, - and + volume, D type a song's id, X export an MP3 (shift-X a WAV), O tuning, M tunes, I instruments. Each song has an id (at the top, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
   </footer>
 </main>
 <div id="start">

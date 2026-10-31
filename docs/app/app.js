@@ -18,6 +18,7 @@ const st = {
   // how the music is made (as the engine's Opts): the optimiser's settings,
   // the network's tunes, and what plays the instruments
   opts: { tuned: false, netTunes: false, voices: 'synth' },
+  volume: 100,
 };
 const VOICES = ['synth', 'recorded', 'network'];
 const optsCode = (o) => (o.tuned ? 1 : 0) | (o.netTunes ? 2 : 0) | (VOICES.indexOf(o.voices) << 2);
@@ -26,6 +27,9 @@ let exporter = null;
 let module = null;
 let analyser = null;
 let audio = null;
+// the volume's gain, after the equalizer's analyser (it shows the music as
+// made, whatever the volume)
+let gain = null;
 
 // where the recordings are (tools/web-samples.sh makes them)
 const SAMPLES = 'samples/';
@@ -116,6 +120,31 @@ function replay() {
 // . go (seconds)
 const BACK_SECS = 3;
 const SEEK_SECS = 10;
+
+// ---- the volume: per cent, cubic as the desktop's is, eased in (and
+// remembered in this browser)
+
+const VOLUME_STEP = 5;
+
+function setVolume(v) {
+  st.volume = Math.min(100, Math.max(0, Math.round(v / VOLUME_STEP) * VOLUME_STEP));
+  if (gain) gain.gain.setTargetAtTime((st.volume / 100) ** 3, audio.currentTime, 0.02);
+  $('volume').value = st.volume;
+  $('vol').textContent = `${st.volume}%`;
+  $('vol').classList.toggle('off', st.volume === 0);
+  try {
+    localStorage.setItem('musicbox.volume', String(st.volume));
+  } catch {}
+}
+
+function savedVolume() {
+  try {
+    const v = parseInt(localStorage.getItem('musicbox.volume') ?? '', 10);
+    return Number.isFinite(v) ? v : 100;
+  } catch {
+    return 100;
+  }
+}
 
 function back() {
   const n = st.now;
@@ -521,8 +550,11 @@ async function start() {
   await ctx.audioWorklet.addModule('app/worklet.js');
   const node = new AudioWorkletNode(ctx, 'musicbox', { numberOfInputs: 0, outputChannelCount: [2] });
   analyser = Object.assign(ctx.createAnalyser(), { fftSize: 8192, smoothingTimeConstant: 0 });
+  gain = ctx.createGain();
+  gain.gain.value = (st.volume / 100) ** 3;
   node.connect(analyser);
-  analyser.connect(ctx.destination);
+  analyser.connect(gain);
+  gain.connect(ctx.destination);
   node.port.onmessage = (e) => {
     st.now = JSON.parse(e.data.now);
   };
@@ -607,6 +639,12 @@ $('slider').onwheel = (e) => {
   e.preventDefault();
   longer(e.deltaY < 0 ? 1 : -1);
 };
+$('volume').oninput = (e) => setVolume(+e.target.value);
+$('volume').onwheel = (e) => {
+  e.preventDefault();
+  setVolume(st.volume + (e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP));
+};
+setVolume(savedVolume());
 
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
@@ -630,6 +668,9 @@ document.addEventListener('keydown', (e) => {
     i: () => setOpts({ voices: VOICES[(VOICES.indexOf(st.opts.voices) + 1) % VOICES.length] }),
     '[': () => longer(-1),
     ']': () => longer(1),
+    '-': () => setVolume(st.volume - VOLUME_STEP),
+    '=': () => setVolume(st.volume + VOLUME_STEP),
+    '+': () => setVolume(st.volume + VOLUME_STEP),
     t: () => {
       $('typed').value = '';
       $('typed').focus();
