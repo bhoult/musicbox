@@ -16,8 +16,9 @@ const st = {
   seed: Math.floor(Math.random() * 0xffffffff),
   now: null,
   // how the music is made (as the engine's Opts): the optimiser's settings,
-  // the network's tunes, and what plays the instruments
-  opts: { tuned: false, netTunes: false, voices: 'synth' },
+  // the network's tunes, and what plays the instruments (recordings, as on
+  // the desktop)
+  opts: { tuned: false, netTunes: false, voices: 'recorded' },
   volume: 100,
 };
 // the hover help: the control under the mouse, the one whose help shows,
@@ -617,24 +618,44 @@ async function start() {
     if (e.data.type === 'genres') {
       st.genres = e.data.genres;
       drawButtons();
+      // (the genres known: what the first song plays can be fetched)
+      if (!st.waiting) begin();
     } else if (e.data.type === 'id') {
       if (e.data.id) adopt(e.data.id);
       else say(`not a song's id: ${e.data.text}`, 'error');
-      if (st.waiting && !e.data.id) setPlaying(true);
+      if (st.waiting && !e.data.id) begin();
       st.waiting = false;
     } else if (e.data.type === 'error') {
       say(e.data.error, 'error');
     }
   };
   st.primary = st.seed % 12;
-  // the address names a song: silence until it is read and fetched, then it
+  // silence till the first song is ready: the one the address names, read
+  // and what it plays fetched; else a new one, made on the synthesiser
+  // until its recordings are in
   const asked = decodeURIComponent(location.hash.slice(1));
   st.waiting = !!asked;
-  const init = { type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode(st.opts), paused: st.waiting };
+  const init = { type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode({ ...st.opts, voices: 'synth' }), paused: true };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   await ctx.resume();
   if (asked) goTo(asked);
+}
+
+// the first song: the recordings it plays fetched, then it made again on
+// them and played (on the synthesiser, when they will not load)
+async function begin() {
+  if (st.opts.voices !== 'synth') {
+    try {
+      await loadRecordings(st.primary, st.drums);
+    } catch (e) {
+      say(`no recordings (${e.message}): the synthesiser plays`, 'error');
+      st.opts.voices = 'synth';
+      drawMade();
+    }
+  }
+  worker.postMessage({ type: 'opts', code: optsCode(st.opts) });
+  setPlaying(true);
 }
 
 window.addEventListener('hashchange', () => {

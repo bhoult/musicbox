@@ -122,6 +122,7 @@
   }
   #start .box { max-width: 520px; text-align: center; }
   #start p { color: var(--dim); }
+  #start p.small { color: var(--faint); font-size: 12.5px; }
   #start button { font-size: 20px; padding: 12px 28px; margin-top: 12px; background: var(--lit); }
   #start button:hover { background: var(--lit-hover); }
 </style>
@@ -196,7 +197,7 @@
   <h2 data-help="The genre on drums: its beat, fitted to the music's meter, and its kits and effects.">drums by</h2>
   <div class="grid" id="drummers"></div>
   <footer>
-    <p>Music made up as it plays, without end, in twelve genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, and a small synthesiser plays it, here as WebAssembly. RECORDED plays recordings of real instruments instead. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, indonesian, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
+    <p>Music made up as it plays, without end, in twelve genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, here as WebAssembly, and recordings of real instruments play it, fetched as each genre needs them. SYNTH plays a small synthesiser instead, with nothing to fetch. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, indonesian, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
     <p>Hover over anything for what it does and its key, or see <button id="keys2" class="link">all the keys</button> (press ?). Each song has an id (beside its name, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
   </footer>
 </main>
@@ -227,6 +228,7 @@
   <div class="box">
     <h1>musicbox</h1>
     <p>Endless music in twelve genres, made up as it plays.</p>
+    <p class="small">It fetches each genre's recorded instruments as it needs them, 4 to 26 MB a genre.</p>
     <button id="go">▶ play</button>
   </div>
 </div>

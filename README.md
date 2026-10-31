@@ -4,7 +4,7 @@ Made by Claude Opus 5.5, instigated by [Brandon Hoult](https://hoult.co).
 
 Music made up as it plays, without end, in twelve genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser.
 
-**[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it starts on its synthesiser, and fetches recorded instruments when they are asked for.
+**[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
 [![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id, the equalizer, the transport, the song's bar, the volume, the length, saving, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
 
@@ -123,7 +123,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 [bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. The song's id is in a field beside its name: paste or type one there and press Enter to play it, or COPY LINK for a link that plays it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
-It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
+It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
 ```
 rustup target add wasm32-unknown-unknown
