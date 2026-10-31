@@ -1,5 +1,7 @@
 # musicbox
 
+Made by Claude Opus 5.5, instigated by [Brandon Hoult](https://hoult.co).
+
 Music made up as it plays, without end, in twelve genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser.
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it starts on its synthesiser, and fetches recorded instruments when they are asked for.
