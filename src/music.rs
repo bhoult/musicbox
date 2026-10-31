@@ -16128,8 +16128,6 @@ impl Mix {
             length: self.length,
             planned: s.plan.iter().map(|x| x.bars as f64).sum::<f64>() * s.bar_steps() as f64 * s.step_len()
                 / SR as f64,
-            seed: e.seed,
-            song: s.log.len(),
             opts: e.opts,
             sid,
             back: here.and(self.pos.checked_sub(1)).and_then(|k| self.hist.get(k)).map(|h| h.0),

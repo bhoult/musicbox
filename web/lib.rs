@@ -329,7 +329,7 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         concat!(
             "{{\"id\":{},\"name\":\"{}\",\"piece\":{},\"bpm\":{:.2},\"key\":\"{}\",\"mode\":\"{}\",\"meter\":\"{}\",",
             "\"section\":\"{}\",\"bar\":{},\"bars\":{},\"stopped\":{},\"elapsed\":{:.3},\"length\":{:.1},",
-            "\"planned\":{:.1},\"seed\":\"{}\",\"song\":{},\"opts\":{},\"sid\":{},\"back\":{},\"fwd\":{}}}"
+            "\"planned\":{:.1},\"opts\":{},\"sid\":{},\"back\":{},\"fwd\":{}}}"
         ),
         n.id,
         music::name(n.id).to_lowercase(),
@@ -345,8 +345,6 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         n.elapsed,
         n.length,
         n.planned,
-        n.seed,
-        n.song,
         n.opts.code(),
         quoted(n.sid),
         quoted(n.back),

@@ -33,12 +33,6 @@ pub struct Now {
     pub elapsed: f64,
     pub length: f64,
     pub planned: f64,
-    /// the seed of the engine playing, and which of its pieces this is (as
-    /// `--export` takes them: the browser's export)
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub seed: u64,
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub song: usize,
     /// how the piece playing is made (the browser's buttons)
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub opts: crate::music::Opts,
