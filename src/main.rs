@@ -31,7 +31,8 @@ unsafe extern "C" {
 /// What a key, a click or a button asks for.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
-    /// the next or previous genre, and the next or previous drummer (none among them)
+    /// the next or previous genre, and the next or previous drummer (the
+    /// genre writing the music, for its own drums, among them)
     Genre(i32),
     Drums(i32),
     SetGenre(usize),
@@ -63,10 +64,12 @@ pub enum Action {
     NetTunes,
     Voices,
     SetOpts(music::Opts),
-    /// the terminal's equalizer on or off, the window open or closed, fullscreen
+    /// the terminal's equalizer on or off, the window open or closed,
+    /// fullscreen, the window's list of the keys shown or hidden
     Eq,
     Window,
     Fullscreen,
+    Keys,
     Quit,
 }
 
@@ -104,11 +107,9 @@ impl State {
             Action::Genre(d) => self.primary = (self.primary as i32 + d).rem_euclid(ng as i32) as usize,
             Action::SetGenre(g) => self.primary = g % ng,
             Action::Drums(d) => {
-                // none, then each genre but the primary
-                let order: Vec<Option<usize>> =
-                    std::iter::once(None).chain((0..ng).filter(|&g| g != self.primary).map(Some)).collect();
-                let i = order.iter().position(|&x| x == self.drums).unwrap_or(0) as i32;
-                self.drums = order[(i + d).rem_euclid(order.len() as i32) as usize];
+                // the genres in order, the primary for its own drums
+                let at = self.drums.unwrap_or(self.primary) as i32;
+                self.drums = Some((at + d).rem_euclid(ng as i32) as usize);
             }
             Action::SetDrums(g) => self.drums = g.filter(|&g| g < ng),
             _ => return false,
@@ -498,6 +499,11 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
                 Action::Fullscreen => {
                     if let Some(g) = win.as_mut() {
                         g.fullscreen();
+                    }
+                }
+                Action::Keys => {
+                    if let Some(g) = win.as_mut() {
+                        g.toggle_keys();
                     }
                 }
                 a => {

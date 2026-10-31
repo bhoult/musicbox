@@ -21,6 +21,8 @@
     --drum: #8a5a12;
     --drum-hover: #a8701c;
     --red: #ff6b5f;
+    --tip: #1f2630;
+    --tip-edge: #3a4350;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -33,52 +35,87 @@
   main { max-width: 1120px; margin: 0 auto; padding: 16px; }
   header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 28px; letter-spacing: 3px; color: var(--accent); text-transform: uppercase; }
-  header .right { color: var(--dim); font-size: 13px; }
+  header .right { display: flex; align-items: baseline; gap: 14px; color: var(--dim); font-size: 13px; }
   a { color: var(--accent); }
-  .playing { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; margin: 6px 0 2px; min-height: 1.4em; }
+  .now { display: flex; justify-content: space-between; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin: 6px 0 2px; }
+  .playing { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; min-height: 1.4em; }
   .playing .drums { color: var(--amber); }
   .playing .and { color: var(--dim); }
   .line { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; min-height: 1.4em; }
   .line.note { color: var(--accent); }
   .line.error { color: var(--red); }
   canvas { display: block; width: 100%; height: 240px; background: var(--panel); margin: 10px 0; }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; margin: 10px 0; }
+  .group { display: inline-flex; align-items: center; gap: 2px; }
+  .label { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-right: 8px; }
   button {
     font: inherit; font-size: 13px; color: var(--text); background: var(--button);
     border: 0; padding: 5px 10px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+    display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
   }
   button:hover { background: var(--button-hover); }
-  button .key { color: #9aa6b8; margin-right: 6px; }
+  button svg { width: 11px; height: 11px; fill: currentColor; flex: none; }
   button.lit { background: var(--lit); }
   button.lit:hover { background: var(--lit-hover); }
   button.drum { background: var(--drum); }
   button.drum:hover { background: var(--drum-hover); }
+  /* the drummer, among the genres writing the music */
   button.mark { box-shadow: inset 0 -2px 0 var(--amber); }
-  button.off { background: #1c2027; color: var(--faint); }
-  .length { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: 260px; }
-  .group { display: inline-flex; align-items: center; gap: 2px; margin-right: 14px; }
-  .group > span { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-right: 6px; }
-  .group > span .key { color: #9aa6b8; margin-right: 6px; }
-  .length label { color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
-  .group.volume { flex: 0 1 250px; min-width: 210px; margin: 0 0 0 8px; gap: 8px; }
+  /* a setting that changes the genre playing */
+  button.real { box-shadow: inset 0 -2px 0 var(--accent); }
+  button.link { background: none; color: var(--dim); padding: 0; font-size: 13px; text-transform: none; letter-spacing: 0; }
+  button.link:hover { color: var(--text); background: none; }
+  .transport { gap: 2px; }
+  .seek { display: flex; align-items: center; gap: 8px; flex: 1 1 380px; min-width: 280px; }
+  .volume { flex: 0 1 230px; min-width: 190px; gap: 8px; color: var(--dim); }
+  .volume svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+  .length { display: flex; align-items: center; gap: 8px; flex: 1 1 360px; min-width: 260px; }
+  .length .label { margin-right: 0; }
   #vol { min-width: 4ch; text-align: right; color: var(--accent); }
   #vol.off { color: var(--amber); }
   input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
   input[type=text] {
-    width: 74px; font: inherit; color: var(--accent); background: var(--panel);
-    border: 1px solid var(--button); padding: 4px 6px; text-transform: uppercase;
+    font: inherit; color: var(--accent); background: var(--panel);
+    border: 1px solid var(--button); padding: 4px 6px;
   }
   input[type=text]:focus { outline: none; border-color: var(--accent); color: var(--text); }
-  #pos { flex: 1; min-width: 120px; }
-  .time { color: var(--dim); font-variant-numeric: tabular-nums; }
-  input.id { width: 170px; text-transform: none; }
-  #sid { color: var(--dim); }
-  h2 { font-size: 13px; font-weight: normal; color: var(--dim); margin: 14px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
-  h2 span { color: var(--faint); }
+  #typed { width: 74px; text-transform: uppercase; }
+  #pos { min-width: 120px; }
+  .time { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .songid { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
+  #sid { width: 32ch; max-width: 60vw; font-size: 13px; color: var(--dim); }
+  h2 { font-size: 13px; font-weight: normal; color: var(--dim); margin: 16px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; }
-  .grid button { padding: 6px 4px; }
+  .grid button { padding: 6px 4px; justify-content: center; }
   footer { color: var(--faint); margin-top: 22px; font-size: 13px; }
   footer p { margin: 6px 0; }
+  footer button.link { color: var(--accent); text-decoration: underline; }
+  /* hover help */
+  #tip {
+    position: fixed; z-index: 10; max-width: min(340px, calc(100vw - 16px)); pointer-events: none;
+    background: var(--tip); border: 1px solid var(--tip-edge); color: var(--text);
+    padding: 7px 10px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+  #tip[hidden] { display: none; }
+  #tip .keys { display: block; margin-top: 5px; color: var(--dim); }
+  kbd {
+    font: inherit; font-size: 12px; color: var(--text); background: var(--button);
+    border-radius: 3px; padding: 0 5px; margin-right: 3px; white-space: nowrap;
+  }
+  /* the keys */
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--tip-edge);
+    padding: 18px 22px; max-width: min(640px, calc(100vw - 32px));
+  }
+  dialog::backdrop { background: rgba(14, 17, 22, 0.7); }
+  dialog h2 { margin: 0 0 10px; }
+  dialog dl { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 6px 12px; margin: 0; align-items: baseline; }
+  dialog dt { text-align: right; }
+  dialog dd { margin: 0; color: var(--dim); }
+  dialog .close { margin-top: 14px; }
+  @media (max-width: 560px) {
+    dialog dl { grid-template-columns: max-content 1fr; }
+  }
   #start {
     position: fixed; inset: 0; background: rgba(14, 17, 22, 0.94);
     display: flex; align-items: center; justify-content: center; padding: 16px;
@@ -93,46 +130,99 @@
 <main>
   <header>
     <h1>musicbox</h1>
-    <div class="right"><span id="seed"></span><a id="sid" href="#" title="This song's id: the link plays it again"></a> · <a href="https://github.com/bhoult/musicbox">source and desktop app</a></div>
+    <div class="right">
+      <button id="keys" class="link" data-help="Every key, in one list." data-key="?">keys</button>
+      <a href="https://github.com/bhoult/musicbox">source and desktop app</a>
+    </div>
   </header>
-  <div class="playing" id="playing"></div>
+  <div class="now">
+    <div class="playing" id="playing"></div>
+    <div class="songid">
+      <label for="sid">song</label>
+      <input type="text" id="sid" spellcheck="false" autocomplete="off" placeholder="its id comes as it starts" aria-label="This song's id"
+        data-help="This song's id: it plays the same song again, here or in the desktop app. Paste or type one and press Enter to play it." data-key="D">
+      <button id="copy" class="link" data-help="Copy a link that plays this song.">copy link</button>
+    </div>
+  </div>
   <div class="line" id="line">starting</div>
   <canvas id="eq" aria-label="Equalizer: what the speakers are playing, 35 Hz to 16 kHz"></canvas>
   <div class="row">
-    <button id="play"><span class="key">S</span><span>stop</span></button>
-    <button id="back" title="The song from its start; in its first seconds, the one before"><span class="key">B</span>back</button>
-    <button id="replay"><span class="key">R</span>replay</button>
-    <button id="skip"><span class="key">space</span>next song</button>
-    <button id="export" title="shift: a WAV"><span class="key">X</span>export mp3</button>
-    <div class="length">
-      <label for="slider">length</label>
-      <button id="auto" class="lit">auto</button>
-      <input type="range" id="slider" min="30" max="600" step="15" value="180" aria-label="Song length">
-      <input type="text" id="typed" value="auto" aria-label="Song length, typed (3:30, 3.5m, 210s or auto)" title="3:30, 3.5m, 210s or auto; Enter sets it">
-    </div>
+    <span class="group transport">
+      <button id="back" data-help="Back to this song's start; in its first 3 seconds, to the song before." data-key="B"><svg viewBox="0 0 12 12"><path d="M1.5 1.5h1.8v9H1.5zM11 1.5v9L4 6z"/></svg>back</button>
+      <button id="play" data-key="S"><svg viewBox="0 0 12 12"><path d="M2 2h8v8H2z"/></svg><span>stop</span></button>
+      <button id="skip" data-help="On to the next song: a new one, or after going back, the one you came from." data-key="space">next song<svg viewBox="0 0 12 12"><path d="M1 1.5v9L8 6zM8.7 1.5h1.8v9H8.7z"/></svg></button>
+    </span>
+    <span class="seek">
+      <button id="rew" data-help="10 seconds back." data-key=",">« 10 s</button>
+      <input type="range" id="pos" min="0" max="180" step="1" value="0" aria-label="Where in the song" data-help="Where the song is: click or drag to go anywhere in it.">
+      <button id="ff" data-help="10 seconds on." data-key=".">10 s »</button>
+      <span id="time" class="time" data-help="How far into the song, and how long it is.">0:00 / 0:00</span>
+    </span>
+    <span class="group volume" data-help="The volume. It changes what you hear, not the equalizer or what you save, and this browser remembers it. The mouse wheel turns it too." data-key="- +">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 5.5h3L9 2v12l-4.5-3.5h-3z"/><path d="M11 5.2a4 4 0 0 1 0 5.6l-.9-.9a2.7 2.7 0 0 0 0-3.8zM12.8 3.4a6.5 6.5 0 0 1 0 9.2l-.9-.9a5.2 5.2 0 0 0 0-7.4z"/></svg>
+      <input type="range" id="volume" min="0" max="100" step="5" value="100" aria-label="Volume">
+      <span id="vol" class="time">100%</span>
+    </span>
   </div>
-  <div class="row" id="where">
-    <button id="rew"><span class="key">,</span>« 10 s</button>
-    <input type="range" id="pos" min="0" max="180" step="1" value="0" aria-label="Where in the song">
-    <span id="time" class="time">0:00 / 0:00</span>
-    <button id="ff"><span class="key">.</span>10 s »</button>
-    <input type="text" id="goto" class="id" placeholder="a song's id" aria-label="A song's id to play (D)" title="As shown at the top, ska.2817.0.3; Enter plays it">
-    <span class="group volume"><span><span class="key">- +</span>volume</span><input type="range" id="volume" min="0" max="100" step="5" value="100" aria-label="Volume"><span id="vol" class="time">100%</span></span>
+  <div class="row">
+    <div class="length">
+      <span class="label" data-help="How long each song is. The music is shaped to end near it, at its outro.">length</span>
+      <button id="auto" class="lit" data-help="Each song as long as it was written: about two minutes." data-key="[ ]">auto</button>
+      <input type="range" id="slider" min="30" max="600" step="15" value="180" aria-label="Song length" data-help="How long each song is to be, 0:30 to 10:00. The mouse wheel turns it too." data-key="[ ]">
+      <input type="text" id="typed" value="auto" aria-label="Song length, typed (3:30, 3.5m, 210s or auto)" data-help="Type a length and press Enter: 3:30, 3.5m, 210s (up to an hour), or auto." data-key="T">
+    </div>
+    <span class="group">
+      <span class="label" data-help="Save the whole song playing, named by its id. It is made again from its start, so the music plays on meanwhile.">save</span>
+      <button id="export" data-help="Save the whole song playing as an MP3 (192 kb/s), named by its id, its tag naming the genre, tempo and key." data-key="X">mp3</button>
+      <button id="wav" data-help="Save the whole song playing as a WAV: uncompressed, about 11 MB a minute." data-key="shift-X">wav</button>
+    </span>
   </div>
   <div class="row" id="made">
-    <span class="group"><span><span class="key">O</span>tuning</span><button data-k="tuned" data-v="false">as written</button><button data-k="tuned" data-v="true">optimised</button></span>
-    <span class="group"><span><span class="key">M</span>tunes</span><button data-k="netTunes" data-v="false">rules</button><button data-k="netTunes" data-v="true">network</button></span>
-    <span class="group"><span><span class="key">I</span>instruments</span><button data-k="voices" data-v="synth">synth</button><button data-k="voices" data-v="recorded">recorded</button><button data-k="voices" data-v="network">network</button></span>
+    <span class="group">
+      <span class="label" data-help="Each genre's mix: the level of each part, the tone, reverb, tempo, swing and stereo width.">tuning</span>
+      <button data-k="tuned" data-v="false" data-key="O">as written</button><button data-k="tuned" data-v="true" data-key="O">optimised</button>
+    </span>
+    <span class="group">
+      <span class="label" data-help="What writes the melodies.">tunes</span>
+      <button data-k="netTunes" data-v="false" data-key="M">rules</button><button data-k="netTunes" data-v="true" data-key="M">network</button>
+    </span>
+    <span class="group">
+      <span class="label" data-help="What plays the notes.">instruments</span>
+      <button data-k="voices" data-v="synth" data-key="I">synth</button><button data-k="voices" data-v="recorded" data-key="I">recorded</button><button data-k="voices" data-v="network" data-key="I">network</button>
+    </span>
   </div>
-  <h2>music by <span>(right click: drums by)</span></h2>
+  <h2 data-help="The genre writing the music: its form, meter, chords and tunes.">music by</h2>
   <div class="grid" id="genres"></div>
-  <h2>drums by</h2>
+  <h2 data-help="The genre on drums: its beat, fitted to the music's meter, and its kits and effects.">drums by</h2>
   <div class="grid" id="drummers"></div>
   <footer>
     <p>Music made up as it plays, without end, in twelve genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, and a small synthesiser plays it, here as WebAssembly. RECORDED plays recordings of real instruments instead. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, indonesian, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
-    <p>Keys: ←/→ genre, ↑/↓ drums, space next song, B back, , and . 10 s back and on, S stop/start, R replay, [ ] length, T type a length, - and + volume, D type a song's id, X export an MP3 (shift-X a WAV), O tuning, M tunes, I instruments. Each song has an id (at the top, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
+    <p>Hover over anything for what it does and its key, or see <button id="keys2" class="link">all the keys</button> (press ?). Each song has an id (beside its name, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
   </footer>
 </main>
+<dialog id="keyhelp" aria-labelledby="keyhelp-title">
+  <h2 id="keyhelp-title">keys</h2>
+  <dl>
+    <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>genre</dd>
+    <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>drums</dd>
+    <dt><kbd>space</kbd></dt><dd>next song</dd>
+    <dt><kbd>B</kbd></dt><dd>back</dd>
+    <dt><kbd>R</kbd></dt><dd>this song from its start</dd>
+    <dt><kbd>S</kbd></dt><dd>stop / start</dd>
+    <dt><kbd>,</kbd><kbd>.</kbd></dt><dd>10 s back / on</dd>
+    <dt><kbd>-</kbd><kbd>+</kbd></dt><dd>volume</dd>
+    <dt><kbd>[</kbd><kbd>]</kbd></dt><dd>length</dd>
+    <dt><kbd>T</kbd></dt><dd>type a length</dd>
+    <dt><kbd>D</kbd></dt><dd>type a song's id</dd>
+    <dt><kbd>X</kbd></dt><dd>save an MP3 (<kbd>shift X</kbd> a WAV)</dd>
+    <dt><kbd>O</kbd></dt><dd>tuning</dd>
+    <dt><kbd>M</kbd></dt><dd>tunes</dd>
+    <dt><kbd>I</kbd></dt><dd>instruments</dd>
+    <dt><kbd>?</kbd></dt><dd>these keys</dd>
+  </dl>
+  <form method="dialog"><button class="close">close</button></form>
+</dialog>
+<div id="tip" role="tooltip" hidden></div>
 <div id="start">
   <div class="box">
     <h1>musicbox</h1>

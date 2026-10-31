@@ -20,6 +20,10 @@ const st = {
   opts: { tuned: false, netTunes: false, voices: 'synth' },
   volume: 100,
 };
+// the hover help: the control under the mouse, the one whose help shows,
+// one clicked (quiet until the mouse moves on), the help's timer, and when
+// help last showed
+const tip = { over: null, shown: null, quiet: null, timer: 0, warm: -1e9 };
 const VOICES = ['synth', 'recorded', 'network'];
 const optsCode = (o) => (o.tuned ? 1 : 0) | (o.netTunes ? 2 : 0) | (VOICES.indexOf(o.voices) << 2);
 let worker = null;
@@ -57,6 +61,12 @@ function parseLength(s) {
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const showLength = (s) => (s > 0 ? clock(s) : 'auto');
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');
+
+// the genres the optimiser tuned (src/music/tuned.rs's TUNED), and those a
+// network writes tunes for
+const TUNED = ['ambient', 'techno', 'lo-fi', 'ska', 'indonesian', 'starconflict'];
+const NET_TUNES = ['celtic'];
 
 function say(text, kind = 'note') {
   st.note = { text, kind, until: performance.now() + 6000 };
@@ -79,11 +89,10 @@ function stepGenre(by) {
   setGenre((st.primary + by + st.genres.length) % st.genres.length, st.drums);
 }
 
-// none, then each genre but the one writing the music
+// through the genres in order, the one writing the music for its own drums
 function stepDrums(by) {
-  const order = [null, ...st.genres.map((_, g) => g).filter((g) => g !== st.primary)];
-  const i = Math.max(0, order.indexOf(st.drums));
-  setGenre(st.primary, order[(i + by + order.length) % order.length]);
+  const n = st.genres.length;
+  setGenre(st.primary, ((st.drums ?? st.primary) + by + n) % n);
 }
 
 function setLength(secs) {
@@ -105,7 +114,15 @@ function longer(by) {
 function setPlaying(on) {
   st.stopped = !on;
   worker?.postMessage({ type: 'playing', on });
-  $('play').lastElementChild.textContent = on ? 'stop' : 'start';
+  drawPlay();
+}
+
+function drawPlay() {
+  const b = $('play');
+  b.querySelector('span').textContent = st.stopped ? 'start' : 'stop';
+  b.querySelector('path').setAttribute('d', st.stopped ? 'M2.5 1.5v9L10.5 6z' : 'M2 2h8v8H2z');
+  setHelp(b, st.stopped ? 'Play on from where it stopped.' : 'Stop the music, holding it where it is.');
+  refreshTip();
 }
 
 function replay() {
@@ -329,12 +346,39 @@ async function loadNets() {
   say(rec.nets.length ? `${rec.nets.length} network instruments` : 'no network instruments here yet: recordings play');
 }
 
+// the settings, the one chosen lit, an option underlined where it changes
+// the genre writing the music, and each one's help
 function drawMade() {
+  const g = st.genres[st.primary] ?? '';
+  const G = cap(g) || 'This genre';
+  const help = {
+    'tuned:false': ["Each genre's mix as it was written by hand."],
+    'tuned:true': [
+      'The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, indonesian and starconflict.',
+      TUNED.includes(g),
+      `${G} is one of them.`,
+      `${G} is not one yet: it plays as written.`,
+    ],
+    'netTunes:false': ["Tunes written by the composer's rules, as every genre has them."],
+    'netTunes:true': [
+      "Celtic tunes by a small network that learned O'Neill's Music of Ireland (1903).",
+      NET_TUNES.includes(g),
+      'It writes the tunes playing.',
+      `Celtic has one alone: ${g || 'this genre'} keeps to the rules.`,
+    ],
+    'voices:synth': ['A small synthesiser plays the notes: nothing to download.'],
+    'voices:recorded': ['Recordings of real instruments play the notes, fetched as each genre needs them (4 to 26 MB a genre).'],
+    'voices:network': ['18 instruments played by small networks that learned their recordings, the rest recorded; fetched as they are first chosen.', true],
+  };
   for (const b of document.querySelectorAll('#made button')) {
     const [k, v] = [b.dataset.k, b.dataset.v];
     const on = k === 'voices' ? st.opts.voices === v : String(st.opts[k]) === v;
+    const [text, real, yes, no] = help[`${k}:${v}`];
     b.classList.toggle('lit', on);
+    b.classList.toggle('real', !!real);
+    setHelp(b, [text, real ? yes : no].filter((t) => t).join(' '));
   }
+  refreshTip();
 }
 
 // the song playing, by its id, as an MP3 (a WAV when `wav`)
@@ -387,32 +431,45 @@ function makeExporter() {
 
 // ---- the buttons
 
+// the genres to write the music, the one that does lit and the drummer
+// underlined; the genres on drums, the one that is lit (the genre writing
+// the music, on its own drums)
 function drawButtons() {
   const g = $('genres');
   const d = $('drummers');
   if (!g.children.length) {
     st.genres.forEach((name, i) => {
       const b = Object.assign(document.createElement('button'), { textContent: name });
+      b.dataset.key = '← →';
       b.onclick = () => setGenre(i, st.drums);
       b.oncontextmenu = (e) => {
         e.preventDefault();
         setGenre(st.primary, i);
       };
       g.append(b);
-    });
-    [null, ...st.genres.map((_, i) => i)].forEach((i) => {
-      const b = Object.assign(document.createElement('button'), { textContent: i === null ? 'none' : st.genres[i] });
-      b.onclick = () => setGenre(st.primary, i);
-      d.append(b);
+      const c = Object.assign(document.createElement('button'), { textContent: name });
+      c.dataset.key = '↑ ↓';
+      c.onclick = () => setGenre(st.primary, i);
+      d.append(c);
     });
   }
+  const p = st.genres[st.primary];
+  const drums = st.drums ?? st.primary;
   [...g.children].forEach((b, i) => {
+    const [n, N] = [st.genres[i], cap(st.genres[i])];
     b.className = i === st.primary ? 'lit' : i === st.drums ? 'mark' : '';
+    setHelp(
+      b,
+      i === st.primary
+        ? `${N} writes the music. Right-click a genre to put it on drums.`
+        : `${i === st.drums ? `${N} is on drums (underlined). ` : ''}Click: ${n} writes the music. Right-click: ${n} on drums.`,
+    );
   });
-  [...d.children].forEach((b, k) => {
-    const i = k === 0 ? null : k - 1;
-    b.className = i === st.drums ? 'drum' : i === st.primary ? 'off' : '';
+  [...d.children].forEach((b, i) => {
+    b.className = i === drums ? 'drum' : '';
+    setHelp(b, i === st.primary ? `${cap(p)} on its own drums.` : `${cap(st.genres[i])} on drums under ${p}'s music.`);
   });
+  drawMade();
 }
 
 // ---- what is playing
@@ -433,22 +490,18 @@ function drawNow() {
   let s = `song ${n.piece} / ${n.meter} / ${Math.round(n.bpm)} bpm`;
   if (n.key) s += ` / ${n.key.replace(/b$/, '♭')} ${n.mode}`;
   if (n.section) s += ` / ${n.section} ${Math.max(1, n.bar)} of ${n.bars}`;
-  s += ` / ${clock(n.elapsed)}`;
-  if (n.length > 0) s += ` of ${clock(n.length)}`;
   if (n.stopped) s += ' / stopped';
   if (want !== n.name) s += `  →  next: ${want}`;
   line.textContent = s;
   line.className = 'line';
 }
 
-// the song's id (its link plays it again; the address the page is at, too)
-// and where in it the music is
+// the song's id (in its field, and the address the page is at) and where
+// in it the music is
 function drawWhere(n) {
   if (n.sid && n.sid !== st.sid) {
     st.sid = n.sid;
-    $('seed').textContent = 'song ';
-    $('sid').textContent = n.sid;
-    $('sid').href = `#${n.sid}`;
+    if (document.activeElement !== $('sid')) $('sid').value = n.sid;
     history.replaceState(null, '', `#${n.sid}`);
   }
   const span = Math.max(1, n.length > 0 ? n.length : n.planned);
@@ -580,7 +633,6 @@ async function start() {
   const init = { type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode(st.opts), paused: st.waiting };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
-  $('seed').textContent = `seed ${st.seed}`;
   await ctx.resume();
   if (asked) goTo(asked);
 }
@@ -592,7 +644,6 @@ window.addEventListener('hashchange', () => {
 
 $('go').onclick = () => start().catch((e) => say(`could not start: ${e.message}`, 'error'));
 $('play').onclick = () => setPlaying(st.stopped);
-$('replay').onclick = replay;
 $('skip').onclick = next;
 $('back').onclick = back;
 $('rew').onclick = () => seek((st.now?.elapsed ?? 0) - SEEK_SECS);
@@ -605,16 +656,42 @@ $('pos').onchange = (e) => {
   st.scrubbing = false;
   seek(Number(e.target.value));
 };
-$('goto').onkeydown = (e) => {
+// the song's id: all of it chosen when the field is, so what is pasted or
+// typed takes its place; Enter plays it
+let chosen = false;
+$('sid').onfocus = (e) => {
+  e.target.select();
+  chosen = true;
+};
+$('sid').onmouseup = (e) => {
+  if (chosen) e.preventDefault();
+  chosen = false;
+};
+$('sid').onkeydown = (e) => {
   if (e.key === 'Enter') {
-    if (e.target.value.trim()) goTo(e.target.value);
-    e.target.value = '';
+    const text = e.target.value.trim();
+    if (text && text !== st.sid) goTo(text);
     e.target.blur();
   } else if (e.key === 'Escape') {
     e.target.blur();
   }
 };
+$('sid').onblur = (e) => {
+  e.target.value = st.sid ?? '';
+};
+$('copy').onclick = async () => {
+  if (!st.sid) return say('the song has not begun');
+  try {
+    await navigator.clipboard.writeText(`${location.origin}${location.pathname}#${st.sid}`);
+    say('a link to this song copied');
+  } catch {
+    $('sid').focus();
+    say('copy its id instead (ctrl-c)');
+  }
+};
 $('export').onclick = (e) => exportSong(e.shiftKey);
+$('wav').onclick = () => exportSong(true);
+$('keys').onclick = $('keys2').onclick = showKeys;
 for (const b of document.querySelectorAll('#made button')) {
   const [k, v] = [b.dataset.k, b.dataset.v];
   b.onclick = () => setOpts({ [k]: k === 'voices' ? v : v === 'true' });
@@ -660,7 +737,8 @@ document.addEventListener('keydown', (e) => {
     b: back,
     ',': () => seek((st.now?.elapsed ?? 0) - SEEK_SECS),
     '.': () => seek((st.now?.elapsed ?? 0) + SEEK_SECS),
-    d: () => $('goto').focus(),
+    d: () => $('sid').focus(),
+    '?': showKeys,
     r: replay,
     x: () => exportSong(e.shiftKey),
     o: () => setOpts({ tuned: !st.opts.tuned }),
@@ -682,4 +760,83 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ---- hover help: a control's data-help, and its keys (data-key), shown by
+// it a moment after the mouse comes to rest there (at once just after
+// another), or when the keyboard reaches it; screen readers have it as the
+// control's description
+
+function setHelp(el, text) {
+  el.dataset.help = text;
+  el.setAttribute('aria-description', text);
+}
+
+function showTip(el) {
+  const t = $('tip');
+  t.replaceChildren(el.dataset.help);
+  const keys = el.dataset.key?.split(' ') ?? [];
+  if (keys.length) {
+    const line = Object.assign(document.createElement('span'), { className: 'keys', textContent: keys.length > 1 ? 'keys ' : 'key ' });
+    for (const k of keys) line.append(Object.assign(document.createElement('kbd'), { textContent: k }));
+    t.append(line);
+  }
+  t.hidden = false;
+  const r = el.getBoundingClientRect();
+  const x = Math.max(8, Math.min(r.left, innerWidth - t.offsetWidth - 8));
+  const below = r.bottom + 8;
+  const y = below + t.offsetHeight > innerHeight - 8 ? Math.max(8, r.top - t.offsetHeight - 8) : below;
+  Object.assign(t.style, { left: `${x}px`, top: `${y}px` });
+  tip.shown = el;
+}
+
+function hideTip() {
+  clearTimeout(tip.timer);
+  if (tip.shown) tip.warm = performance.now();
+  $('tip').hidden = true;
+  tip.shown = null;
+}
+
+// what it says changed (a button that now does something else)
+function refreshTip() {
+  if (tip.shown) showTip(tip.shown);
+}
+
+document.addEventListener('pointerover', (e) => {
+  if (e.pointerType === 'touch') return;
+  const el = e.target.closest?.('[data-help]') ?? null;
+  if (el === tip.over) return;
+  tip.over = el;
+  tip.quiet = null;
+  hideTip();
+  if (el) tip.timer = setTimeout(() => showTip(el), performance.now() - tip.warm < 300 ? 0 : 450);
+});
+// (a click quiets it until the mouse moves on)
+document.addEventListener(
+  'pointerdown',
+  () => {
+    tip.quiet = tip.over;
+    hideTip();
+  },
+  true,
+);
+document.addEventListener('focusin', (e) => {
+  const el = e.target.closest?.('[data-help]');
+  if (el && e.target.matches(':focus-visible') && el !== tip.quiet) showTip(el);
+});
+document.addEventListener('focusout', () => {
+  if (tip.shown && tip.shown !== tip.over) hideTip();
+});
+addEventListener('scroll', hideTip, { passive: true });
+addEventListener('blur', hideTip);
+for (const el of document.querySelectorAll('[data-help]')) setHelp(el, el.dataset.help);
+
+// ---- the keys, all of them
+
+function showKeys() {
+  hideTip();
+  const d = $('keyhelp');
+  if (d.open) d.close();
+  else d.showModal();
+}
+
+drawPlay();
 requestAnimationFrame(drawEq);

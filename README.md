@@ -6,7 +6,7 @@ Music made up as it plays, without end, in twelve genres and any pair of them. I
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it starts on its synthesiser, and fetches recorded instruments when they are asked for.
 
-[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the equalizer, the transport, the song's bar, the volume, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
+[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id, the equalizer, the transport, the song's bar, the volume, the length, saving, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
 
 As it comes, no AI model makes any of the sound or the music, and no song is sampled. The music comes from a composer that is ordinary code: for each genre, rules for its scales, chords, rhythms, song forms and who plays what, and a random number generator choosing among them. It is generated at random and without end by software that an AI wrote. A genre and a seed always give the same music.
 
@@ -48,7 +48,7 @@ The top line ends with the song's id ([below](#song-ids)). The third line is the
 | key | |
 | --- | --- |
 | Left / Right (also P / N) | previous / next genre |
-| Up / Down (also J) | the drummer: none, then each other genre |
+| Up / Down (also J) | the drummer: each genre in turn (the one writing the music plays its own drums) |
 | Space, Enter (also Y) | next song: a new piece of the same music (after going back, the song that came next) |
 | B | back: the song playing from its start; in its first 3 s, the song before it |
 | , / . (also < / >) | 10 s back or on in the song playing |
@@ -64,6 +64,7 @@ The top line ends with the song's id ([below](#song-ids)). The third line is the
 | I | instruments: the synthesiser, the recordings, or the networks |
 | E | the equalizer in the terminal, on or off (`--eq` starts with it on) |
 | G | open or close the window (`--gui` opens it at the start) |
+| ? (also F1) | every key, in one list, in the window and on the page |
 | Q, Esc, Ctrl-C | quit |
 
 A change waits for the next bar line, or the next beat when bars are long, and then crossfades. Back, forward to a song, a song's id and a point in the song go at once. Run outside a terminal, musicbox prints one line for each new piece instead.
@@ -74,14 +75,14 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 
 `--gui` or G opens it. It has six parts:
 
-- **What is playing:** the genres and the song's id, then the same line as the terminal.
+- **What is playing:** the genres and the song's id (click it to type one to play), then the terminal's song line, less the time, which the bar below shows. A genre or drummer just chosen shows at the right until the next bar brings it in.
 - **Where in the song:** a bar to click, or drag and let go, to go to a point in the song, between buttons 10 s back and on, and the time played of the song's length.
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
-- **The transport and the length:** STOP / START, BACK, REPLAY, NEXT SONG and EXPORT MP3, then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
-- **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is marked in the accent colour.
-- **The genre selector:** click a genre under MUSIC BY to write the music, or right-click it to make it the drummer. The DRUMS BY row picks the drummer too, NONE for none. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc) and QUIT (Q), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
+- **The transport and the length:** BACK, STOP / START, NEXT SONG and EXPORT MP3 (R replays the song, as BACK does after its first seconds), then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
+- **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
+- **The genre selector:** click a genre under MUSIC BY to write the music, or right-click it to put it on drums. The DRUMS BY row picks the drummer too: the genre writing the music is lit there when it plays its own drums. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q) and KEYS (? or F1), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
 
-The keys work in the window too. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
+The keys work in the window too. The buttons leave them out: rest the mouse on anything and it says what it does and its keys, and ? lists them all. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
 
 The picture is drawn on the CPU and scaled up by a whole number, so its pixel font stays sharp at any size.
 
@@ -101,7 +102,7 @@ Stop fades out in 30 ms and holds the music where it is; start goes on from ther
 
 Every song has an id, shown at the top of the terminal, the window and the page: `ska.2817.1.2` is ska from seed 2817, the run of songs begun by its first skip or genre change (0 is the first run), and that run's second song. A length asked is added in seconds (`.180s`), and the settings that are not as they come in letters: `o` optimised, `t` network tunes, `s` the synthesiser's instruments, `n` the network's (`celtic.5.0.2.180s.tn`). The id plays the song again, later or elsewhere: `musicbox ska.2817.1.2`, D and typing it, the page's field, or the page's address (`bhoult.github.io/musicbox/#ska.2817.1.2`, which follows the song playing). It sets the genre, the length and the settings it gives, and the music goes on from that song as it would have.
 
-**How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, the page's EXPORT) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
+**How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, the page's SAVE) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
 
 **Back and forward.** The songs played are kept in order, the last twelve as each began. B plays the song playing from its start, or, in its first 3 seconds, the one before it; after going back, the next song is the one that came next (as it played, with its length and settings), until another genre or song is chosen. These come back as they played, at once.
 
@@ -120,7 +121,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. EXPORT (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; shift-X saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. The song's id is in a field beside its name: paste or type one there and press Enter to play it, or COPY LINK for a link that plays it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
 It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 

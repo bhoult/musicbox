@@ -1,11 +1,15 @@
-//! The window: what is playing and its id, where in the song it is (a bar
-//! to click or drag to a point in it), a live equalizer of what the speakers
-//! play (LED bars with peak markers over a frequency scale), the transport
-//! (stop, back, replay, next song) with the songs' length on a slider and in
-//! a field to type it into, and the genre selector, a grid of the genres to write the
-//! music and one of the drummers, with the window's keys as buttons below and
-//! the volume on a slider beside them.
+//! The window: what is playing and its id (a click on it types one to play),
+//! where in the song it is (a bar to click or drag to a point in it), a live
+//! equalizer of what the speakers play (LED bars with peak markers over a
+//! frequency scale), the transport (back, stop, next song, export) with the
+//! songs' length on a slider and in a field to type it into, how the music is
+//! made, and the genre selector, a grid of the genres to write the music and
+//! one of the drummers, with the window's own buttons below and the volume on
+//! a slider beside them. Whatever the mouse rests on says what it does and
+//! its keys; ? lists them all.
 //! Drawn on the CPU into a small picture that SDL scales up by a whole number.
+
+use std::time::{Duration, Instant};
 
 use crate::font::{self, ADVANCE};
 use crate::sdl::{self, Window};
@@ -17,10 +21,21 @@ const BG: u32 = 0x0E1116;
 const PANEL: u32 = 0x141A21;
 const TEXT: u32 = 0xEBEEF5;
 const DIM: u32 = 0x8C96A5;
+const FAINT: u32 = 0x5C6573;
 const ACCENT: u32 = 0x5FD3C6;
 const AMBER: u32 = 0xF2B544;
 const LED_OFF: u32 = 0x1B232C;
 const PEAK: u32 = 0xF4F6FA;
+const TIP: u32 = 0x1F2630;
+const EDGE: u32 = 0x3A4350;
+/// A button's colour, and under the mouse: plain, lit (chosen), the drummer.
+const PLAIN: (u32, u32) = (0x30353F, 0x4A5160);
+const LIT: (u32, u32) = (0x2A5FC1, 0x3F78E0);
+const DRUM: (u32, u32) = (0x8A5A12, 0xA8701C);
+/// How long the mouse rests on something before it says what it does.
+const TIP_DELAY: Duration = Duration::from_millis(450);
+
+type Rect = (i32, i32, i32, i32);
 
 /// A button's box and what a left and a right click on it do.
 struct Button {
@@ -30,6 +45,13 @@ struct Button {
     y1: i32,
     left: Action,
     right: Option<Action>,
+}
+
+/// What a part of the window does, and its keys, for when the mouse rests on it.
+struct Tip {
+    r: Rect,
+    help: String,
+    keys: &'static str,
 }
 
 pub struct Gui {
@@ -43,34 +65,81 @@ pub struct Gui {
     buttons: Vec<Button>,
     title: usize,
     /// the length slider's track and the length field, as last drawn (x0, y0, x1, y1)
-    slider: Option<(i32, i32, i32, i32)>,
-    field: Option<(i32, i32, i32, i32)>,
+    slider: Option<Rect>,
+    field: Option<Rect>,
     /// the slider held, and the length it last set
     drag: Option<f64>,
     /// the volume's slider, as last drawn, and (held) the volume it last set
-    vol: Option<(i32, i32, i32, i32)>,
+    vol: Option<Rect>,
     vol_drag: Option<u32>,
     /// the song's bar, as last drawn, the seconds it spans, and the point
     /// in the song it is held at (gone to when let go)
-    bar: Option<(i32, i32, i32, i32)>,
+    bar: Option<Rect>,
     span: f64,
     scrub: Option<f64>,
+    /// the song's id, as last drawn (a click on it types one to play)
+    sid: Option<Rect>,
     /// a length being typed into the field (T, or a click on it), or a
     /// song's id (D); the key's own text still to come; and a word about the
     /// last one typed
     edit: Option<String>,
     edit_song: bool,
     eat: Option<char>,
-    note: Option<(String, std::time::Instant)>,
+    note: Option<(String, Instant)>,
+    /// what each part does, as last drawn; the part the mouse is on and
+    /// since when; one clicked, its help held back until the mouse moves on
+    tips: Vec<Tip>,
+    hover: Option<(Rect, Instant)>,
+    quiet: Option<Rect>,
+    /// all the keys shown
+    keys: bool,
 }
 
-/// An option of a choice of how the music is made: its label, and the
-/// settings it asks for.
-type Choice = (&'static str, music::Opts);
+/// An option of a choice of how the music is made: its label, the settings
+/// it asks for, whether it changes the music playing, and what it does.
+type Choice = (&'static str, music::Opts, bool, String);
 
-fn inside(r: Option<(i32, i32, i32, i32)>, (x, y): (i32, i32)) -> bool {
+fn inside(r: Option<Rect>, (x, y): (i32, i32)) -> bool {
     r.is_some_and(|(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
 }
+
+/// `s` in lines of at most `cols` characters, broken at spaces.
+fn wrap(s: &str, cols: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in s.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.len() + 1 + word.len() <= cols => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// The keys, as the list of them shows them.
+const KEYS: [(&str, &str); 19] = [
+    ("LEFT RIGHT", "GENRE"),
+    ("UP DOWN", "DRUMS"),
+    ("SPACE", "NEXT SONG"),
+    ("B", "BACK"),
+    ("R", "THIS SONG FROM ITS START"),
+    ("S", "STOP / START"),
+    (", .", "10 S BACK / ON"),
+    ("- +", "VOLUME"),
+    ("[ ]", "LENGTH"),
+    ("T", "TYPE A LENGTH"),
+    ("D", "TYPE A SONG'S ID"),
+    ("X", "EXPORT AN MP3"),
+    ("O", "TUNING"),
+    ("M", "TUNES"),
+    ("I", "INSTRUMENTS"),
+    ("F  F11", "FULLSCREEN"),
+    ("ESC  G", "CLOSE THE WINDOW"),
+    ("Q", "QUIT"),
+    ("?  F1", "THESE KEYS"),
+];
 
 impl Gui {
     pub fn open() -> Result<Gui, String> {
@@ -92,15 +161,24 @@ impl Gui {
             bar: None,
             span: 0.0,
             scrub: None,
+            sid: None,
             edit: None,
             edit_song: false,
             eat: None,
             note: None,
+            tips: Vec::new(),
+            hover: None,
+            quiet: None,
+            keys: false,
         })
     }
 
     pub fn fullscreen(&mut self) {
         self.win.toggle_fullscreen();
+    }
+
+    pub fn toggle_keys(&mut self) {
+        self.keys = !self.keys;
     }
 
     /// The length at `x` on the slider: 0:30 to 10:00, in steps of 15 s.
@@ -145,7 +223,7 @@ impl Gui {
                 text.pop();
             }
             sdl::K_RETURN | sdl::K_KP_ENTER => {
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 if self.edit_song {
                     match music::SongId::parse(text) {
                         Some(id) => v.push(Action::Go(id)),
@@ -219,10 +297,13 @@ impl Gui {
                         }
                     }
                 }
+                // the keys listed: a click puts them away
+                sdl::SDL_MOUSEBUTTONDOWN if self.keys => self.keys = false,
                 sdl::SDL_MOUSEBUTTONDOWN => {
                     let (x, y) = e.mouse_xy();
                     let (x, y) = self.win.to_picture(x, y);
                     self.mouse = Some((x, y));
+                    self.quiet = self.hover.map(|h| h.0);
                     let left = e.button() == sdl::SDL_BUTTON_LEFT;
                     // a click anywhere else forgets a length half typed
                     if !inside(self.field, (x, y)) {
@@ -244,6 +325,9 @@ impl Gui {
                         }
                         self.edit_song = false;
                         self.edit.get_or_insert_with(String::new);
+                    } else if left && inside(self.sid, (x, y)) {
+                        self.edit = Some(String::new());
+                        self.edit_song = true;
                     } else if let Some(b) = self.buttons.iter().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1)
                     {
                         match e.button() {
@@ -254,6 +338,8 @@ impl Gui {
                     }
                 }
                 sdl::SDL_KEYDOWN if self.edit.is_some() => self.edit_key(e.key(), &mut v),
+                // the keys listed: a key puts them away (? and F1 too)
+                sdl::SDL_KEYDOWN if self.keys => self.keys = false,
                 sdl::SDL_KEYDOWN => {
                     let a = match e.key() {
                         sdl::K_RIGHT => Some(Action::Genre(1)),
@@ -261,6 +347,7 @@ impl Gui {
                         sdl::K_UP => Some(Action::Drums(1)),
                         sdl::K_DOWN => Some(Action::Drums(-1)),
                         sdl::K_ESCAPE => Some(Action::Window),
+                        sdl::K_F1 => Some(Action::Keys),
                         sdl::K_F11 => Some(Action::Fullscreen),
                         sdl::K_KP_MINUS => Some(Action::Louder(-1)),
                         sdl::K_KP_PLUS => Some(Action::Louder(1)),
@@ -292,6 +379,8 @@ impl Gui {
                             Ok('g') => Some(Action::Window),
                             Ok('f') => Some(Action::Fullscreen),
                             Ok('q') => Some(Action::Quit),
+                            // (? is shifted /)
+                            Ok('/' | '?') => Some(Action::Keys),
                             _ => None,
                         },
                     };
@@ -316,9 +405,10 @@ impl Gui {
         }
         self.px.fill(0xFF00_0000 | BG);
         self.buttons.clear();
+        self.tips.clear();
         let m = 8;
 
-        // what is playing
+        // what is playing, and its id
         self.text(m, m, "MUSICBOX", ACCENT, 2);
         let mut right = now.sid.map_or_else(|| format!("SEED {}", st.seed), |id| format!("SONG {id}"));
         if !st.sampled {
@@ -326,6 +416,12 @@ impl Gui {
         }
         let rw = font::width(&right, 1);
         self.text(w - m - rw, m + 4, &right, DIM, 1);
+        self.sid = Some((w - m - rw - 2, m + 1, w - m + 2, m + 14));
+        self.tip(
+            self.sid,
+            "This song's id: it plays the same song again, here (musicbox ID) or in the browser. Click it to type one to play.",
+            "D",
+        );
         let playing = if now.bpm > 0.0 { now.id } else { st.id() };
         let (p, d) = music::parts(playing);
         let mut y = m + 22;
@@ -335,8 +431,16 @@ impl Gui {
         if let Some(d) = d {
             x += self.text(x, y, " + ", DIM, big);
             x += self.text(x, y, music::GENRES[d], AMBER, big);
-            self.text(x, y, " DRUMS", DIM, big);
+            x += self.text(x, y, " DRUMS", DIM, big);
         }
+        // the music asked for, from the next bar: at the right of the name,
+        // else of the song's line below it
+        let next = (playing != st.id()).then(|| format!("NEXT: {}", music::name(st.id())));
+        let nw = next.as_ref().map_or(0, |n| font::width(n, 1));
+        if let Some(n) = next.as_ref().filter(|_| x + 24 + nw <= w - m) {
+            self.text(w - m - nw, y + (7 * big - 7) / 2, n, ACCENT, 1);
+        }
+        let next = next.filter(|_| x + 24 + nw > w - m);
         y += 7 * big + 6;
         if self.note.as_ref().is_some_and(|n| n.1.elapsed().as_secs() >= 4) {
             self.note = None;
@@ -345,7 +449,10 @@ impl Gui {
         let typing = self.edit.as_ref().filter(|_| self.edit_song);
         let line = match msg {
             _ if typing.is_some() => {
-                format!("SONG ID: {}_   AS SHOWN AT THE TOP, SKA.2817.0.3: ENTER PLAYS IT, ESC CANCELS", typing.expect("typed").to_uppercase())
+                format!(
+                    "SONG ID: {}_   AS SHOWN AT THE TOP, SKA.2817.0.3: ENTER PLAYS IT, ESC CANCELS",
+                    typing.expect("typed").to_uppercase()
+                )
             }
             Some((msg, _)) => msg.clone(),
             None if st.note.is_some() => st.note.as_ref().expect("a note").0.to_uppercase(),
@@ -358,10 +465,6 @@ impl Gui {
                 }
                 if !now.section.is_empty() {
                     s += &format!("  /  {} {} OF {}", now.section, now.bar.max(1), now.bars);
-                }
-                s += &format!("  /  {}", clock(now.elapsed));
-                if now.length > 0.0 {
-                    s += &format!(" OF {}", clock(now.length));
                 }
                 if now.stopped {
                     s += "  /  STOPPED";
@@ -380,32 +483,35 @@ impl Gui {
             DIM
         };
         self.text(m, y, &line, color, 1);
-        if playing != st.id() {
-            let next = format!("NEXT: {}", music::name(st.id()));
-            self.text(w - m - font::width(&next, 1), y, &next, ACCENT, 1);
+        if let Some(next) = next {
+            self.rect(w - m - nw - 12, y - 2, nw + 12, 11, BG);
+            self.text(w - m - nw, y, &next, ACCENT, 1);
         }
         let y = y + 14;
 
         // where in the song it is: a bar to click or drag to a point in it,
         // between buttons 10 s back and on
         let bh = 13;
-        let fill = (0x30353F, 0x4A5160);
         let seek = crate::term::SEEK_SECS;
-        let lw = font::width(",", 1) + font::width("<< 10 S", 1) + ADVANCE + 8;
-        self.button(m, y, lw, bh, "<< 10 S", ",", fill, None, Action::Seek(-seek), None);
-        let rw = font::width(".", 1) + font::width("10 S >>", 1) + ADVANCE + 8;
-        self.button(w - m - rw, y, rw, bh, "10 S >>", ".", fill, None, Action::Seek(seek), None);
+        let lw = font::width("<< 10 S", 1) + 8;
+        self.button(m, y, lw, bh, "<< 10 S", PLAIN, None, Action::Seek(-seek), None);
+        self.tip(Some((m, y, m + lw, y + bh)), "10 seconds back.", ",");
+        let rw = font::width("10 S >>", 1) + 8;
+        self.button(w - m - rw, y, rw, bh, "10 S >>", PLAIN, None, Action::Seek(seek), None);
+        self.tip(Some((w - m - rw, y, w - m, y + bh)), "10 seconds on.", ".");
         self.span = if now.length > 0.0 { now.length } else { now.planned }.max(1.0);
         let at = self.scrub.unwrap_or(now.elapsed).min(self.span);
         let time = format!("{} / {}", clock(at), clock(self.span));
         let tw = font::width("00:00 / 00:00", 1);
         let (bx0, bx1) = (m + lw + 8, (w - m - rw - tw - 16).max(m + lw + 48));
         self.bar = Some((bx0, y, bx1, y + bh));
+        self.tip(self.bar, "Where the song is: click or drag to go anywhere in it.", "");
         self.rect(bx0, y + 4, bx1 - bx0, 5, 0x30353F);
         let hx = bx0 + (at / self.span * (bx1 - bx0 - 1) as f64).round() as i32;
         self.rect(bx0, y + 4, hx - bx0, 5, if self.scrub.is_some() { AMBER } else { ACCENT });
         self.rect(hx - 1, y + 1, 3, bh - 2, TEXT);
         self.text(bx1 + 8, y + 3, &time, DIM, 1);
+        self.tip(Some((bx1 + 8, y, bx1 + 8 + tw, y + bh)), "How far into the song, and how long it is.", "");
         let top = y + bh + 6;
 
         // the selector, from the bottom up
@@ -415,37 +521,71 @@ impl Gui {
         let bw = (w - 2 * m - (cols - 1) * gap) / cols;
         let rows = |n: i32| (n + cols - 1) / cols;
         let ng = music::GENRES.len() as i32;
-        let height = 2 * (bh + 8) + 2 * 11 + (rows(ng) + rows(ng + 1)) * (bh + gap) + 6 + bh;
+        let height = 2 * (bh + 8) + 2 * 11 + 2 * rows(ng) * (bh + gap) + 6 + bh;
         let mut y = h - m - height;
         let bottom = y - 6;
 
         // the transport, and the songs' length
         let mut x = m;
-        let keys: [(&str, &str, Action); 5] = [
-            ("S", if now.stopped { "START" } else { "STOP" }, Action::Play),
-            ("B", "BACK", Action::Back),
-            ("R", "REPLAY", Action::Replay),
-            ("SPACE", "NEXT SONG", Action::Skip),
-            ("X", "EXPORT MP3", Action::Export),
+        let keys: [(&str, Action, &str, &str); 4] = [
+            ("BACK", Action::Back, "Back to this song's start; in its first 3 seconds, to the song before.", "B"),
+            if now.stopped {
+                ("START", Action::Play, "Play on from where it stopped.", "S")
+            } else {
+                ("STOP", Action::Play, "Stop the music, holding it where it is.", "S")
+            },
+            (
+                "NEXT SONG",
+                Action::Skip,
+                "On to the next song: a new one, or after going back, the one you came from.",
+                "SPACE",
+            ),
+            (
+                "EXPORT MP3",
+                Action::Export,
+                "Save the whole song playing as an MP3 in ~/Music/musicbox, named by its id. It is made again from its start, so the music plays on.",
+                "X",
+            ),
         ];
-        for (hint, label, a) in keys {
-            let bw = font::width(hint, 1) + font::width(label, 1) + ADVANCE + 8;
-            self.button(x, y, bw, bh, label, hint, (0x30353F, 0x4A5160), None, a, None);
-            x += bw + 6;
+        for (i, (label, a, help, key)) in keys.into_iter().enumerate() {
+            // (the transport together, the export apart)
+            if i == 3 {
+                x += 8;
+            }
+            let bw = font::width(label, 1) + 8;
+            self.button(x, y, bw, bh, label, PLAIN, None, a, None);
+            self.tip(Some((x, y, x + bw, y + bh)), help, key);
+            x += bw + if i < 2 { 2 } else { 6 };
         }
-        x += 6;
-        x += self.text(x, y + 3, "LENGTH", DIM, 1) + 6;
+        x += 10;
+        let lw = self.text(x, y + 3, "LENGTH", DIM, 1);
+        self.tip(
+            Some((x, y, x + lw, y + bh)),
+            "How long each song is. The music is shaped to end near it, at its outro.",
+            "",
+        );
+        x += lw + 6;
         let auto = st.length <= 0.0;
         let aw = font::width("AUTO", 1) + 8;
-        let fill = if auto { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
-        self.button(x, y, aw, bh, "AUTO", "", fill, None, Action::SetLength(0.0), None);
+        self.button(x, y, aw, bh, "AUTO", if auto { LIT } else { PLAIN }, None, Action::SetLength(0.0), None);
+        self.tip(Some((x, y, x + aw, y + bh)), "Each song as long as it was written: about two minutes.", "[ ]");
         x += aw + 8;
         let fw = font::width("00:00", 1) + 10;
         let (sx0, sx1) = (x, (w - m - fw - 8).max(x + 40));
         self.slider = Some((sx0, y, sx1, y + bh));
+        self.tip(
+            self.slider,
+            if auto {
+                "How long each song is to be, 0:30 to 10:00 (at auto, the hollow mark is this song's own length). The mouse wheel turns it too."
+            } else {
+                "How long each song is to be, 0:30 to 10:00. The mouse wheel turns it too."
+            },
+            "[ ]",
+        );
         self.slider_track(st, now, sx0, sx1, y, bh);
         let fx = sx1 + 8;
         self.field = Some((fx, y, fx + fw, y + bh));
+        self.tip(self.field, "Click it and type a length, then Enter: 3:30, 3.5m, 210s (up to an hour) or auto.", "T");
         let editing = self.edit.is_some() && !self.edit_song;
         self.rect(fx, y, fw, bh, if editing { ACCENT } else { 0x30353F });
         self.rect(fx + 1, y + 1, fw - 2, bh - 2, PANEL);
@@ -456,123 +596,277 @@ impl Gui {
         let tw = font::width(&shown, 1);
         self.text(fx + (fw - tw).max(4) / 2, y + 3, &shown, if editing { TEXT } else { ACCENT }, 1);
         y += bh + 8;
-        self.made(st.opts, st.id(), m, y, bh);
+        self.made(st, m, y, bh);
         y += bh + 8;
 
-        self.text(m, y, "MUSIC BY", DIM, 1);
-        self.text(m + 9 * ADVANCE, y, "(RIGHT CLICK: DRUMS BY)", 0x5C6573, 1);
+        // the genres to write the music: the one that does lit, the drummer
+        // underlined
+        let pname = music::GENRES[st.primary];
+        let hw = self.text(m, y, "MUSIC BY", DIM, 1);
+        self.tip(
+            Some((m, y - 2, m + hw, y + 9)),
+            "The genre writing the music: its form, meter, chords and tunes.",
+            "",
+        );
         y += 11;
         for g in 0..ng {
             let (bx, by) = (m + (g % cols) * (bw + gap), y + (g / cols) * (bh + gap));
             let g = g as usize;
-            let fill = if g == st.primary { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
+            let name = music::GENRES[g];
+            let fill = if g == st.primary { LIT } else { PLAIN };
             let mark = (Some(g) == st.drums).then_some(AMBER);
-            self.button(
-                bx,
-                by,
-                bw,
-                bh,
-                music::GENRES[g],
-                "",
-                fill,
-                mark,
-                Action::SetGenre(g),
-                Some(Action::SetDrums(Some(g))),
-            );
+            self.button(bx, by, bw, bh, name, fill, mark, Action::SetGenre(g), Some(Action::SetDrums(Some(g))));
+            let help = if g == st.primary {
+                format!("{name} writes the music. Right-click a genre to put it on drums.")
+            } else if Some(g) == st.drums {
+                format!("{name} is on drums (underlined). Click: {name} writes the music.")
+            } else {
+                format!("Click: {name} writes the music. Right-click: {name} on drums.")
+            };
+            self.tip(Some((bx, by, bx + bw, by + bh)), help, "LEFT RIGHT");
         }
         y += rows(ng) * (bh + gap) + 2;
-        self.text(m, y, "DRUMS BY", DIM, 1);
+
+        // the genres on drums: the one that is lit (the genre writing the
+        // music, on its own drums)
+        let hw = self.text(m, y, "DRUMS BY", DIM, 1);
+        self.tip(
+            Some((m, y - 2, m + hw, y + 9)),
+            "The genre on drums: its beat, fitted to the music's meter, and its kits and effects.",
+            "",
+        );
         y += 11;
-        for k in 0..=ng {
-            let (bx, by) = (m + (k % cols) * (bw + gap), y + (k / cols) * (bh + gap));
-            let g = (k > 0).then(|| k as usize - 1);
-            let label = g.map_or("NONE", |g| music::GENRES[g]);
-            let fill = if g == st.drums {
-                (0x8A5A12, 0xA8701C)
-            } else if g == Some(st.primary) {
-                (0x1C2027, 0x1C2027)
+        let drums = st.drums.unwrap_or(st.primary);
+        for g in 0..ng {
+            let (bx, by) = (m + (g % cols) * (bw + gap), y + (g / cols) * (bh + gap));
+            let g = g as usize;
+            let name = music::GENRES[g];
+            let fill = if g == drums { DRUM } else { PLAIN };
+            self.button(bx, by, bw, bh, name, fill, None, Action::SetDrums(Some(g)), None);
+            let help = if g == st.primary {
+                format!("{name} on its own drums.")
             } else {
-                (0x30353F, 0x4A5160)
+                format!("{name} on drums under {pname}'s music.")
             };
-            self.button(bx, by, bw, bh, label, "", fill, None, Action::SetDrums(g), None);
+            self.tip(Some((bx, by, bx + bw, by + bh)), help, "UP DOWN");
         }
-        y += rows(ng + 1) * (bh + gap) + 4;
+        y += rows(ng) * (bh + gap) + 4;
+
+        // the window's own buttons, and the volume
         let mut x = m;
-        let keys: [(&str, &str, Action); 3] =
-            [("F", "FULLSCREEN", Action::Fullscreen), ("ESC", "CLOSE", Action::Window), ("Q", "QUIT", Action::Quit)];
-        for (hint, label, a) in keys {
-            let bw = font::width(hint, 1) + font::width(label, 1) + ADVANCE + 8;
-            self.button(x, y, bw, bh, label, hint, (0x30353F, 0x4A5160), None, a, None);
+        let keys: [(&str, Action, &str, &str); 4] = [
+            ("FULLSCREEN", Action::Fullscreen, "Fill the screen, or go back to a window.", "F F11"),
+            (
+                "CLOSE",
+                Action::Window,
+                "Close the window: the music plays on in the terminal (without one, it ends).",
+                "ESC G",
+            ),
+            ("QUIT", Action::Quit, "Stop the music and quit.", "Q"),
+            ("KEYS", Action::Keys, "Every key, in one list.", "? F1"),
+        ];
+        for (label, a, help, key) in keys {
+            let bw = font::width(label, 1) + 8;
+            self.button(x, y, bw, bh, label, PLAIN, None, a, None);
+            self.tip(Some((x, y, x + bw, y + bh)), help, key);
             x += bw + 6;
         }
         self.volume(st.volume, x + 8, w - m, y, bh);
 
-        // the equalizer
+        // the equalizer, then over it all the keys, or what the mouse rests on
         if bottom - top > 24 {
             self.equalizer(tap, m, top, w - m, bottom);
+        }
+        if self.keys {
+            self.key_list();
+        } else {
+            self.show_tip();
         }
         self.win.present(&self.px);
     }
 
-    /// How the music is made, a row of three choices, each a key and its
+    /// What `r` does (`help`) and its keys, for when the mouse rests on it.
+    fn tip(&mut self, r: Option<Rect>, help: impl Into<String>, keys: &'static str) {
+        if let Some(r) = r {
+            self.tips.push(Tip { r, help: help.into(), keys });
+        }
+    }
+
+    /// What the mouse rests on: what it does and its keys, in a box by it,
+    /// once it has rested there a moment (not while something is held, nor
+    /// after a click on it until the mouse moves on).
+    fn show_tip(&mut self) {
+        let Some(at) = self.mouse else {
+            self.hover = None;
+            return;
+        };
+        let Some(t) = self.tips.iter().rev().find(|t| inside(Some(t.r), at)) else {
+            (self.hover, self.quiet) = (None, None);
+            return;
+        };
+        let (r, help, keys) = (t.r, t.help.to_uppercase(), t.keys);
+        let since = match self.hover {
+            Some((was, since)) if was == r => since,
+            _ => {
+                self.quiet = None;
+                self.hover = Some((r, Instant::now()));
+                Instant::now()
+            }
+        };
+        let held = self.drag.is_some() || self.vol_drag.is_some() || self.scrub.is_some();
+        if held || self.quiet == Some(r) || since.elapsed() < TIP_DELAY {
+            return;
+        }
+        let (w, h) = (self.w, self.h);
+        let cols = ((w - 20) / ADVANCE).clamp(10, 46) as usize;
+        let lines = wrap(&help, cols);
+        let key_line =
+            (!keys.is_empty()).then(|| format!("{} {keys}", if keys.contains(' ') { "KEYS" } else { "KEY" }));
+        let longest = lines.iter().chain(key_line.iter()).map(|l| font::width(l, 1)).max().unwrap_or(0);
+        let (bw, bh) = (longest + 12, (lines.len() + key_line.iter().len()) as i32 * 10 + 7);
+        let x = (at.0 - 12).clamp(2, (w - bw - 2).max(2));
+        let below = r.3 + 4;
+        let y = if below + bh <= h - 2 { below } else { (r.1 - 4 - bh).max(2) };
+        self.rect(x, y, bw, bh, EDGE);
+        self.rect(x + 1, y + 1, bw - 2, bh - 2, TIP);
+        let mut ty = y + 5;
+        for l in &lines {
+            self.text(x + 6, ty, l, TEXT, 1);
+            ty += 10;
+        }
+        if let Some(k) = key_line {
+            let lw = self.text(x + 6, ty, if keys.contains(' ') { "KEYS " } else { "KEY " }, DIM, 1);
+            self.text(x + 6 + lw, ty, &k[k.find(' ').map_or(0, |i| i + 1)..], ACCENT, 1);
+        }
+    }
+
+    /// All the keys, in a box in the middle: two columns where they fit.
+    fn key_list(&mut self) {
+        let (w, h) = (self.w, self.h);
+        let kw = KEYS.iter().map(|k| font::width(k.0, 1)).max().unwrap_or(0) + 10;
+        let dw = KEYS.iter().map(|k| font::width(k.1, 1)).max().unwrap_or(0);
+        let two = 2 * (kw + dw) + 24 + 24 <= w;
+        let per = if two { KEYS.len().div_ceil(2) } else { KEYS.len() };
+        let bw = if two { 2 * (kw + dw) + 24 } else { kw + dw } + 24;
+        let bh = per as i32 * 10 + 44;
+        let (x, y) = ((w - bw) / 2, ((h - bh) / 2).max(2));
+        self.rect(x, y, bw, bh, EDGE);
+        self.rect(x + 1, y + 1, bw - 2, bh - 2, TIP);
+        self.text(x + 12, y + 10, "KEYS", ACCENT, 1);
+        for (i, (key, what)) in KEYS.iter().enumerate() {
+            let (col, row) = (i / per, i % per);
+            let cx = x + 12 + col as i32 * (kw + dw + 24);
+            let cy = y + 26 + row as i32 * 10;
+            self.text(cx + kw - 10 - font::width(key, 1), cy, key, TEXT, 1);
+            self.text(cx + kw, cy, what, DIM, 1);
+        }
+        self.text(x + 12, y + bh - 13, "ANY KEY OR CLICK PUTS THIS AWAY", FAINT, 1);
+    }
+
+    /// How the music is made, a row of three choices, each a name and its
     /// options side by side, the one chosen lit: the settings as written
     /// or tuned, the tunes by the rules or the network, the instruments. An
-    /// option underlined does something for the music `id` (the optimiser
-    /// tuned it, a network writes its tunes, network instruments are in).
-    fn made(&mut self, o: music::Opts, id: usize, x0: i32, y: i32, bh: i32) {
+    /// option underlined does something for the music playing (the
+    /// optimiser tuned it, a network writes its tunes, network instruments
+    /// are in).
+    fn made(&mut self, st: &State, x0: i32, y: i32, bh: i32) {
         use music::Voices;
-        let groups: [(&str, &str, Vec<Choice>); 3] = [
+        let (o, id) = (st.opts, st.id());
+        let g = music::GENRES[music::parts(id).0];
+        let tuned = music::has_tuning(id);
+        let net_tunes = music::has_net_tunes(id);
+        let nets = crate::net::count();
+        let tuning = format!(
+            "The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, indonesian and starconflict. {}",
+            if tuned { format!("{g} is one of them.") } else { format!("{g} is not one yet: it plays as written.") }
+        );
+        let tunes = format!(
+            "Celtic tunes by a small network that learned O'Neill's Music of Ireland (1903). {}",
+            match (net_tunes, music::parts(id).0 == music::CELTIC) {
+                (true, _) => "It writes the tunes playing.".to_string(),
+                (false, true) => "Its network is not installed: the rules write.".to_string(),
+                (false, false) => format!("Celtic has one alone: {g} keeps to the rules."),
+            }
+        );
+        let groups: [(&str, &str, &str, Vec<Choice>); 3] = [
             (
-                "O",
                 "TUNING",
+                "Each genre's mix: the level of each part, the tone, reverb, tempo, swing and stereo width. A change plays this song again from its start.",
+                "O",
                 vec![
-                    ("AS WRITTEN", music::Opts { tuned: false, ..o }),
-                    ("OPTIMISED", music::Opts { tuned: true, ..o }),
+                    ("AS WRITTEN", music::Opts { tuned: false, ..o }, false, "Each genre's mix as it was written by hand.".into()),
+                    ("OPTIMISED", music::Opts { tuned: true, ..o }, tuned, tuning),
                 ],
             ),
             (
-                "M",
                 "TUNES",
+                "What writes the melodies. A change plays this song again from its start.",
+                "M",
                 vec![
-                    ("RULES", music::Opts { net_tunes: false, ..o }),
-                    ("NETWORK", music::Opts { net_tunes: true, ..o }),
+                    (
+                        "RULES",
+                        music::Opts { net_tunes: false, ..o },
+                        false,
+                        "Tunes written by the composer's rules, as every genre has them.".into(),
+                    ),
+                    ("NETWORK", music::Opts { net_tunes: true, ..o }, net_tunes, tunes),
                 ],
             ),
             (
-                "I",
                 "INSTRUMENTS",
+                "What plays the notes. A change plays this song again from its start.",
+                "I",
                 Voices::ALL
                     .iter()
-                    .map(|&v| (["SYNTH", "RECORDED", "NETWORK"][v as usize], music::Opts { voices: v, ..o }))
+                    .map(|&v| {
+                        let help = match v {
+                            Voices::Synth => "A small synthesiser plays the notes.".to_string(),
+                            Voices::Recorded if st.sampled => "Recordings of real instruments play the notes.".into(),
+                            Voices::Recorded => {
+                                "Recordings of real instruments play the notes. None are installed: the synthesiser plays.".into()
+                            }
+                            Voices::Net if nets > 0 => {
+                                format!("{nets} instruments played by small networks that learned their recordings, the rest recorded.")
+                            }
+                            Voices::Net => "Instruments played by small networks that learned their recordings. None are installed: recordings play.".into(),
+                        };
+                        let name = ["SYNTH", "RECORDED", "NETWORK"][v as usize];
+                        (name, music::Opts { voices: v, ..o }, v == Voices::Net && nets > 0, help)
+                    })
                     .collect(),
             ),
         ];
         let mut x = x0;
-        for (key, label, opts) in groups {
-            x += self.text(x, y + 3, key, 0x9AA6B8, 1) + ADVANCE;
-            x += self.text(x, y + 3, label, DIM, 1) + 6;
-            for (name, to) in opts {
+        for (label, help, key, opts) in groups {
+            let lw = self.text(x, y + 3, label, DIM, 1);
+            self.tip(Some((x, y, x + lw, y + bh)), help, "");
+            x += lw + 6;
+            for (name, to, real, help) in opts {
                 let bw = font::width(name, 1) + 8;
-                let fill = if to == o { (0x2A5FC1, 0x3F78E0) } else { (0x30353F, 0x4A5160) };
-                let real = match (label, name) {
-                    ("TUNING", "OPTIMISED") => music::has_tuning(id),
-                    ("TUNES", "NETWORK") => music::has_net_tunes(id),
-                    ("INSTRUMENTS", "NETWORK") => crate::net::count() > 0,
-                    _ => false,
-                };
-                self.button(x, y, bw, bh, name, "", fill, real.then_some(ACCENT), Action::SetOpts(to), None);
+                self.button(
+                    x,
+                    y,
+                    bw,
+                    bh,
+                    name,
+                    if to == o { LIT } else { PLAIN },
+                    real.then_some(ACCENT),
+                    Action::SetOpts(to),
+                    None,
+                );
+                self.tip(Some((x, y, x + bw, y + bh)), help, key);
                 x += bw + 2;
             }
             x += 14;
         }
     }
 
-    /// The volume, at the right between x0 and x1: its keys and name, its
-    /// slider (a tick each 10 per cent, lit up to its handle), and how much.
+    /// The volume, at the right between x0 and x1: its name, its slider (a
+    /// tick each 10 per cent, lit up to its handle), and how much.
     fn volume(&mut self, volume: u32, x0: i32, x1: i32, y: i32, h: i32) {
         let shown = format!("{volume}%");
         let pw = font::width("100%", 1);
-        let label = font::width("- +", 1) + ADVANCE + font::width("VOLUME", 1) + 6;
+        let label = font::width("VOLUME", 1) + 8;
         let sw = (x1 - x0 - label - pw - 8).min(200);
         if sw < 40 {
             self.vol = None;
@@ -580,16 +874,19 @@ impl Gui {
         }
         let sx1 = x1 - pw - 8;
         let sx0 = sx1 - sw;
-        let mut x = sx0 - label;
-        x += self.text(x, y + 3, "- +", 0x9AA6B8, 1) + ADVANCE;
-        self.text(x, y + 3, "VOLUME", DIM, 1);
+        self.text(sx0 - label, y + 3, "VOLUME", DIM, 1);
         self.vol = Some((sx0, y, sx1, y + h));
+        self.tip(
+            Some((sx0 - label, y, x1, y + h)),
+            "The volume. It changes what you hear, not the equalizer or exports. The mouse wheel turns it too.",
+            "- +",
+        );
         let mid = y + h / 2;
         self.rect(sx0, mid - 1, sw, 3, LED_OFF);
         for tick in 1..10 {
             let tx = self.vol_x(tick * 10);
             let tall = if tick == 5 { 4 } else { 2 };
-            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, 0x3A4350);
+            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, EDGE);
         }
         let hx = self.vol_x(volume);
         self.rect(sx0, mid - 1, hx - sx0, 3, ACCENT);
@@ -607,7 +904,7 @@ impl Gui {
         for min in 1..=(SLIDER_LENGTH / 60.0) as i32 {
             let tx = self.slider_x(min as f64 * 60.0);
             let tall = if min % 5 == 0 { 4 } else { 2 };
-            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, 0x3A4350);
+            self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, EDGE);
         }
         if st.length > 0.0 {
             let hx = self.slider_x(st.length);
@@ -654,12 +951,12 @@ impl Gui {
             (10000.0, "10K"),
         ] {
             let x = x0 + (spectrum::position(f) * (x1 - x0) as f32) as i32;
-            self.text(x - font::width(label, 1) / 2, y1 + 3, label, 0x5C6573, 1);
+            self.text(x - font::width(label, 1) / 2, y1 + 3, label, FAINT, 1);
         }
     }
 
-    /// A button: `fill` (and its colour under the mouse), a key `hint`
-    /// before its label, a `mark` underlining it.
+    /// A button: `fill` (and its colour under the mouse), its label, a
+    /// `mark` underlining it.
     #[allow(clippy::too_many_arguments)]
     fn button(
         &mut self,
@@ -668,7 +965,6 @@ impl Gui {
         w: i32,
         h: i32,
         label: &str,
-        hint: &str,
         fill: (u32, u32),
         mark: Option<u32>,
         left: Action,
@@ -676,13 +972,8 @@ impl Gui {
     ) {
         let over = self.mouse.is_some_and(|(mx, my)| mx >= x && mx < x + w && my >= y && my < y + h);
         self.rect(x, y, w, h, if over { fill.1 } else { fill.0 });
-        let tw = font::width(label, 1) + if hint.is_empty() { 0 } else { font::width(hint, 1) + ADVANCE };
-        let mut tx = x + (w - tw) / 2;
-        if !hint.is_empty() {
-            tx += self.text(tx, y + 3, hint, 0x9AA6B8, 1);
-            tx += ADVANCE;
-        }
-        self.text(tx, y + 3, label, TEXT, 1);
+        let tw = font::width(label, 1);
+        self.text(x + (w - tw) / 2, y + 3, label, TEXT, 1);
         if let Some(c) = mark {
             self.rect(x + 2, y + h - 2, w - 4, 2, c);
         }
@@ -716,5 +1007,27 @@ fn led(t: f32) -> u32 {
         t if t < 0.55 => mix(0x1E9E92, 0x5FD3C6, t / 0.55),
         t if t < 0.8 => mix(0x5FD3C6, 0xF2B544, (t - 0.55) / 0.25),
         t => mix(0xF2B544, 0xEF4F5F, ((t - 0.8) / 0.2).min(1.0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_wraps_at_spaces() {
+        assert_eq!(wrap("ten seconds back", 11), ["ten seconds", "back"]);
+        assert_eq!(wrap("one  two", 40), ["one two"]);
+        // a word longer than the line has a line of its own
+        assert_eq!(wrap("a ~/music/musicbox b", 6), ["a", "~/music/musicbox", "b"]);
+    }
+
+    #[test]
+    fn every_key_listed_draws() {
+        for c in KEYS.iter().flat_map(|(k, what)| format!("{k}{what}").into_bytes()).filter(|&c| c != b' ') {
+            let mut px = vec![0u32; 6 * 7];
+            font::draw(&mut px, 6, 7, 0, 0, &(c as char).to_string(), 0xFFFFFF, 1);
+            assert!(px.iter().any(|&p| p != 0), "{}", c as char);
+        }
     }
 }

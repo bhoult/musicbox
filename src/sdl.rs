@@ -38,6 +38,7 @@ pub const K_RIGHT: i32 = 0x4000_004F;
 pub const K_LEFT: i32 = 0x4000_0050;
 pub const K_DOWN: i32 = 0x4000_0051;
 pub const K_UP: i32 = 0x4000_0052;
+pub const K_F1: i32 = 0x4000_003A;
 pub const K_F11: i32 = 0x4000_0044;
 
 const SDL_WINDOW_FULLSCREEN_DESKTOP: u32 = 0x1001;
