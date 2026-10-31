@@ -308,12 +308,13 @@ function drawMade() {
   }
 }
 
-async function exportSong() {
+// the song playing, by its id, as an MP3 (a WAV when `wav`)
+async function exportSong(wav = false) {
   const n = st.now;
   if (!n || !module) return;
-  const name = `${n.sid ?? `${n.name}-${n.seed}-${n.song}`}.wav`;
+  if (!n.sid) return say('the song has not begun');
   exporter ??= makeExporter();
-  say(`exporting ${name}…`);
+  say(`exporting ${n.sid}.${wav ? 'wav' : 'mp3'}…`);
   // the recordings the song plays, decoded again for the exporter's engine
   if ((n.opts >> 2) !== 0 && rec.index) {
     if (!exporter.meta) {
@@ -323,16 +324,17 @@ async function exportSong() {
     const todo = [...rec.have].filter((g) => !exporter.groups.has(g)).sort((a, b) => a - b);
     await sendGroups(todo, exporter);
     todo.forEach((g) => exporter.groups.add(g));
-    if (rec.tunes && !exporter.tunes) {
-    for (const { genre, bytes } of rec.tunes) exporter.postMessage({ type: 'tunes', genre, bytes: bytes.slice(0) });
-    exporter.tunes = true;
-  }
-  if (rec.nets && !exporter.nets) {
+    if (rec.nets && !exporter.nets) {
       for (const { line, bytes } of rec.nets) exporter.postMessage({ type: 'net', line, bytes: bytes.slice(0) });
       exporter.nets = true;
     }
   }
-  exporter.postMessage({ type: 'export', id: n.id, seed: n.seed, song: n.song, length: st.length, opts: n.opts, name });
+  // the tunes networks, whatever plays them
+  if (n.opts & 2 && rec.tunes && !exporter.tunes) {
+    for (const { genre, bytes } of rec.tunes) exporter.postMessage({ type: 'tunes', genre, bytes: bytes.slice(0) });
+    exporter.tunes = true;
+  }
+  exporter.postMessage({ type: 'export', sid: n.sid, wav, year: new Date().getFullYear() });
 }
 
 function makeExporter() {
@@ -340,14 +342,15 @@ function makeExporter() {
   ex.groups = new Set();
   ex.onmessage = (e) => {
     if (e.data.type === 'error') say(e.data.error, 'error');
-    if (e.data.type !== 'wav') return;
-    const url = URL.createObjectURL(new Blob([e.data.bytes], { type: 'audio/wav' }));
+    if (e.data.type === 'say') say(e.data.text, e.data.kind);
+    if (e.data.type !== 'saved') return;
+    const url = URL.createObjectURL(e.data.blob);
     const a = Object.assign(document.createElement('a'), { href: url, download: e.data.name });
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    say(`saved ${e.data.name}`);
+    say(e.data.why ? `saved ${e.data.name} (${e.data.why})` : `saved ${e.data.name}`, e.data.why ? 'error' : 'note');
   };
   ex.postMessage({ type: 'init', module, genre: 0, seed: 1 });
   return ex;
@@ -579,7 +582,7 @@ $('goto').onkeydown = (e) => {
     e.target.blur();
   }
 };
-$('export').onclick = exportSong;
+$('export').onclick = (e) => exportSong(e.shiftKey);
 for (const b of document.querySelectorAll('#made button')) {
   const [k, v] = [b.dataset.k, b.dataset.v];
   b.onclick = () => setOpts({ [k]: k === 'voices' ? v : v === 'true' });
@@ -621,7 +624,7 @@ document.addEventListener('keydown', (e) => {
     '.': () => seek((st.now?.elapsed ?? 0) + SEEK_SECS),
     d: () => $('goto').focus(),
     r: replay,
-    x: exportSong,
+    x: () => exportSong(e.shiftKey),
     o: () => setOpts({ tuned: !st.opts.tuned }),
     m: () => setOpts({ netTunes: !st.opts.netTunes }),
     i: () => setOpts({ voices: VOICES[(VOICES.indexOf(st.opts.voices) + 1) % VOICES.length] }),

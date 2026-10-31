@@ -112,7 +112,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the three settings, song ids and the keys as the window has them. EXPORT saves a WAV, named by the song's id. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the three settings, song ids and the keys as the window has them. EXPORT (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; shift-X saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
 It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
@@ -224,7 +224,7 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 | `src/tunes.rs` | the tunes network: the GRU and how it writes a part |
 | `src/music/tuned.rs` | the optimiser's knobs, and each genre's settings |
 | `models/` | the networks (`index.tsv` lists them); `docs/app/models/` is the page's copy |
-| `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build, and the page, its worker and its audio worklet |
+| `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build, and the page, its worker and its audio worklet; `docs/app/mp3/`, its MP3 encoder |
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
 | `docs/samples/` | what it made: the page's recordings, with their sources and licences |
@@ -243,4 +243,4 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 - The browser version: any current browser (WebAssembly and AudioWorklet). Making its recordings: ffmpeg with libopus.
 - Only to train the networks or run the optimiser: Python and uv (PyTorch's CPU build; Essentia for the optimiser). Playing needs neither.
 
-GPL v3 or later (see `LICENSE`).
+GPL v3 or later (see `LICENSE`). The page's MP3 encoder in `docs/app/mp3/` is LAME (LGPL 2 or later) and wasm-media-encoders' loader (MIT); its README gives their sources.

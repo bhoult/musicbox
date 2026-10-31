@@ -38,6 +38,43 @@ function put(array, f) {
   return r;
 }
 
+// LAME (mp3/: see its README), loaded from this site the first time a song
+// is exported
+let encoder = null;
+async function lame() {
+  if (!encoder) {
+    importScripts('mp3/WasmMediaEncoder.min.js');
+    const r = await fetch('mp3/mp3.wasm');
+    if (!r.ok) throw new Error(`mp3.wasm: ${r.status}`);
+    encoder = await WasmMediaEncoder.createEncoder('audio/mpeg', await r.arrayBuffer());
+  }
+  return encoder;
+}
+
+// a WAV file's 16-bit stereo at 48 kHz as MP3 frames (192 kb/s: this LAME
+// writes no info frame, which a VBR file needs for players to tell its
+// length), a second at a time
+function mp3(enc, wav) {
+  const pcm = new Int16Array(wav.buffer, 44, (wav.byteLength - 44) >> 1);
+  const frames = pcm.length >> 1;
+  const step = 48000;
+  const [l, r] = [new Float32Array(step), new Float32Array(step)];
+  const out = [];
+  enc.configure({ sampleRate: 48000, channels: 2, bitrate: 192 });
+  for (let at = 0; at < frames; at += step) {
+    const n = Math.min(step, frames - at);
+    // (LAME takes ±1 as ±32767: the samples the desktop's LAME is given)
+    for (let i = 0; i < n; i++) {
+      l[i] = pcm[2 * (at + i)] / 32767;
+      r[i] = pcm[2 * (at + i) + 1] / 32767;
+    }
+    // (each a view of the encoder's memory, copied before it is used again)
+    out.push(enc.encode([l.subarray(0, n), r.subarray(0, n)]).slice());
+  }
+  out.push(enc.finalize().slice());
+  return out;
+}
+
 // one message at a time, in order (the first instantiates the module)
 let queue = Promise.resolve();
 onmessage = (e) => {
@@ -88,11 +125,28 @@ async function handle(m) {
     case 'seek':
       x.mb_seek(w, m.secs);
       break;
+    // a song by its id, alone: an MP3, or a WAV when asked (or when the
+    // encoder will not load)
     case 'export': {
-      const [lo, hi] = seedParts(m.seed);
-      const p = x.mb_song_wav(w, m.id, lo, hi, m.song, m.length, m.opts ?? 0);
-      const bytes = new Uint8Array(x.memory.buffer, p, x.mb_bytes_len(w)).slice();
-      postMessage({ type: 'wav', bytes, name: m.name }, [bytes.buffer]);
+      const p = put(new TextEncoder().encode(m.sid), (q, n) => x.mb_song_wav(w, q, n, m.year));
+      if (!p) {
+        postMessage({ type: 'error', error: `no song ${m.sid}` });
+        break;
+      }
+      const wav = new Uint8Array(x.memory.buffer, p, x.mb_bytes_len(w)).slice();
+      const tag = new Uint8Array(x.memory.buffer, x.mb_tag(w), x.mb_tag_len(w)).slice();
+      let [enc, why] = [null, ''];
+      if (!m.wav) {
+        postMessage({ type: 'say', text: `encoding ${m.sid}.mp3…` });
+        enc = await lame().catch((err) => {
+          why = `no MP3 encoder: ${err.message}`;
+          return null;
+        });
+      }
+      const [blob, name] = enc
+        ? [new Blob([tag, ...mp3(enc, wav)], { type: 'audio/mpeg' }), `${m.sid}.mp3`]
+        : [new Blob([wav], { type: 'audio/wav' }), `${m.sid}.wav`];
+      postMessage({ type: 'saved', blob, name, why });
       break;
     }
     case 'pack': {

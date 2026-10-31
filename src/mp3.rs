@@ -150,6 +150,48 @@ pub fn encode(pcm: &[i16], rate: u32, tags: &Tags) -> Result<Vec<u8>, String> {
     }
 }
 
+/// An ID3v2.3 tag saying `tags`, as LAME writes it (for the browser's MP3s,
+/// whose LAME writes none): each text in ISO-8859-1, or in UTF-16 when it
+/// has a character beyond it; an empty one left out.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn id3v2(tags: &Tags) -> Vec<u8> {
+    // the encoding's byte, then the text
+    let text = |s: &str| -> Vec<u8> {
+        let s = s.replace('\0', "");
+        if s.chars().all(|c| (c as u32) < 0x100) {
+            std::iter::once(0).chain(s.chars().map(|c| c as u8)).collect()
+        } else {
+            [1, 0xFF, 0xFE].into_iter().chain(s.encode_utf16().flat_map(u16::to_le_bytes)).collect()
+        }
+    };
+    let mut frames = Vec::new();
+    let mut frame = |id: &[u8; 4], s: &str, comment: bool| {
+        if s.is_empty() {
+            return;
+        }
+        let t = text(s);
+        // a comment's language and (empty) description go before its text
+        let body: Vec<u8> = if comment {
+            let none: &[u8] = if t[0] == 1 { &[0xFF, 0xFE, 0, 0] } else { &[0] };
+            [&t[..1], b"eng", none, &t[1..]].concat()
+        } else {
+            t
+        };
+        frames.extend_from_slice(id);
+        frames.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        frames.extend_from_slice(&[0, 0]);
+        frames.extend(body);
+    };
+    frame(b"TIT2", &tags.title, false);
+    frame(b"TPE1", &tags.artist, false);
+    frame(b"TALB", &tags.album, false);
+    frame(b"TYER", &tags.year, false);
+    frame(b"COMM", &tags.comment, true);
+    let n = frames.len();
+    let size = [(n >> 21) as u8 & 0x7F, (n >> 14) as u8 & 0x7F, (n >> 7) as u8 & 0x7F, n as u8 & 0x7F];
+    [b"ID3", &[3, 0, 0][..], &size, &frames].concat()
+}
+
 /// The bytes an ID3v2 tag at the start of `b` takes (0 when there is none).
 fn id3v2_len(b: &[u8]) -> usize {
     if b.len() < 10 || &b[..3] != b"ID3" {
@@ -189,5 +231,52 @@ mod tests {
         assert!(frame.windows(4).any(|w| w == b"Xing" || w == b"Info"));
         // two seconds of a sine: VBR's least to its most
         assert!(mp3.len() > 8_000 && mp3.len() < 120_000, "{} bytes", mp3.len());
+    }
+
+    /// An ID3v2 tag's frames: each one's id and what it holds.
+    fn frames(b: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+        let (end, mut at, mut out) = (id3v2_len(b), 10, Vec::new());
+        while at + 10 <= end && b[at] != 0 {
+            let n = u32::from_be_bytes(b[at + 4..at + 8].try_into().expect("4 bytes")) as usize;
+            out.push((b[at..at + 4].try_into().expect("4 bytes"), b[at + 10..at + 10 + n].to_vec()));
+            at += 10 + n;
+        }
+        out
+    }
+
+    fn tags() -> Tags {
+        Tags {
+            title: "ska, song 2 (4/4, 168 bpm, Eb ionian)".into(),
+            artist: "musicbox".into(),
+            album: "musicbox: ska".into(),
+            year: "2026".into(),
+            comment: "song ska.11.0.2: musicbox --export ska.11.0.2 OUT.mp3".into(),
+        }
+    }
+
+    #[test]
+    fn the_browsers_tag_says_what_lames_does() {
+        let tags = tags();
+        let ours = id3v2(&tags);
+        assert_eq!(id3v2_len(&ours), ours.len());
+        let mut ours = frames(&ours);
+        assert_eq!(ours[0], (*b"TIT2", [&[0][..], tags.title.as_bytes()].concat()));
+        assert_eq!(ours[4], (*b"COMM", [&[0][..], b"eng\0", tags.comment.as_bytes()].concat()));
+        // LAME's own, where it is here: the same frames, saying the same
+        let pcm = vec![0i16; 2 * 4800];
+        let Ok(mp3) = encode(&pcm, 48000, &tags) else { return eprintln!("no LAME here: skipped") };
+        let mut lames: Vec<_> = frames(&mp3).into_iter().filter(|f| ours.iter().any(|o| o.0 == f.0)).collect();
+        ours.sort();
+        lames.sort();
+        assert_eq!(ours, lames);
+    }
+
+    #[test]
+    fn a_tag_beyond_latin_1_is_in_utf_16() {
+        let tags = Tags { title: "C♯ dorian".into(), comment: String::new(), ..tags() };
+        let f = frames(&id3v2(&tags));
+        let utf16: Vec<u8> = "C♯ dorian".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(f[0], (*b"TIT2", [&[1, 0xFF, 0xFE][..], &utf16].concat()));
+        assert!(f.iter().all(|f| &f.0 != b"COMM"), "an empty comment left out");
     }
 }

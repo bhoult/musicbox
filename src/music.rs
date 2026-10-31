@@ -16720,14 +16720,36 @@ impl Stream {
     }
 }
 
-/// The `song`th piece of the music `genre` from an engine seeded `seed`
-/// (as `Now` gives them), on its own in the length `length` asks: a WAV
-/// file's bytes (`--export`'s, for the browser).
+/// The song `id` names, on its own, as `--export ID` makes it: a WAV
+/// file's bytes, and what its MP3's tag says (made in `year`; the
+/// browser's export, whose MP3 its page encodes).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub fn song_wav(genre: usize, seed: u64, song: usize, length: f64, opts: Opts) -> Vec<u8> {
-    let id = SongId { music: canon(genre), seed, run: 0, song: song.max(1), length, opts, exact: true };
-    let pcm: Vec<i16> = render_piece(Engine::played_to(&id), length).into_iter().map(to_i16).collect();
-    wav_bytes(&pcm)
+pub fn song_wav(id: &SongId, year: u64) -> (Vec<u8>, mp3::Tags) {
+    let e = Engine::played_to(id);
+    let tags = song_tags(&e, year);
+    let pcm: Vec<i16> = render_piece(e, id.length).into_iter().map(to_i16).collect();
+    (wav_bytes(&pcm), tags)
+}
+
+/// What the MP3 of the piece `e` is at the start of says of it (made in
+/// `year`): its genre, its form, and its id, to make it again.
+fn song_tags(e: &Engine, year: u64) -> mp3::Tags {
+    let (genre, piece, id) = (e.genre, e.song.log.len(), e.id());
+    let (bpm, root, mode, meter) = e.song.log.last().copied().unwrap_or((e.song.bpm, 0, 0, ""));
+    let what = name(genre).to_lowercase();
+    let key = if parts(genre).0 == INDONESIAN {
+        String::new()
+    } else {
+        format!(", {} {}", KEY_NAMES[root.rem_euclid(12) as usize], MODE_NAMES.get(mode).copied().unwrap_or(""))
+    };
+    let again = format!("musicbox --export {id} OUT.mp3");
+    mp3::Tags {
+        title: format!("{what}, song {piece} ({meter}, {bpm:.0} bpm{key})"),
+        artist: "musicbox".into(),
+        album: format!("musicbox: {what}"),
+        year: year.to_string(),
+        comment: format!("song {id}: {again}"),
+    }
 }
 
 /// A song's file name: its id (as `--export` takes it).
@@ -16798,33 +16820,12 @@ fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
 /// Renders the piece `e` begins (see `render_piece`) to `path`: an MP3,
 /// tagged, or a WAV when the name ends in .wav. Ok: its length in seconds.
 fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
-    let (genre, piece, id) = (e.genre, e.song.log.len(), e.id());
-    let (bpm, root, mode, meter) = e.song.log.last().copied().unwrap_or((e.song.bpm, 0, 0, ""));
+    let year = 1970
+        + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() / 31_556_952);
+    let tags = song_tags(&e, year);
     let pcm: Vec<i16> = render_piece(e, length).into_iter().map(to_i16).collect();
     let secs = pcm.len() as f64 / 2.0 / SR as f64;
-    let bytes = if path.to_lowercase().ends_with(".wav") {
-        wav_bytes(&pcm)
-    } else {
-        let what = name(genre).to_lowercase();
-        let key = if parts(genre).0 == INDONESIAN {
-            String::new()
-        } else {
-            format!(", {} {}", KEY_NAMES[root.rem_euclid(12) as usize], MODE_NAMES.get(mode).copied().unwrap_or(""))
-        };
-        let again = format!("musicbox --export {id} OUT.mp3");
-        let year = 1970
-            + std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() / 31_556_952);
-        let tags = mp3::Tags {
-            title: format!("{what}, song {piece} ({meter}, {bpm:.0} bpm{key})"),
-            artist: "musicbox".into(),
-            album: format!("musicbox: {what}"),
-            year: year.to_string(),
-            comment: format!("song {id}: {again}"),
-        };
-        mp3::encode(&pcm, RATE, &tags)?
-    };
+    let bytes = if path.to_lowercase().ends_with(".wav") { wav_bytes(&pcm) } else { mp3::encode(&pcm, RATE, &tags)? };
     std::fs::write(path, bytes).map_err(|e| format!("{path}: {e}"))?;
     Ok(secs)
 }

@@ -35,12 +35,13 @@ pub fn clock(secs: f64) -> String {
 }
 
 /// What JavaScript holds: the music, the buffer it is made into, and the
-/// last text or bytes handed out.
+/// last text, bytes or tag handed out.
 pub struct Web {
     stream: Stream,
     buf: Vec<f32>,
     text: String,
     bytes: Vec<u8>,
+    tag: Vec<u8>,
 }
 
 fn seed(lo: u32, hi: u32) -> u64 {
@@ -59,7 +60,7 @@ unsafe fn web<'a>(w: *mut Web) -> &'a mut Web {
 #[unsafe(no_mangle)]
 pub extern "C" fn mb_new(genre: u32, seed_lo: u32, seed_hi: u32, opts: u32) -> *mut Web {
     let stream = Stream::new(genre as usize, seed(seed_lo, seed_hi), music::Opts::from_code(opts));
-    Box::into_raw(Box::new(Web { stream, buf: Vec::new(), text: String::new(), bytes: Vec::new() }))
+    Box::into_raw(Box::new(Web { stream, buf: Vec::new(), text: String::new(), bytes: Vec::new(), tag: Vec::new() }))
 }
 
 /// The next `frames` (interleaved stereo, 48 kHz): where they are.
@@ -384,26 +385,37 @@ pub extern "C" fn mb_mix_id(primary: u32, drums: i32) -> u32 {
     music::mix_id(primary as usize, (drums >= 0).then_some(drums as usize)) as u32
 }
 
-/// The `song`th piece of `genre` from an engine seeded so (as `mb_now`
-/// gives them), alone, as a WAV file's bytes (their length from
-/// `mb_bytes_len`).
+/// The song whose id is at `p` (`n` bytes of text), alone, as `--export
+/// ID` makes it: a WAV file's bytes (their length from `mb_bytes_len`), and
+/// the ID3v2 tag for its MP3 (made in `year`; `mb_tag`). Null when the id
+/// is none.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` and `n` as `mb_alloc` gave and took them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_song_wav(w: *mut Web, p: *const u8, n: u32, year: u32) -> *const u8 {
+    let w = unsafe { web(w) };
+    let Some(id) = (unsafe { song_id(p, n) }) else { return std::ptr::null() };
+    let (wav, tags) = music::song_wav(&id, year as u64);
+    w.bytes = wav;
+    w.tag = mp3::id3v2(&tags);
+    w.bytes.as_ptr()
+}
+
+/// The tag `mb_song_wav` made (its length from `mb_tag_len`).
 ///
 /// # Safety
 /// `w` is a handle from `mb_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mb_song_wav(
-    w: *mut Web,
-    genre: u32,
-    seed_lo: u32,
-    seed_hi: u32,
-    song: u32,
-    length: f64,
-    opts: u32,
-) -> *const u8 {
-    let w = unsafe { web(w) };
-    w.bytes =
-        music::song_wav(genre as usize, seed(seed_lo, seed_hi), song as usize, length, music::Opts::from_code(opts));
-    w.bytes.as_ptr()
+pub unsafe extern "C" fn mb_tag(w: *mut Web) -> *const u8 {
+    unsafe { web(w) }.tag.as_ptr()
+}
+
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_tag_len(w: *mut Web) -> u32 {
+    unsafe { web(w) }.tag.len() as u32
 }
 
 /// # Safety
