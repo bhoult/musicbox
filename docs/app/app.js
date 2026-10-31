@@ -135,9 +135,12 @@ async function setOpts(change) {
 
 const rec = { index: null, meta: null, have: new Set(), queue: Promise.resolve(), nets: null, tunes: null };
 
+// a genre's groups, and a mix's: both genres', and what the mix plays that
+// neither does
 function groupsFor(primary, drums) {
   const names = [st.genres[primary], drums === null ? null : st.genres[drums]].filter((n) => n);
-  return [...new Set(names.flatMap((n) => rec.index.genres[n] ?? []))].sort((a, b) => a - b);
+  const mix = drums === null ? [] : (rec.index.mixes?.[names.join('+')] ?? []);
+  return [...new Set([...names.flatMap((n) => rec.index.genres[n] ?? []), ...mix])].sort((a, b) => a - b);
 }
 
 function loadRecordings(primary, drums) {

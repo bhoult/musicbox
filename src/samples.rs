@@ -1913,23 +1913,25 @@ pub struct Group {
     pub frames: u32,
 }
 
-/// Picked ids counted (`--web-pack`'s census of what each genre plays).
-static CENSUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static SEEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+thread_local! {
+    /// Picked ids counted on this thread (`--web-pack`'s census of what each
+    /// genre plays, a genre or mix a thread), when counting.
+    static SEEN: std::cell::RefCell<Option<Vec<bool>>> = const { std::cell::RefCell::new(None) };
+}
 
-/// Counting the ids picked on (or off), and those picked since it began.
+/// Counting the ids picked on this thread on (or off), and those picked
+/// since it began.
 pub fn census(on: bool) -> Vec<u16> {
-    CENSUS.store(on, std::sync::atomic::Ordering::Relaxed);
-    let mut v = std::mem::take(&mut *SEEN.lock().unwrap_or_else(|e| e.into_inner()));
-    v.sort_unstable();
-    v.dedup();
-    v
+    let was = SEEN.with(|s| s.replace(on.then(|| vec![false; 1 << 16])));
+    was.map_or_else(Vec::new, |v| (0..=u16::MAX).filter(|&id| v[id as usize]).collect())
 }
 
 fn seen(id: u16) {
-    if CENSUS.load(std::sync::atomic::Ordering::Relaxed) {
-        SEEN.lock().unwrap_or_else(|e| e.into_inner()).push(id);
-    }
+    SEEN.with(|s| {
+        if let Some(v) = s.borrow_mut().as_mut() {
+            v[id as usize] = true;
+        }
+    });
 }
 
 struct Out(Vec<u8>);
@@ -2142,8 +2144,9 @@ impl Bank {
     }
 
     /// Writes the browser's copy into `dir` (pack.bin, raw/N.wav), and
-    /// returns its index (pack.json): the groups, and those each genre in
-    /// `used` (its name, the ids it picked) loads.
+    /// returns its index (pack.json): the groups, those each genre in `used`
+    /// (its name, the ids it picked) loads, and those each mix ("a+b")
+    /// loads beyond its two genres'.
     pub fn web_pack(&self, dir: &Path, used: &[(String, Vec<u16>)]) -> Result<String, String> {
         let raw = dir.join("raw");
         std::fs::create_dir_all(&raw).map_err(|e| format!("{}: {e}", raw.display()))?;
@@ -2303,8 +2306,9 @@ impl Bank {
                 if g + 1 < groups.len() { "," } else { "" }
             );
         }
-        j += "],\"genres\":{\n";
-        for (k, (name, ids)) in used.iter().enumerate() {
+        // each genre's groups and those they need; each mix's that neither
+        // of its genres has (most have none)
+        let need = |ids: &[u16]| {
             let mut gs: Vec<usize> =
                 ids.iter().filter_map(|&id| owner.get((id as usize).checked_sub(1)?).copied().flatten()).collect();
             let mut i = 0;
@@ -2315,9 +2319,24 @@ impl Bank {
             }
             gs.sort_unstable();
             gs.dedup();
-            j += &format!("\"{}\":[{}]{}\n", esc(name), list(&gs), if k + 1 < used.len() { "," } else { "" });
+            gs
+        };
+        let genres: Vec<(&String, Vec<usize>)> =
+            used.iter().filter(|(name, _)| !name.contains('+')).map(|(name, ids)| (name, need(ids))).collect();
+        let mut mixes = Vec::new();
+        for (name, ids) in used.iter().filter(|(name, _)| name.contains('+')) {
+            let has = |part: &str| genres.iter().find(|(g, _)| g.as_str() == part).map_or(&[][..], |(_, gs)| &gs[..]);
+            let (a, b) = name.split_once('+').expect("a mix");
+            let gs: Vec<usize> = need(ids).into_iter().filter(|g| !has(a).contains(g) && !has(b).contains(g)).collect();
+            if !gs.is_empty() {
+                mixes.push((name, gs));
+            }
         }
-        j += "}}\n";
+        let entries = |v: &[(&String, Vec<usize>)]| {
+            let lines: Vec<String> = v.iter().map(|(name, gs)| format!("\"{}\":[{}]", esc(name), list(gs))).collect();
+            lines.join(",\n")
+        };
+        j += &format!("],\"genres\":{{\n{}\n}},\"mixes\":{{\n{}\n}}}}\n", entries(&genres), entries(&mixes));
         Ok(j)
     }
 }
@@ -2725,9 +2744,17 @@ mod tests {
         let b = load(&d).expect("load");
         let out = d.join("web");
         let all: Vec<u16> = (1..=b.insts.len() as u16).collect();
-        let json = b.web_pack(&out, &[("all".into(), all)]).expect("pack");
+        let used = [
+            ("all".into(), all.clone()),
+            ("none".into(), Vec::new()),
+            ("none+all".into(), all.clone()),
+            ("none+none".into(), all),
+        ];
+        let json = b.web_pack(&out, &used).expect("pack");
         let mut p = Partial::new(&std::fs::read(out.join("pack.bin")).expect("pack.bin")).expect("tables");
-        assert!(json.contains("\"all\":["), "{json}");
+        assert!(json.contains("\"all\":[") && json.contains("\"none\":[]"), "{json}");
+        // a mix lists only what neither of its genres has
+        assert!(json.contains("\"mixes\":{\n\"none+none\":[0") && !json.contains("none+all"), "{json}");
         assert_eq!(p.bank.multi("sine", "sus"), None, "nothing named before its group is in");
         assert_eq!(p.find("multi", "sine", "sus"), b.multi("sine", "sus"), "but found by name in the tables");
         assert_eq!(p.find("gm", "Trumpet", ""), b.gm("Trumpet"));

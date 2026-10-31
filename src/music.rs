@@ -16527,12 +16527,28 @@ pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64, opts: Op
     }
 }
 
-/// Songs of each genre `--web-pack` plays to see which recordings it uses
-/// (30 s each: the instruments are chosen as a song begins).
+/// Songs of each genre `--web-pack` plays, each as long as it was written,
+/// to see which recordings it uses; and of each mix, for what it plays
+/// that neither of its genres does (an instrument of the drummer's in a part
+/// its own music never gives it).
 const CENSUS_SONGS: usize = 60;
+const CENSUS_MIX_SONGS: usize = 8;
+
+/// The recordings picked in the first `songs` songs of `id` (a genre or a
+/// mix) from `seed`.
+fn census_of(id: usize, seed: u64, songs: usize) -> Vec<u16> {
+    let mut buf = vec![0.0f32; 2 * CHUNK];
+    samples::census(true);
+    let mut e = Engine::with(id, seed, Opts::default());
+    while e.song.log.len() <= songs {
+        e.render(&mut buf);
+    }
+    samples::census(false)
+}
 
 /// `--web-pack DIR`: the recordings for the browser (`Bank::web_pack`),
-/// with the groups each genre plays, from a census of its songs.
+/// with the groups each genre and mix plays, from a census of its songs (on
+/// as many threads as there are cores to run them).
 pub fn web_pack_cli(dir: &str) {
     if !samples::load_now() {
         eprintln!("musicbox: --web-pack: no recordings to pack");
@@ -16540,19 +16556,36 @@ pub fn web_pack_cli(dir: &str) {
     }
     let bank = samples::bank().expect("loaded");
     let t0 = Instant::now();
-    let mut used = Vec::new();
-    let mut buf = vec![0.0f32; 2 * CHUNK];
-    for g in 0..GENRES.len() {
-        samples::census(true);
-        let mut e = Engine::with(g, 0x5EED + g as u64, Opts::default());
-        e.song.length = 30.0;
-        while e.song.log.len() <= CENSUS_SONGS {
-            e.render(&mut buf);
+    let n = GENRES.len();
+    let mut jobs: Vec<(String, usize, u64, usize)> =
+        (0..n).map(|g| (name(g).to_lowercase(), g, 0x5EED + g as u64, CENSUS_SONGS)).collect();
+    for g in 0..n {
+        for d in (0..n).filter(|&d| d != g) {
+            let id = mix_id(g, Some(d));
+            let label = format!("{}+{}", name(g).to_lowercase(), name(d).to_lowercase());
+            jobs.push((label, id, 0x5EED + id as u64, CENSUS_MIX_SONGS));
         }
-        let ids = samples::census(false);
-        eprintln!("{}: {} instruments in {CENSUS_SONGS} songs", name(g).to_lowercase(), ids.len());
-        used.push((name(g).to_lowercase(), ids));
     }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let used = std::sync::Mutex::new(vec![(String::new(), Vec::new()); jobs.len()]);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
+    std::thread::scope(|sc| {
+        for _ in 0..threads {
+            sc.spawn(|| {
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((label, id, seed, songs)) = jobs.get(k) else { break };
+                    let ids = census_of(*id, *seed, *songs);
+                    if k < n {
+                        eprintln!("{label}: {} instruments in {songs} songs", ids.len());
+                    }
+                    used.lock().unwrap_or_else(|e| e.into_inner())[k] = (label.clone(), ids);
+                }
+            });
+        }
+    });
+    let used = used.into_inner().unwrap_or_else(|e| e.into_inner());
+    eprintln!("musicbox: the census took {:.0} s on {threads} threads", t0.elapsed().as_secs_f64());
     let r = bank.web_pack(Path::new(dir), &used).and_then(|json| {
         let path = Path::new(dir).join("pack.json");
         std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
