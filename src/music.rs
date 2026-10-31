@@ -16588,7 +16588,8 @@ pub fn web_pack_cli(dir: &str) {
     eprintln!("musicbox: the census took {:.0} s on {threads} threads", t0.elapsed().as_secs_f64());
     let r = bank.web_pack(Path::new(dir), &used).and_then(|json| {
         let path = Path::new(dir).join("pack.json");
-        std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))?;
+        samples::copy_licences(Path::new(dir)).map(|n| eprintln!("musicbox: {n} licence and source files copied"))
     });
     match r {
         Ok(()) => eprintln!("musicbox: packed into {dir} in {:.0} s", t0.elapsed().as_secs_f64()),

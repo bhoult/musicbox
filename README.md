@@ -96,7 +96,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 [bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport, the length, the three settings and the keys as the window has them. EXPORT saves a WAV. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
-It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed.
+It starts on the synthesiser. RECORDED (or I) fetches the recordings the genre plays, and those of the genre drumming. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
 ```
 rustup target add wasm32-unknown-unknown
@@ -107,7 +107,7 @@ tools/web-samples.sh docs/samples  # the recordings for the page (needs ffmpeg w
 python3 -m http.server -d docs     # then http://localhost:8000
 ```
 
-`tools/web-samples.sh` runs `musicbox --web-pack`, which plays 60 songs of each genre and 8 of each mix, at their own length, to see which recordings each uses. It writes them out as one stream for each instrument (a recording that two instruments share is stored once). A mix fetches its two genres' recordings and whatever more it was heard to play. Anything a song plays that was never heard plays on the synthesiser in the browser, as a part with no recording does on the desktop. It then compresses each stream to Opus. `web/lib.rs` builds src/music.rs and what it uses unchanged, and exports plain functions over the module's memory (no crates, no bindings generator); `docs/app/` is the page's JavaScript.
+`tools/web-samples.sh` runs `musicbox --web-pack`, which plays 60 songs of each genre and 8 of each mix, at their own length, to see which recordings each uses. It writes them out as one stream for each instrument (a recording that two instruments share is stored once). A mix fetches its two genres' recordings and whatever more it was heard to play. Anything a song plays that was never heard plays on the synthesiser in the browser, as a part with no recording does on the desktop. It then compresses each stream to Opus, and copies the samples' sources and licences in with them. `web/lib.rs` builds src/music.rs and what it uses unchanged, and exports plain functions over the module's memory (no crates, no bindings generator); `docs/app/` is the page's JavaScript.
 
 ## The genres
 
@@ -209,6 +209,7 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 | `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build, and the page, its worker and its audio worklet |
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
+| `docs/samples/` | what it made: the page's recordings, with their sources and licences |
 | `tools/neural/` | the networks' training: `tunes.py` and `TUNES.md` (its sources and credits), `voices.py` |
 | `tools/tune/` | the optimiser |
 | `tools/validate/` | the measuring against real music: the taggers, the renders, the comparison, the references' list |

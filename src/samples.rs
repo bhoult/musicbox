@@ -1686,6 +1686,31 @@ fn config() -> &'static (PathBuf, bool) {
     CONFIG.get_or_init(|| (default_dir(), false))
 }
 
+/// Copies the samples directory's SOURCES.md and licenses/ (each source's
+/// licence and readme, whose notices go wherever its recordings go) into
+/// `out`, for the browser's copy; returns how many files.
+pub fn copy_licences(out: &Path) -> Result<usize, String> {
+    let dir = &config().0;
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    std::fs::copy(dir.join("SOURCES.md"), out.join("SOURCES.md")).map_err(|e| err(&dir.join("SOURCES.md"), e))?;
+    let mut n = 1;
+    let lic = dir.join("licenses");
+    for src in std::fs::read_dir(&lic).map_err(|e| err(&lic, e))? {
+        let src = src.map_err(|e| err(&lic, e))?.path();
+        let Some(name) = src.file_name().filter(|_| src.is_dir()) else { continue };
+        let to = out.join("licenses").join(name);
+        std::fs::create_dir_all(&to).map_err(|e| err(&to, e))?;
+        for f in std::fs::read_dir(&src).map_err(|e| err(&src, e))? {
+            let f = f.map_err(|e| err(&src, e))?.path();
+            if let Some(file) = f.file_name().filter(|_| f.is_file()) {
+                std::fs::copy(&f, to.join(file)).map_err(|e| err(&f, e))?;
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
+}
+
 /// Loads and installs the samples now (once; later calls wait for it):
 /// for `--musicwav` and a video's soundtrack, so a seed gives the same
 /// music. A missing directory is one line on stderr, and the synthesiser.

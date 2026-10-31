@@ -1,5 +1,3 @@
 target
 *.wav
-# the browser's recordings, made by tools/web-samples.sh (hosted apart)
-/docs/samples
 __pycache__/
