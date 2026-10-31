@@ -16,7 +16,7 @@ The networks are small and run on the CPU in musicbox's own code (no libraries, 
 
 ## Tuning: optimised
 
-*The optimiser is still running; its results go here.*
+Six of the twelve genres have a setting: ambient, techno, lo-fi, ska, indonesian and starconflict. The other six play as written either way, because none of the settings found for them held up (below). A mix takes the setting of the genre that writes it, its first: ska+celtic is tuned, celtic+ska is not.
 
 The mix as written has, for each genre, the levels, stereo width, tone and feel its rules give it. The optimiser (`tools/tune/tune.py`) turns 20 knobs on top of those (`src/music/tuned.rs`): each of the 13 channels' level (±6 dB), the master's low and high shelves (±5 dB), the reverb's send (0.5 to 1.8 times), the tempo (0.88 to 1.12 times), the swing (±0.12 of a 16th), how late the hits come (0.4 to 2.5 times) and the stereo spread (0.4 to 1.8 times). The notes are never changed.
 
@@ -26,9 +26,46 @@ It searches with CMA-ES. Each setting is scored on six training songs of 1:30 (s
     + 0.25 × min(the genre's style share, the references' share)
     − 0.05 × Σ (knob − rest)²         (knobs scaled to 0..1)
 
-The best setting is then checked on eight held-out whole songs (seeds 101 to 108) with every measure the validation uses. It is kept only if, on those songs, the mean cosine rises by at least 0.005 with at least 6 of the 8 songs closer, and nothing else gets much worse: the Jamendo tagger's verdict on the genre, how many songs lie nearest their own genre, and the loudness (by 1.5 LU), brightness and energy above 2 kHz (by 25%) against the references'.
+The best setting is then checked on eight held-out whole songs (seeds 101 to 108) with every measure the validation uses. It is kept only if, on those songs, the mean cosine rises by at least 0.005 with at least 6 of the 8 songs closer, and nothing else gets much worse: the Jamendo tagger's verdict on the genre (by 15%), how many songs lie nearest their own genre (by two), and the loudness (by 1.5 LU), spectral centroid and energy above 2 kHz (by 25%) against the references' medians.
 
-**What "optimised" means:** the mix the taggers rate as more like the genre. The taggers are neural networks trained on millions of recordings, but they are not listeners, and they were also the judges of the validation. The held-out songs keep the optimiser from simply fitting six songs, but not from fitting the taggers' taste.
+The first pass searched every knob's full range. A second searched the levels within ±4 dB and the shelves within ±2.5 dB, for the genres where the first had pushed a knob to its limit or failed a judge. Where both were kept, the setting with no knob at a limit wins, then the closer one.
+
+**On the held-out songs**, as written → optimised, with the references' figure in brackets (* the references are stand-ins or few: [the validation](validation.md) says which):
+
+| genre | cosine to the references | songs closer | loudness, LUFS | energy above 2 kHz | kept |
+|---|---|---|---|---|---|
+| ambient | 0.799 → 0.820 | 8 of 8 | −13.4 → −12.9 (−15.4) | 0.8% → 0.8% (0.8%) | yes |
+| techno | 0.792 → 0.865 | 8 of 8 | −13.7 → −13.7 (−10.5) | 2.5% → 2.1% (2.6%) | yes, second pass |
+| synthwave | 0.778 → 0.794 | 8 of 8 | −13.4 → −12.2 (−11.4) | 3.7% → 2.9% (4.8%) | no: darker |
+| lo-fi | 0.731 → 0.770 | 8 of 8 | −13.7 → −14.1 (−12.1) | 0.6% → 0.9% (2.4%) | yes |
+| polka | 0.491 → 0.559 | 8 of 8 | −12.0 → −9.6 (−17.7) | 18.5% → 37.5% (12.8%) | no: brighter, louder |
+| tavern | 0.656 → 0.701 | 7 of 8 | −11.7 → −10.5 (−14.3) | 9.9% → 21.7% (3.4%) | no: brighter |
+| ska | 0.620 → 0.658 | 7 of 8 | −13.0 → −11.7 (−11.0) | 9.4% → 7.7% (8.9%) | yes |
+| mariachi * | 0.469 → 0.507 | 8 of 8 | −11.2 → −9.1 (−13.9) | 10.9% → 25.4% (3.3%) | no: brighter, louder |
+| indonesian | 0.756 → 0.793 | 8 of 8 | −11.3 → −11.0 (−15.9) | 9.6% → 9.1% (5.4%) | yes, second pass |
+| starconflict * | 0.738 → 0.790 | 8 of 8 | −13.2 → −13.5 (−15.8) | 8.1% → 6.5% (5.2%) | yes |
+| celtic | 0.634 → 0.710 | 8 of 8 | −11.2 → −9.7 (−15.8) | 9.0% → 22.5% (10.6%) | no: brighter, louder |
+| western * | 0.778 → 0.778 | 0 of 8 | −14.2 → −14.2 (−14.1) | 5.4% → 5.4% (3.9%) | no: nothing better |
+
+Where both passes failed, the table gives the first. [`tools/tune/RESULTS.md`](../tools/tune/RESULTS.md) has both passes of every genre with all the judges (the style share, the nearest genre, the Jamendo and YAMNet taggers, the centroid) and what each search moved.
+
+**What the six settings do**, mostly (levels in dB):
+- **ambient:** arpeggio −4.1, hats −3.6, effects +2.7, bells −2.6, drone −2.4, pad and kick +2.2.
+- **techno:** cymbals +4.0, hats +3.9, snare +2.9, kick −2.5, bass +2.4, low shelf +2.3, high shelf −2.2.
+- **lo-fi:** keys (the electric piano) −5.9, hats +3.2, effects +2.2, bells −2.0, 4% slower. This one most needs a listen: the piano nearly goes, and the band from 250 Hz to 2 kHz drops from 14% of the energy to 7% (the references have 17%), yet it passed every rule.
+- **ska:** drone +6 (in ska, the piano or the distorted guitar), bass +3.9, keys −3.0, bells +2.8, 9% faster (136 → 150 bpm, inside the references' upper cluster of 129 to 172), hits half as late, stereo narrower.
+- **indonesian:** pad +4.0, keys −3.2, drone +2.8, cymbals +2.6, high shelf +2.5, and a little swing (0.11 of a 16th, which gamelan does not have).
+- **starconflict:** pad +6, lead −3.5, bass −2.7, cymbals +2.6, kick −2.4, stereo 1.4 times as wide.
+
+**What it found:** the taggers favour a brighter, more melody-forward mix than the real recordings have. The searches kept making the same move: lead up, the keys (each genre's comping instrument: lo-fi's electric piano, polka's accordion, ska's guitar chop, tavern's lute, mariachi's vihuela) down by about 3 to 6 dB in 8 of the 10 genres that have them (in one pass or both), and the highs up. Lo-fi and synthwave went the other way, darker than their references. In the first pass, 10 of the 11 genres that moved pushed a knob to its limit. Narrowing the ranges only moved the pins to the new limits (9 of 10). So the pins are what the taggers want, not something another pass would fix: five of the six settings kept still have a knob at a limit, all but ambient's. What stopped the five genres that went too bright or too dark was the signal judges (loudness, centroid and energy above 2 kHz, measured directly), which share nothing with the taggers. The Jamendo tagger reads the same embedding the search optimised, so its agreeing proves little.
+
+The cosine gains did hold out of the search: every genre that moved got 7 or 8 of its 8 held-out songs closer, keeping from about 40% (tavern) to all of its training gain.
+
+**Knobs that do nothing:** the tempo in celtic and indonesian, whose pieces set their own timing (the bpm shown changes, the audio does not); the swing below zero, which the engine stops at straight, in every genre but lo-fi; how late the hits come in techno and polka, which have no lateness. The optimiser finds these for each genre and leaves them at rest.
+
+**What "optimised" means:** the mix the taggers rate as more like the genre. The taggers are neural networks trained on millions of recordings, but they are not listeners, and they were also the judges of the validation. The held-out songs keep the optimiser from simply fitting six songs, but not from fitting the taggers' taste. The signal judges are a check on that taste, not a listener either.
+
+The search took about 10 hours on the CPU (at most one and a half cores, no GPU): 5 h 52 min for the first pass, 3 h 56 min for the second.
 
 ## Tunes: network
 
@@ -129,9 +166,12 @@ All 18 are closer to their recordings than the baseline on every measure, and 15
     systemd-run --user --scope -q -p CPUQuota=250% -p MemoryMax=8G nice -n 10 \
       uv run --script tools/neural/voices.py multi_violin_sus --e2e-minutes 6
 
-    # the optimiser, a genre at a time
+    # the optimiser: a first pass, a narrower second, then the table and TUNED
     systemd-run --user --scope -q -p CPUQuota=150% -p MemoryMax=8G nice -n 10 \
       uv run tools/tune/tune.py run celtic
-    uv run tools/tune/tune.py write
+    systemd-run --user --scope -q -p CPUQuota=150% -p MemoryMax=8G nice -n 10 \
+      uv run tools/tune/tune.py run celtic --tag narrow --range levels=-4:4 --range tilt=-2.5:2.5
+    uv run tools/tune/tune.py table
+    uv run tools/tune/tune.py write && rustfmt src/music/tuned.rs
 
 All of it runs on the CPU (PyTorch's CPU build, Essentia's TensorFlow on the CPU). Each script's opening comment has its options.
