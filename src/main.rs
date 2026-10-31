@@ -41,6 +41,13 @@ pub enum Action {
     Skip,
     Play,
     Replay,
+    /// the song playing from its start, or (in its first seconds) the one
+    /// before it; seconds on (or back) in the song playing, or a point in it;
+    /// a song by its id
+    Back,
+    Seek(f64),
+    SeekTo(f64),
+    Go(music::SongId),
     /// the length asked of each piece: set (seconds; 0: as long as it was
     /// written), or 15 s longer or shorter
     SetLength(f64),
@@ -162,17 +169,19 @@ fn usage() -> ! {
 /// The usage, then exit with `code` (0 when asked for).
 fn help(code: i32) -> ! {
     eprintln!(
-        "usage: musicbox [GENRE[+DRUMS]] [--seed N] [--length L] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
+        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
     );
     eprintln!(
         "       musicbox --wav GENRE[+DRUMS] SECONDS OUT.wav [--seed N] [--length L] [--ending natural|fade|cut] [--fade SECS]"
     );
     eprintln!("       musicbox --export GENRE[+DRUMS] OUT.mp3 [--seed N] [--song K] [--length L]");
+    eprintln!("       musicbox --export ID OUT.mp3");
     eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
     eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
     eprintln!();
     eprintln!("  GENRE: {} (or its number, 0-11)", music::cli_names());
     eprintln!("         two joined with + (polka+techno): the first writes the music, the second drums it");
+    eprintln!("  ID: a song's id, as the displays show it (ska.2817.0.3): that song, and on from it");
     eprintln!("  --gui: open the window (a live equalizer and the genre selector); G opens and closes it too");
     eprintln!("  --eq: the equalizer in the terminal as well; E turns it on and off");
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
@@ -188,9 +197,9 @@ fn help(code: i32) -> ! {
     eprintln!("  --voices: what plays the instruments: the synthesiser, the recordings (the default), or the");
     eprintln!("         network's instruments where it has one, else the recording (I)");
     eprintln!();
-    eprintln!("  keys: left/right genre, up/down drums, space next song, S stop/start, R replay, [ ] length,");
-    eprintln!("        T type a length, X export the song, O tuned, M network tunes, I instruments,");
-    eprintln!("        E equalizer, G window, Q quit");
+    eprintln!("  keys: left/right genre, up/down drums, space next song, B back, , and . 10 s back and on,");
+    eprintln!("        S stop/start, R replay, [ ] length, T type a length, D type a song's id,");
+    eprintln!("        X export the song, O tuned, M network tunes, I instruments, E equalizer, G window, Q quit");
     std::process::exit(code);
 }
 
@@ -206,6 +215,7 @@ fn main() {
     let mut fade = 0.0f64;
     let mut length = 0.0f64;
     let mut genre: Option<usize> = None;
+    let mut from: Option<music::SongId> = None;
     let mut opts = music::Opts::default();
     let mut voices: Option<music::Voices> = None;
     let mut i = 0;
@@ -286,10 +296,22 @@ fn main() {
                 return;
             }
             "-h" | "--help" => help(0),
-            a if !a.starts_with('-') && genre.is_none() => match music::find(a) {
-                Some(g) => genre = Some(g),
-                None => {
-                    eprintln!("musicbox: no genre {a}: one of {}, or two (polka+techno)", music::cli_names());
+            a if !a.starts_with('-') && genre.is_none() => match (music::SongId::parse(a), music::find(a)) {
+                (Some(id), _) => {
+                    // a song's id: the music, seed, length and settings it gives
+                    from = Some(id);
+                    genre = Some(id.music);
+                    seed = Some(id.seed);
+                    length = id.length;
+                    opts = id.opts;
+                    voices = Some(id.opts.voices);
+                }
+                (None, Some(g)) => genre = Some(g),
+                (None, None) => {
+                    eprintln!(
+                        "musicbox: no genre or song {a}: one of {}, or two (polka+techno), or a song's id (ska.2817.0.3)",
+                        music::cli_names()
+                    );
                     std::process::exit(2);
                 }
             },
@@ -312,7 +334,21 @@ fn main() {
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, length, opts);
+    play(id, seed, gui, eq, length, opts, from);
+}
+
+/// How far into a song Back still goes to the one before (seconds).
+const BACK_SECS: f64 = 3.0;
+
+/// Plays the song `id`, the displays' genre, drummer, length and settings
+/// those it asks.
+fn go_to(player: &music::Player, st: &mut State, id: music::SongId) {
+    (st.primary, st.drums) = music::parts(id.music);
+    st.opts = id.opts;
+    st.length = id.length;
+    st.seed = id.seed;
+    player.go(id);
+    player.set_playing(true);
 }
 
 /// Where X saves songs: ~/Music/musicbox.
@@ -322,7 +358,7 @@ fn export_dir() -> std::path::PathBuf {
 }
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
-fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opts) {
+fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opts, from: Option<music::SongId>) {
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -331,7 +367,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
     sdl::no_signal_handlers();
     // the recorded instruments before the first note: every piece played on them
     let sampled = samples::load_now();
-    let player = match music::Player::start(id, seed, opts) {
+    let player = match music::Player::start(id, seed, opts, from) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("musicbox: no sound: {e}");
@@ -371,7 +407,21 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
         for a in acts {
             match a {
                 Action::Quit => QUIT.store(true, Ordering::Relaxed),
-                Action::Skip => player.skip(),
+                // on through the songs gone back from, else a new one
+                Action::Skip => match now.fwd {
+                    Some(id) => go_to(&player, &mut st, id),
+                    None => player.skip(),
+                },
+                Action::Back => {
+                    match now.back {
+                        Some(id) if now.elapsed < BACK_SECS => go_to(&player, &mut st, id),
+                        _ => player.seek(0.0),
+                    }
+                    player.set_playing(true);
+                }
+                Action::Seek(by) => player.seek((now.elapsed + by).max(0.0)),
+                Action::SeekTo(secs) => player.seek(secs),
+                Action::Go(id) => go_to(&player, &mut st, id),
                 Action::Play => player.set_playing(!player.playing()),
                 Action::Replay => {
                     // (the count first: a stopped player starts on the piece's start)
@@ -442,7 +492,8 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, length: f64, opts: music::Opt
             Some(t) => t.draw(&tap, &now, &st, win.is_some()),
             None if now.piece > logged => {
                 logged = now.piece;
-                println!("song {}: {} (seed {seed})", now.piece, term::describe(&now));
+                let id = now.sid.map_or(String::new(), |i| format!(" ({i})"));
+                println!("song {}: {}{id}", now.piece, term::describe(&now));
             }
             None => {}
         }

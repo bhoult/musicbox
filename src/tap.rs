@@ -42,6 +42,11 @@ pub struct Now {
     /// how the piece playing is made (the browser's buttons)
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub opts: crate::music::Opts,
+    /// the song playing, as its id gives it (once it has begun), and the
+    /// songs before and after it in the history (back and forward)
+    pub sid: Option<crate::music::SongId>,
+    pub back: Option<crate::music::SongId>,
+    pub fwd: Option<crate::music::SongId>,
 }
 
 pub struct Tap {

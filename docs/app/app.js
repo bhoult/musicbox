@@ -109,6 +109,64 @@ function replay() {
   setPlaying(true);
 }
 
+// ---- songs by their ids: back and forward through those played, a point
+// in the one playing, any song by its id
+
+// how far into a song Back still goes to the one before, and how far , and
+// . go (seconds)
+const BACK_SECS = 3;
+const SEEK_SECS = 10;
+
+function back() {
+  const n = st.now;
+  if (n?.back && n.elapsed < BACK_SECS) goTo(n.back);
+  else seek(0);
+  setPlaying(true);
+}
+
+// on through the songs gone back from, else a new one
+function next() {
+  if (st.now?.fwd) goTo(st.now.fwd);
+  else worker?.postMessage({ type: 'skip' });
+}
+
+function seek(secs) {
+  worker?.postMessage({ type: 'seek', secs: Math.max(0, secs) });
+}
+
+// the worker reads the id; `adopt` then plays it
+function goTo(text) {
+  worker?.postMessage({ type: 'parse', text: text.trim() });
+}
+
+// a song read from its id: what it plays fetched, the controls set as it
+// asks, then played
+async function adopt(id) {
+  const opts = { tuned: (id.opts & 1) !== 0, netTunes: (id.opts & 2) !== 0, voices: VOICES[id.opts >> 2] ?? 'recorded' };
+  const drums = id.drums < 0 ? null : id.drums;
+  try {
+    if (opts.voices !== 'synth') {
+      await loadRecordings(id.primary, drums);
+      if (opts.voices === 'network') await loadNets();
+    }
+    if (opts.netTunes) await loadTunes();
+  } catch (e) {
+    say(`no recordings: ${e.message}`, 'error');
+    opts.voices = 'synth';
+  }
+  Object.assign(st.opts, opts);
+  st.primary = id.primary;
+  st.drums = drums;
+  st.length = id.length;
+  worker.postMessage({ type: 'go', text: id.text });
+  // (no recordings to be had: the synthesiser's instruments after all)
+  if (optsCode(opts) !== id.opts) worker.postMessage({ type: 'opts', code: optsCode(opts) });
+  drawButtons();
+  drawMade();
+  setLength(id.length);
+  setPlaying(true);
+}
+
 // another way of making it: the song playing made again from its start
 // (the recordings it plays loaded first)
 async function setOpts(change) {
@@ -253,7 +311,7 @@ function drawMade() {
 async function exportSong() {
   const n = st.now;
   if (!n || !module) return;
-  const name = `${n.name}-${n.seed}-${n.song}.wav`;
+  const name = `${n.sid ?? `${n.name}-${n.seed}-${n.song}`}.wav`;
   exporter ??= makeExporter();
   say(`exporting ${name}…`);
   // the recordings the song plays, decoded again for the exporter's engine
@@ -330,6 +388,7 @@ function drawButtons() {
 function drawNow() {
   const n = st.now;
   if (!n) return;
+  drawWhere(n);
   const [p, d] = n.name.split('+');
   $('playing').innerHTML = d ? `${p} <span class="and">+</span> <span class="drums">${d}</span> <span class="and">drums</span>` : p;
   const want = st.drums === null ? st.genres[st.primary] : `${st.genres[st.primary]}+${st.genres[st.drums]}`;
@@ -348,6 +407,23 @@ function drawNow() {
   if (want !== n.name) s += `  →  next: ${want}`;
   line.textContent = s;
   line.className = 'line';
+}
+
+// the song's id (its link plays it again; the address the page is at, too)
+// and where in it the music is
+function drawWhere(n) {
+  if (n.sid && n.sid !== st.sid) {
+    st.sid = n.sid;
+    $('seed').textContent = 'song ';
+    $('sid').textContent = n.sid;
+    $('sid').href = `#${n.sid}`;
+    history.replaceState(null, '', `#${n.sid}`);
+  }
+  const span = Math.max(1, n.length > 0 ? n.length : n.planned);
+  const pos = $('pos');
+  pos.max = String(Math.round(span));
+  if (!st.scrubbing) pos.value = String(Math.min(span, n.elapsed));
+  $('time').textContent = `${clock(st.scrubbing ? Number(pos.value) : n.elapsed)} / ${clock(span)}`;
 }
 
 // ---- the equalizer: LED bars 35 Hz to 16 kHz, each band's loudest bin
@@ -453,21 +529,56 @@ async function start() {
     if (e.data.type === 'genres') {
       st.genres = e.data.genres;
       drawButtons();
+    } else if (e.data.type === 'id') {
+      if (e.data.id) adopt(e.data.id);
+      else say(`not a song's id: ${e.data.text}`, 'error');
+      if (st.waiting && !e.data.id) setPlaying(true);
+      st.waiting = false;
     } else if (e.data.type === 'error') {
       say(e.data.error, 'error');
     }
   };
   st.primary = st.seed % 12;
-  worker.postMessage({ type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode(st.opts), port: ch.port1 }, [ch.port1]);
+  // the address names a song: silence until it is read and fetched, then it
+  const asked = decodeURIComponent(location.hash.slice(1));
+  st.waiting = !!asked;
+  const init = { type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode(st.opts), paused: st.waiting };
+  worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   $('seed').textContent = `seed ${st.seed}`;
   await ctx.resume();
+  if (asked) goTo(asked);
 }
+
+window.addEventListener('hashchange', () => {
+  const asked = decodeURIComponent(location.hash.slice(1));
+  if (worker && asked && asked !== st.sid) goTo(asked);
+});
 
 $('go').onclick = () => start().catch((e) => say(`could not start: ${e.message}`, 'error'));
 $('play').onclick = () => setPlaying(st.stopped);
 $('replay').onclick = replay;
-$('skip').onclick = () => worker?.postMessage({ type: 'skip' });
+$('skip').onclick = next;
+$('back').onclick = back;
+$('rew').onclick = () => seek((st.now?.elapsed ?? 0) - SEEK_SECS);
+$('ff').onclick = () => seek((st.now?.elapsed ?? 0) + SEEK_SECS);
+// the bar held: where it would go shown, gone to when let go
+$('pos').oninput = () => {
+  st.scrubbing = true;
+};
+$('pos').onchange = (e) => {
+  st.scrubbing = false;
+  seek(Number(e.target.value));
+};
+$('goto').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    if (e.target.value.trim()) goTo(e.target.value);
+    e.target.value = '';
+    e.target.blur();
+  } else if (e.key === 'Escape') {
+    e.target.blur();
+  }
+};
 $('export').onclick = exportSong;
 for (const b of document.querySelectorAll('#made button')) {
   const [k, v] = [b.dataset.k, b.dataset.v];
@@ -503,8 +614,12 @@ document.addEventListener('keydown', (e) => {
     ArrowLeft: () => stepGenre(-1),
     ArrowUp: () => stepDrums(1),
     ArrowDown: () => stepDrums(-1),
-    ' ': () => worker.postMessage({ type: 'skip' }),
+    ' ': next,
     s: () => setPlaying(st.stopped),
+    b: back,
+    ',': () => seek((st.now?.elapsed ?? 0) - SEEK_SECS),
+    '.': () => seek((st.now?.elapsed ?? 0) + SEEK_SECS),
+    d: () => $('goto').focus(),
     r: replay,
     x: exportSong,
     o: () => setOpts({ tuned: !st.opts.tuned }),

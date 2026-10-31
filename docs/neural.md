@@ -8,7 +8,7 @@ As it comes, musicbox's music is written by rules (each genre's scales, chords, 
 | tunes | rules | network: celtic's tunes written by a network that learned 1,061 of O'Neill's | M | `--net-tunes` |
 | instruments | recorded (or synth) | network: 18 instruments played by networks that learned their recordings | I | `--voices synth\|recorded\|network` |
 
-They are in every interface: the keys in the terminal and the window, the window's and the page's row of buttons, and the flags for playing, `--wav` and `--export` (an exported MP3's tag gives the flags that make it again). Changing one plays the song playing again from its start, made the new way, so the two can be heard one after the other.
+They are in every interface: the keys in the terminal and the window, the window's and the page's row of buttons, and the flags for playing, `--wav` and `--export` (an exported MP3's tag gives the song's id, which makes it again). Changing one plays the song playing again from its start, made the new way, so the two can be heard one after the other.
 
 With all three as they come, musicbox makes the same bytes as before they existed: 14 genres and mixes, with recordings and without, compared byte for byte against the build before them.
 

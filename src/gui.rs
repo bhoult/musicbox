@@ -1,7 +1,8 @@
-//! The window: what is playing, a live equalizer of what the speakers play
-//! (LED bars with peak markers over a frequency scale), the transport (stop,
-//! replay, next song) with the songs' length on a slider and in a field to
-//! type it into, and the genre selector, a grid of the genres to write the
+//! The window: what is playing and its id, where in the song it is (a bar
+//! to click or drag to a point in it), a live equalizer of what the speakers
+//! play (LED bars with peak markers over a frequency scale), the transport
+//! (stop, back, replay, next song) with the songs' length on a slider and in
+//! a field to type it into, and the genre selector, a grid of the genres to write the
 //! music and one of the drummers, with the window's keys as buttons below.
 //! Drawn on the CPU into a small picture that SDL scales up by a whole number.
 
@@ -45,10 +46,17 @@ pub struct Gui {
     field: Option<(i32, i32, i32, i32)>,
     /// the slider held, and the length it last set
     drag: Option<f64>,
-    /// a length being typed into the field (T, or a click on it), the T's
-    /// own text still to come, and a word about the last one typed
+    /// the song's bar, as last drawn, the seconds it spans, and the point
+    /// in the song it is held at (gone to when let go)
+    bar: Option<(i32, i32, i32, i32)>,
+    span: f64,
+    scrub: Option<f64>,
+    /// a length being typed into the field (T, or a click on it), or a
+    /// song's id (D); the key's own text still to come; and a word about the
+    /// last one typed
     edit: Option<String>,
-    eat_t: bool,
+    edit_song: bool,
+    eat: Option<char>,
     note: Option<(String, std::time::Instant)>,
 }
 
@@ -75,8 +83,12 @@ impl Gui {
             slider: None,
             field: None,
             drag: None,
+            bar: None,
+            span: 0.0,
+            scrub: None,
             edit: None,
-            eat_t: false,
+            edit_song: false,
+            eat: None,
             note: None,
         })
     }
@@ -99,7 +111,14 @@ impl Gui {
         x0 + (f * (x1 - x0 - 1) as f64).round() as i32
     }
 
-    /// A key while a length is typed: Enter sets it, Esc forgets it.
+    /// The point in the song at `x` on its bar (seconds).
+    fn bar_secs(&self, x: i32) -> f64 {
+        let Some((x0, _, x1, _)) = self.bar else { return 0.0 };
+        ((x - x0) as f64 / (x1 - x0 - 1).max(1) as f64).clamp(0.0, 1.0) * self.span
+    }
+
+    /// A key while a length or a song's id is typed: Enter sets it (plays
+    /// the song), Esc forgets it.
     fn edit_key(&mut self, k: i32, v: &mut Vec<Action>) {
         let Some(text) = &mut self.edit else { return };
         match k {
@@ -107,9 +126,17 @@ impl Gui {
                 text.pop();
             }
             sdl::K_RETURN | sdl::K_KP_ENTER => {
-                match parse_length(text) {
-                    Some(x) => v.push(Action::SetLength(x)),
-                    None => self.note = Some((format!("NOT A LENGTH: {text}"), std::time::Instant::now())),
+                let now = std::time::Instant::now();
+                if self.edit_song {
+                    match music::SongId::parse(text) {
+                        Some(id) => v.push(Action::Go(id)),
+                        None => self.note = Some((format!("NOT A SONG ID: {text}"), now)),
+                    }
+                } else {
+                    match parse_length(text) {
+                        Some(x) => v.push(Action::SetLength(x)),
+                        None => self.note = Some((format!("NOT A LENGTH: {text}"), now)),
+                    }
                 }
                 self.edit = None;
             }
@@ -136,8 +163,14 @@ impl Gui {
                             v.push(Action::SetLength(l));
                         }
                     }
+                    if self.scrub.is_some() {
+                        self.scrub = Some(self.bar_secs(x));
+                    }
                 }
-                sdl::SDL_MOUSEBUTTONUP => self.drag = None,
+                sdl::SDL_MOUSEBUTTONUP => {
+                    self.drag = None;
+                    v.extend(self.scrub.take().map(Action::SeekTo));
+                }
                 sdl::SDL_MOUSEWHEEL => {
                     let over = self.mouse.is_some_and(|m| inside(self.slider, m) || inside(self.field, m));
                     if over && e.wheel() != 0 {
@@ -146,10 +179,11 @@ impl Gui {
                 }
                 sdl::SDL_TEXTINPUT => {
                     let t = e.text();
-                    let eat = std::mem::take(&mut self.eat_t) && t.eq_ignore_ascii_case("t");
+                    let eat = self.eat.take().is_some_and(|k| t.eq_ignore_ascii_case(&k.to_string()));
+                    let most = if self.edit_song { 48 } else { 12 };
                     if let Some(text) = self.edit.as_mut().filter(|_| !eat) {
                         for c in t.chars().filter(|c| c.is_ascii_graphic()) {
-                            if text.len() < 12 {
+                            if text.len() < most {
                                 text.push(c);
                             }
                         }
@@ -164,11 +198,17 @@ impl Gui {
                     if !inside(self.field, (x, y)) {
                         self.edit = None;
                     }
-                    if left && inside(self.slider, (x, y)) {
+                    if left && inside(self.bar, (x, y)) {
+                        self.scrub = Some(self.bar_secs(x));
+                    } else if left && inside(self.slider, (x, y)) {
                         let l = self.slider_length(x);
                         self.drag = Some(l);
                         v.push(Action::SetLength(l));
                     } else if left && inside(self.field, (x, y)) {
+                        if self.edit_song {
+                            self.edit = None;
+                        }
+                        self.edit_song = false;
                         self.edit.get_or_insert_with(String::new);
                     } else if let Some(b) = self.buttons.iter().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1)
                     {
@@ -192,12 +232,16 @@ impl Gui {
                             Ok(' ' | '\r' | 'y') => Some(Action::Skip),
                             Ok('s') => Some(Action::Play),
                             Ok('r') => Some(Action::Replay),
+                            Ok('b') => Some(Action::Back),
+                            Ok(',') => Some(Action::Seek(-crate::term::SEEK_SECS)),
+                            Ok('.') => Some(Action::Seek(crate::term::SEEK_SECS)),
                             Ok('x') => Some(Action::Export),
                             Ok('[') => Some(Action::Longer(-1)),
                             Ok(']') => Some(Action::Longer(1)),
-                            Ok('t') => {
+                            Ok(c @ ('t' | 'd')) => {
                                 self.edit = Some(String::new());
-                                self.eat_t = true;
+                                self.edit_song = c == 'd';
+                                self.eat = Some(c);
                                 None
                             }
                             Ok('n' | 'l') => Some(Action::Genre(1)),
@@ -238,7 +282,7 @@ impl Gui {
 
         // what is playing
         self.text(m, m, "MUSICBOX", ACCENT, 2);
-        let mut right = format!("SEED {}", st.seed);
+        let mut right = now.sid.map_or_else(|| format!("SEED {}", st.seed), |id| format!("SONG {id}"));
         if !st.sampled {
             right += "  NO RECORDINGS";
         }
@@ -260,7 +304,11 @@ impl Gui {
             self.note = None;
         }
         let msg = st.msg.as_ref().or(self.note.as_ref());
+        let typing = self.edit.as_ref().filter(|_| self.edit_song);
         let line = match msg {
+            _ if typing.is_some() => {
+                format!("SONG ID: {}_   AS SHOWN AT THE TOP, SKA.2817.0.3: ENTER PLAYS IT, ESC CANCELS", typing.expect("typed").to_uppercase())
+            }
             Some((msg, _)) => msg.clone(),
             None if st.note.is_some() => st.note.as_ref().expect("a note").0.to_uppercase(),
             None if now.bpm > 0.0 => {
@@ -284,7 +332,9 @@ impl Gui {
             }
             None => "STARTING".into(),
         };
-        let color = if msg.is_some() {
+        let color = if typing.is_some() {
+            TEXT
+        } else if msg.is_some() {
             0xFF6B5F
         } else if st.note.is_some() {
             ACCENT
@@ -296,7 +346,29 @@ impl Gui {
             let next = format!("NEXT: {}", music::name(st.id()));
             self.text(w - m - font::width(&next, 1), y, &next, ACCENT, 1);
         }
-        let top = y + 14;
+        let y = y + 14;
+
+        // where in the song it is: a bar to click or drag to a point in it,
+        // between buttons 10 s back and on
+        let bh = 13;
+        let fill = (0x30353F, 0x4A5160);
+        let seek = crate::term::SEEK_SECS;
+        let lw = font::width(",", 1) + font::width("<< 10 S", 1) + ADVANCE + 8;
+        self.button(m, y, lw, bh, "<< 10 S", ",", fill, None, Action::Seek(-seek), None);
+        let rw = font::width(".", 1) + font::width("10 S >>", 1) + ADVANCE + 8;
+        self.button(w - m - rw, y, rw, bh, "10 S >>", ".", fill, None, Action::Seek(seek), None);
+        self.span = if now.length > 0.0 { now.length } else { now.planned }.max(1.0);
+        let at = self.scrub.unwrap_or(now.elapsed).min(self.span);
+        let time = format!("{} / {}", clock(at), clock(self.span));
+        let tw = font::width("00:00 / 00:00", 1);
+        let (bx0, bx1) = (m + lw + 8, (w - m - rw - tw - 16).max(m + lw + 48));
+        self.bar = Some((bx0, y, bx1, y + bh));
+        self.rect(bx0, y + 4, bx1 - bx0, 5, 0x30353F);
+        let hx = bx0 + (at / self.span * (bx1 - bx0 - 1) as f64).round() as i32;
+        self.rect(bx0, y + 4, hx - bx0, 5, if self.scrub.is_some() { AMBER } else { ACCENT });
+        self.rect(hx - 1, y + 1, 3, bh - 2, TEXT);
+        self.text(bx1 + 8, y + 3, &time, DIM, 1);
+        let top = y + bh + 6;
 
         // the selector, from the bottom up
         let gap = 3;
@@ -311,8 +383,9 @@ impl Gui {
 
         // the transport, and the songs' length
         let mut x = m;
-        let keys: [(&str, &str, Action); 4] = [
+        let keys: [(&str, &str, Action); 5] = [
             ("S", if now.stopped { "START" } else { "STOP" }, Action::Play),
+            ("B", "BACK", Action::Back),
             ("R", "REPLAY", Action::Replay),
             ("SPACE", "NEXT SONG", Action::Skip),
             ("X", "EXPORT MP3", Action::Export),
@@ -335,10 +408,10 @@ impl Gui {
         self.slider_track(st, now, sx0, sx1, y, bh);
         let fx = sx1 + 8;
         self.field = Some((fx, y, fx + fw, y + bh));
-        let editing = self.edit.is_some();
+        let editing = self.edit.is_some() && !self.edit_song;
         self.rect(fx, y, fw, bh, if editing { ACCENT } else { 0x30353F });
         self.rect(fx + 1, y + 1, fw - 2, bh - 2, PANEL);
-        let shown = match &self.edit {
+        let shown = match self.edit.as_ref().filter(|_| !self.edit_song) {
             Some(t) => format!("{}_", t.to_uppercase()),
             None => show_length(st.length).to_uppercase(),
         };

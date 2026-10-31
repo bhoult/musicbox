@@ -61,10 +61,17 @@ fn restore() {
     }
 }
 
+/// What is being typed: a length (T), or a song's id (D).
+#[derive(Clone, Copy, PartialEq)]
+enum Typing {
+    Length,
+    Song,
+}
+
 pub struct Term {
     keys: Receiver<Vec<u8>>,
-    /// a length being typed (T), and a word about the last one typed
-    edit: Option<String>,
+    /// what is being typed, and a word about the last one typed
+    edit: Option<(Typing, String)>,
     note: Option<(String, Instant)>,
     /// lines drawn last time (the cursor is on the last of them)
     drawn: usize,
@@ -108,16 +115,19 @@ impl Term {
         Some(Term { keys, edit: None, note: None, drawn: 0, spec: Spectrum::new(48000), last: None })
     }
 
-    /// The keys pressed since last time, as actions; T, and what follows up
-    /// to Enter (or Esc), a length typed.
+    /// The keys pressed since last time, as actions; T or D, and what
+    /// follows up to Enter (or Esc), a length or a song's id typed.
     pub fn keys(&mut self) -> Vec<Action> {
         let b: Vec<u8> = self.keys.try_iter().flatten().collect();
         let mut v = Vec::new();
         let mut i = 0;
         while i < b.len() {
-            let Some(text) = &mut self.edit else {
+            let Some((typing, text)) = &mut self.edit else {
                 if matches!(b[i], b't' | b'T') {
-                    self.edit = Some(String::new());
+                    self.edit = Some((Typing::Length, String::new()));
+                    i += 1;
+                } else if matches!(b[i], b'd' | b'D') {
+                    self.edit = Some((Typing::Song, String::new()));
                     i += 1;
                 } else {
                     let (a, used) = parse_key(&b[i..]);
@@ -128,9 +138,15 @@ impl Term {
             };
             match b[i] {
                 b'\r' | b'\n' => {
-                    match parse_length(text) {
-                        Some(x) => v.push(Action::SetLength(x)),
-                        None => self.note = Some((format!("not a length: {text}"), Instant::now())),
+                    match *typing {
+                        Typing::Length => match parse_length(text) {
+                            Some(x) => v.push(Action::SetLength(x)),
+                            None => self.note = Some((format!("not a length: {text}"), Instant::now())),
+                        },
+                        Typing::Song => match music::SongId::parse(text) {
+                            Some(id) => v.push(Action::Go(id)),
+                            None => self.note = Some((format!("not a song's id: {text}"), Instant::now())),
+                        },
                     }
                     self.edit = None;
                 }
@@ -145,7 +161,9 @@ impl Term {
                 0x7f | 0x08 => {
                     text.pop();
                 }
-                c if c.is_ascii_graphic() && text.len() < 12 => text.push(c as char),
+                c if c.is_ascii_graphic() && text.len() < if *typing == Typing::Song { 48 } else { 12 } => {
+                    text.push(c as char)
+                }
                 _ => {}
             }
             i += 1;
@@ -179,7 +197,7 @@ impl Term {
             l.push(&music::name(st.id()).to_lowercase(), "36");
             l.push(" at the next bar", "2");
         }
-        let right = format!("seed {}", st.seed);
+        let right = now.sid.map_or_else(|| format!("seed {}", st.seed), |id| format!("song {id}"));
         l.right(&right, "2");
         lines.push(l);
 
@@ -189,11 +207,15 @@ impl Term {
         let mut l = Line::new(cols);
         l.push("  ", "");
         match (&self.edit, &st.msg, &self.note) {
-            (Some(text), _, _) => {
-                l.push("length: ", "1");
+            (Some((typing, text)), _, _) => {
+                let (what, hint) = match typing {
+                    Typing::Length => ("length: ", "   3:30, 3.5m, 210s or auto · enter sets it, esc cancels"),
+                    Typing::Song => ("song's id: ", "   as shown, ska.2817.0.3 · enter plays it, esc cancels"),
+                };
+                l.push(what, "1");
                 l.push(text, "1;36");
                 l.push("▏", "36");
-                l.push("   3:30, 3.5m, 210s or auto · enter sets it, esc cancels", "2");
+                l.push(hint, "2");
             }
             (_, Some((m, _)), _) | (_, _, Some((m, _))) => l.push(m, "31"),
             _ if st.note.is_some() => l.push(&st.note.as_ref().expect("a note").0, "36"),
@@ -264,9 +286,11 @@ impl Term {
         }
 
         let mut l = Line::new(cols);
-        l.push("  ←/→ genre  ↑/↓ drums  space next song  ", "2");
-        l.push(if !now.stopped { "s stop  " } else { "s start  " }, "2");
-        l.push("r replay  x export mp3  q quit", "2");
+        l.push("  ←/→ genre  ↑/↓ drums  space next song  b back  , . 10 s back and on", "2");
+        lines.push(l);
+        let mut l = Line::new(cols);
+        l.push(if !now.stopped { "  s stop  " } else { "  s start  " }, "2");
+        l.push("r replay  x export mp3  d type a song's id  q quit", "2");
         lines.push(l);
         let mut l = Line::new(cols);
         l.push("  [ ] length ", "2");
@@ -383,6 +407,9 @@ fn cols() -> usize {
     if ok && w.cols > 0 { w.cols as usize } else { 80 }
 }
 
+/// How far , and . go back and on in a song (seconds).
+pub const SEEK_SECS: f64 = 10.0;
+
 /// The key at the start of `b` as it comes from a terminal (arrows as
 /// escape sequences, a lone escape as itself), and the bytes it took.
 fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
@@ -406,6 +433,9 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b'J' => Some(Action::Drums(-1)),
         b's' | b'S' => Some(Action::Play),
         b'r' | b'R' => Some(Action::Replay),
+        b'b' | b'B' => Some(Action::Back),
+        b',' | b'<' => Some(Action::Seek(-SEEK_SECS)),
+        b'.' | b'>' => Some(Action::Seek(SEEK_SECS)),
         b'x' | b'X' => Some(Action::Export),
         b'[' => Some(Action::Longer(-1)),
         b']' => Some(Action::Longer(1)),
@@ -467,6 +497,7 @@ mod tests {
         assert_eq!(parse_keys(b"eg"), vec![Action::Eq, Action::Window]);
         assert_eq!(parse_keys(b"sr[]"), vec![Action::Play, Action::Replay, Action::Longer(-1), Action::Longer(1)]);
         assert_eq!(parse_keys(b"omi"), vec![Action::Tuned, Action::NetTunes, Action::Voices]);
+        assert_eq!(parse_keys(b"b,."), vec![Action::Back, Action::Seek(-SEEK_SECS), Action::Seek(SEEK_SECS)]);
     }
 
     #[test]

@@ -119,6 +119,70 @@ pub unsafe extern "C" fn mb_set_opts(w: *mut Web, opts: u32) {
     unsafe { web(w) }.stream.set_opts(music::Opts::from_code(opts));
 }
 
+/// The `n` bytes of text at `p`, as a song's id.
+///
+/// # Safety
+/// `p` and `n` as `mb_alloc` gave and took them, filled.
+unsafe fn song_id(p: *const u8, n: u32) -> Option<music::SongId> {
+    // SAFETY: the caller's
+    let b = unsafe { std::slice::from_raw_parts(p, n as usize) };
+    music::SongId::parse(std::str::from_utf8(b).ok()?)
+}
+
+/// The song id at `p` (`n` bytes of text), read: as JSON (its music, the
+/// genre writing it and the drummer, or -1, its seed, length and settings,
+/// and the id as written), or `null` when it is none (its length from
+/// `mb_text_len`).
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` and `n` as `mb_alloc` gave and took them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_song_id(w: *mut Web, p: *const u8, n: u32) -> *const u8 {
+    let w = unsafe { web(w) };
+    w.text = match unsafe { song_id(p, n) } {
+        Some(id) => {
+            let (p, d) = music::parts(id.music);
+            format!(
+                "{{\"id\":{},\"primary\":{p},\"drums\":{},\"seed\":\"{}\",\"length\":{},\"opts\":{},\"text\":\"{id}\"}}",
+                id.music,
+                d.map_or(-1, |d| d as i64),
+                id.seed,
+                id.length,
+                id.opts.code()
+            )
+        }
+        None => "null".into(),
+    };
+    w.text.as_ptr()
+}
+
+/// Plays the song whose id is at `p` (`n` bytes of text) from its start, at
+/// once (as the history kept it if it played lately): 1, or 0 when it is
+/// not an id.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`; `p` and `n` as `mb_alloc` gave and took them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_go(w: *mut Web, p: *const u8, n: u32) -> u32 {
+    let w = unsafe { web(w) };
+    match unsafe { song_id(p, n) } {
+        Some(id) => {
+            w.stream.go(id);
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Plays on from `secs` into the song playing (the start of the bar then).
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_seek(w: *mut Web, secs: f64) {
+    unsafe { web(w) }.stream.seek(secs);
+}
+
 /// Room for `n` bytes in the module's memory, for JavaScript to fill
 /// (aligned for any number); `mb_free` gives it back.
 #[unsafe(no_mangle)]
@@ -264,7 +328,7 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         concat!(
             "{{\"id\":{},\"name\":\"{}\",\"piece\":{},\"bpm\":{:.2},\"key\":\"{}\",\"mode\":\"{}\",\"meter\":\"{}\",",
             "\"section\":\"{}\",\"bar\":{},\"bars\":{},\"stopped\":{},\"elapsed\":{:.3},\"length\":{:.1},",
-            "\"planned\":{:.1},\"seed\":\"{}\",\"song\":{},\"opts\":{}}}"
+            "\"planned\":{:.1},\"seed\":\"{}\",\"song\":{},\"opts\":{},\"sid\":{},\"back\":{},\"fwd\":{}}}"
         ),
         n.id,
         music::name(n.id).to_lowercase(),
@@ -282,9 +346,17 @@ pub unsafe extern "C" fn mb_now(w: *mut Web) -> *const u8 {
         n.planned,
         n.seed,
         n.song,
-        n.opts.code()
+        n.opts.code(),
+        quoted(n.sid),
+        quoted(n.back),
+        quoted(n.fwd)
     );
     w.text.as_ptr()
+}
+
+/// A song's id as a JSON string, or `null`.
+fn quoted(id: Option<music::SongId>) -> String {
+    id.map_or_else(|| "null".into(), |id| format!("\"{id}\""))
 }
 
 /// # Safety

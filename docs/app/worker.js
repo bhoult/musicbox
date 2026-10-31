@@ -50,6 +50,7 @@ async function handle(m) {
       x = (await WebAssembly.instantiate(m.module, {})).exports;
       const [lo, hi] = seedParts(m.seed);
       w = x.mb_new(m.genre, lo, hi, m.opts ?? 0);
+      if (m.paused) x.mb_set_playing(w, 0);
       postMessage({ type: 'genres', genres: JSON.parse(text(x.mb_genres(w))) });
       if (m.port) {
         port = m.port;
@@ -74,6 +75,18 @@ async function handle(m) {
       break;
     case 'opts':
       x.mb_set_opts(w, m.code);
+      break;
+    // a song's id read (for the page to fetch what it needs), then played
+    case 'parse': {
+      const id = put(new TextEncoder().encode(m.text), (p, n) => JSON.parse(text(x.mb_song_id(w, p, n))));
+      postMessage({ type: 'id', id, text: m.text });
+      break;
+    }
+    case 'go':
+      put(new TextEncoder().encode(m.text), (p, n) => x.mb_go(w, p, n));
+      break;
+    case 'seek':
+      x.mb_seek(w, m.secs);
       break;
     case 'export': {
       const [lo, hi] = seedParts(m.seed);
