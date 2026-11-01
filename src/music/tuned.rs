@@ -69,7 +69,7 @@ pub const TUNED: [Option<[f32; NKNOBS]>; 12] = [
         0.49, 0.65,
     ]),
     None, // mariachi
-    // indonesian
+    // gamelan (indonesian, as it was named)
     Some([
         -1.76, 1.13, -0.44, 0.52, 2.55, -1.93, 4.00, -0.57, 0.24, -0.88, -3.19, 2.81, 0.00, 0.15, 2.49, 1.09, 1.00,
         0.11, 1.17, 0.92,

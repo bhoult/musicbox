@@ -15638,7 +15638,7 @@ fn tuning(writer: usize) -> Option<[f32; tuned::NKNOBS]> {
             for line in text.lines() {
                 let f: Vec<&str> = line.split('\t').collect();
                 let (Some(g), Some(k), Some(x)) = (
-                    f.first().and_then(|g| GENRES.iter().position(|n| n.eq_ignore_ascii_case(g.trim()))),
+                    f.first().and_then(|g| find(g.trim()).filter(|&id| id < NG)),
                     f.get(1).and_then(|k| tuned::KNOBS.iter().position(|n| n.0 == k.trim())),
                     f.get(2).and_then(|x| x.trim().parse::<f32>().ok()),
                 ) else {
