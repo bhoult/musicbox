@@ -3,9 +3,10 @@
 //! equalizer of what the speakers play (LED bars with peak markers over a
 //! frequency scale), the transport (back, stop, next song, export) with the
 //! songs' length on a slider and in a field to type it into, how the music is
-//! made, and the genre selector, a grid of the genres to write the music and
-//! one of the drummers, with the window's own buttons below and the volume on
-//! a slider beside them. Whatever the mouse rests on says what it does and
+//! made, and the genre selector, a grid of the genres (a click: the genre to
+//! write the music; a right-click: the one on drums) with the drummer stepped
+//! through at its header's right, the window's own buttons below and the
+//! volume on a slider beside them. Whatever the mouse rests on says what it does and
 //! its keys; ? lists them all.
 //! Drawn on the CPU into a small picture that SDL scales up by a whole number.
 
@@ -521,7 +522,9 @@ impl Gui {
         let bw = (w - 2 * m - (cols - 1) * gap) / cols;
         let rows = |n: i32| (n + cols - 1) / cols;
         let ng = music::GENRES.len() as i32;
-        let height = 2 * (bh + 8) + 2 * 11 + 2 * rows(ng) * (bh + gap) + 6 + bh;
+        // (the settings' row in two when the picture is narrow)
+        let made_lines = if made_width() > w - 2 * m { 2 } else { 1 };
+        let height = 2 * (bh + 8) + (made_lines - 1) * (bh + 4) + 11 + rows(ng) * (bh + gap) + 4 + bh;
         let mut y = h - m - height;
         let bottom = y - 6;
 
@@ -596,18 +599,43 @@ impl Gui {
         let tw = font::width(&shown, 1);
         self.text(fx + (fw - tw).max(4) / 2, y + 3, &shown, if editing { TEXT } else { ACCENT }, 1);
         y += bh + 8;
-        self.made(st, m, y, bh);
+        y = self.made(st, m, w - m, y, bh);
         y += bh + 8;
 
-        // the genres to write the music: the one that does lit, the drummer
-        // underlined
+        // the genres: the one writing the music lit, the one on drums
+        // underlined (a right-click puts a genre there); at the header's
+        // right the drummer, stepped through (the music's own among them)
         let pname = music::GENRES[st.primary];
         let hw = self.text(m, y, "MUSIC BY", DIM, 1);
         self.tip(
             Some((m, y - 2, m + hw, y + 9)),
-            "The genre writing the music: its form, meter, chords and tunes.",
+            "The genre writing the music: its form, meter, chords and tunes. Right-click a genre to put it on drums.",
             "",
         );
+        let drummer = st.drums.map_or("ITS OWN", |d| music::GENRES[d]);
+        let aw = font::width("<", 1) + 8;
+        let nw = music::GENRES.iter().map(|g| font::width(g, 1)).max().unwrap_or(0) + 10;
+        let xr = w - m - aw;
+        let xn = xr - 2 - nw;
+        let xl = xn - 2 - aw;
+        let dw = font::width("DRUMS BY", 1);
+        self.text(xl - 6 - dw, y, "DRUMS BY", DIM, 1);
+        self.tip(
+            Some((xl - 6 - dw, y - 2, xl, y + 9)),
+            "The genre on drums: its beat, fitted to the music's meter, and its kits and effects.",
+            "",
+        );
+        self.button(xl, y - 2, aw, 11, "<", PLAIN, None, Action::Drums(-1), None);
+        self.tip(Some((xl, y - 2, xl + aw, y + 9)), "The genre before on drums.", "DOWN");
+        let fill = if st.drums.is_some() { DRUM } else { PLAIN };
+        self.button(xn, y - 2, nw, 11, drummer, fill, None, Action::SetDrums(None), None);
+        let help = match st.drums {
+            Some(d) => format!("{} drums {pname}'s music. Click: {pname} on its own drums.", music::GENRES[d]),
+            None => format!("{pname} on its own drums. The arrows, or a right-click on a genre, put another on drums."),
+        };
+        self.tip(Some((xn, y - 2, xn + nw, y + 9)), help, "");
+        self.button(xr, y - 2, aw, 11, ">", PLAIN, None, Action::Drums(1), None);
+        self.tip(Some((xr, y - 2, xr + aw, y + 9)), "The next genre on drums.", "UP");
         y += 11;
         for g in 0..ng {
             let (bx, by) = (m + (g % cols) * (bw + gap), y + (g / cols) * (bh + gap));
@@ -624,31 +652,6 @@ impl Gui {
                 format!("Click: {name} writes the music. Right-click: {name} on drums.")
             };
             self.tip(Some((bx, by, bx + bw, by + bh)), help, "LEFT RIGHT");
-        }
-        y += rows(ng) * (bh + gap) + 2;
-
-        // the genres on drums: the one that is lit (the genre writing the
-        // music, on its own drums)
-        let hw = self.text(m, y, "DRUMS BY", DIM, 1);
-        self.tip(
-            Some((m, y - 2, m + hw, y + 9)),
-            "The genre on drums: its beat, fitted to the music's meter, and its kits and effects.",
-            "",
-        );
-        y += 11;
-        let drums = st.drums.unwrap_or(st.primary);
-        for g in 0..ng {
-            let (bx, by) = (m + (g % cols) * (bw + gap), y + (g / cols) * (bh + gap));
-            let g = g as usize;
-            let name = music::GENRES[g];
-            let fill = if g == drums { DRUM } else { PLAIN };
-            self.button(bx, by, bw, bh, name, fill, None, Action::SetDrums(Some(g)), None);
-            let help = if g == st.primary {
-                format!("{name} on its own drums.")
-            } else {
-                format!("{name} on drums under {pname}'s music.")
-            };
-            self.tip(Some((bx, by, bx + bw, by + bh)), help, "UP DOWN");
         }
         y += rows(ng) * (bh + gap) + 4;
 
@@ -769,7 +772,7 @@ impl Gui {
     /// option underlined does something for the music playing (the
     /// optimiser tuned it, a network writes its tunes, network instruments
     /// are in).
-    fn made(&mut self, st: &State, x0: i32, y: i32, bh: i32) {
+    fn made(&mut self, st: &State, x0: i32, x1: i32, mut y: i32, bh: i32) -> i32 {
         use music::Voices;
         let (o, id) = (st.opts, st.id());
         let g = music::GENRES[music::parts(id).0];
@@ -777,7 +780,7 @@ impl Gui {
         let net_tunes = music::has_net_tunes(id);
         let nets = crate::net::count();
         let tuning = format!(
-            "The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, indonesian and starconflict. {}",
+            "The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, gamelan and starconflict. {}",
             if tuned { format!("{g} is one of them.") } else { format!("{g} is not one yet: it plays as written.") }
         );
         let tunes = format!(
@@ -838,6 +841,11 @@ impl Gui {
         ];
         let mut x = x0;
         for (label, help, key, opts) in groups {
+            // a group that would run past the right edge starts a line of its own
+            let gw = font::width(label, 1) + 6 + opts.iter().map(|o| font::width(o.0, 1) + 10).sum::<i32>();
+            if x > x0 && x + gw > x1 {
+                (x, y) = (x0, y + bh + 4);
+            }
             let lw = self.text(x, y + 3, label, DIM, 1);
             self.tip(Some((x, y, x + lw, y + bh)), help, "");
             x += lw + 6;
@@ -859,6 +867,7 @@ impl Gui {
             }
             x += 14;
         }
+        y
     }
 
     /// The volume, at the right between x0 and x1: its name, its slider (a
@@ -995,6 +1004,20 @@ impl Gui {
         font::draw(&mut self.px, self.w, self.h, x, y, s, rgb, scale);
         s.len() as i32 * ADVANCE * scale
     }
+}
+
+/// The settings' row's width on one line: its groups' labels and buttons
+/// (as `made` draws them).
+fn made_width() -> i32 {
+    const MADE: [(&str, &[&str]); 3] = [
+        ("TUNING", &["AS WRITTEN", "OPTIMISED"]),
+        ("TUNES", &["RULES", "NETWORK"]),
+        ("INSTRUMENTS", &["SYNTH", "RECORDED", "NETWORK"]),
+    ];
+    MADE.iter()
+        .map(|(l, bs)| font::width(l, 1) + 6 + bs.iter().map(|b| font::width(b, 1) + 10).sum::<i32>() + 14)
+        .sum::<i32>()
+        - 14
 }
 
 /// An LED's colour at height `t` (0 bottom, 1 top): teal, then amber, then red.

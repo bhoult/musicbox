@@ -2,7 +2,7 @@
 
 Made by Claude Opus 5.5, instigated by [Brandon Hoult](https://hoult.co).
 
-Music made up as it plays, without end, in twelve genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser.
+Music made up as it plays, without end, in 28 genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser.
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
@@ -36,14 +36,14 @@ The terminal shows what is playing and the keys, redrawn in place:
 ```
 ♪ musicbox  celtic with ska drums                         song celtic+ska.2817.0.2.180s
   song 2 · 4/4 reel · 131 bpm · C ionian · main, bar 3 of 8 · 0:07 / 3:00
-  ambient techno synthwave lo-fi polka tavern ska mariachi indonesian starconflict celtic western
+  ‹ polka tavern ska mariachi gamelan starconflict celtic western classical orchestra rock 60s 70s 80s
   ←/→ genre  ↑/↓ drums  space next song  b back  , . 10 s back and on
   s stop  r replay  x export mp3  d type a song's id  q quit
   [ ] length 3:00  - + volume 100%  t type a length  e equalizer  g window
   o tuning as written  m tunes rules  i instruments recorded
 ```
 
-The top line ends with the song's id ([below](#song-ids)). The third line is the genre selector: the genre writing the music is lit, and the drummer is underlined. The song line gives the piece's number, meter and form, tempo, key and mode, its section and bar, how long it has played, and the length asked of it. The last line is how the music is made ([below](#how-it-is-made)), with a note where a choice does nothing for the genre playing (celtic alone has network tunes, for one).
+The top line ends with the song's id ([below](#song-ids)). The third line is the genre selector: the genre writing the music is lit, and the drummer is underlined. A terminal too narrow for all 28 shows a window of them about the genre playing, ‹ marking that some come before. The song line gives the piece's number, meter and form, tempo, key and mode, its section and bar, how long it has played, and the length asked of it. The last line is how the music is made ([below](#how-it-is-made)), with a note where a choice does nothing for the genre playing (celtic alone has network tunes, for one).
 
 | key | |
 | --- | --- |
@@ -80,11 +80,11 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
 - **The transport and the length:** BACK, STOP / START, NEXT SONG and EXPORT MP3 (R replays the song, as BACK does after its first seconds), then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
 - **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
-- **The genre selector:** click a genre under MUSIC BY to write the music, or right-click it to put it on drums. The DRUMS BY row picks the drummer too: the genre writing the music is lit there when it plays its own drums. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q) and KEYS (? or F1), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
+- **The genre selector:** all 28 genres in one grid: click one to write the music, or right-click it to put it on drums (it is underlined there). DRUMS BY, at the right of the grid's heading, steps the drummer with its arrows, as Up and Down do; it says ITS OWN when the genre writing the music plays its own drums, and a click on the drummer's name goes back to them. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q) and KEYS (? or F1), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
 
 The keys work in the window too. The buttons leave them out: rest the mouse on anything and it says what it does and its keys, and ? lists them all. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
 
-The picture is drawn on the CPU and scaled up by a whole number, so its pixel font stays sharp at any size.
+The picture is drawn on the CPU and scaled up by a whole number, so its pixel font stays sharp at any size. It is never smaller than 480 by 300, which everything fits; a smaller window (or a narrow one) wraps the settings onto two lines.
 
 ## Song length
 
@@ -121,9 +121,9 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.3 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. The song's id is in a field beside its name: paste or type one there and press Enter to play it, or COPY LINK for a link that plays it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.5 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the three settings, song ids and the keys as the window has them. The genres are one grid, as in the window, with the drummer chosen from a list beside its heading (or by right-clicking a genre). The song's id is in a field beside its name: paste or type one there and press Enter to play it, or COPY LINK for a link that plays it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
-It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all twelve, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
+It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 26 MB a genre, and 59 MB for all 28, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
 ```
 rustup target add wasm32-unknown-unknown
@@ -148,16 +148,34 @@ python3 -m http.server -d docs     # then http://localhost:8000
 | tavern | medieval jigs, reels and dances on lute, fiddle, whistle, hurdy-gurdy and frame drum |
 | ska | Jamaican first wave, faster and straighter 2-tone, or third-wave ska-punk with choruses of distorted power chords under four horns |
 | mariachi | a son jalisciense, huapango, ranchera valseada or polkeada, or bolero ranchero: violins and trumpets trading the tune in thirds and sixths over vihuela, guitar, guitarrón and harp |
-| indonesian | gamelan in tunings of its own, not the piano's: Javanese court gamelan or Balinese gong kebyar |
+| gamelan | gamelan in tunings of its own, not the piano's: Javanese court gamelan or Balinese gong kebyar (INDONESIAN until 2026-11-01; old ids that say so still play) |
 | starconflict | a space-opera film score in John Williams's manner, its themes the composer's own: a heroic march, a dark march or a battle |
 | celtic | the Irish and Scottish session: sets of reels, jigs and hornpipes, a pipe set, or a slow air on the harp |
 | western | a spaghetti-western score in Ennio Morricone's manner, its tunes the composer's own: the duel, the ride or the lament |
+| classical | a piano sonata's allegro (an Alberti bass under a tune in periods), a string quartet's minuet, or a baroque trio sonata (harpsichord, a walking continuo, two violins in thirds) |
+| orchestra | a Romantic symphony's movement (the violins' theme, the horns' counter-line, a brass chorale, harp and timpani), a Viennese waltz, or a strings' adagio |
+| rock | riff-driven hard rock, an arena anthem with its tune on the lead guitar, or a 12/8 blues shuffle in twelve-bar choruses, with solos |
+| 60s | Motown-style soul (the snare on every beat, a tambourine, a running bass, horns), surf (a tremolo guitar deep in the spring, floor toms), or beat music (a twelve-string's jangle, harmonica) |
+| 70s | disco (four on the floor, octave bass, strings, the funk guitar's 16ths), funk (the one, ghosted snares, clavinet, horns), or soft rock |
+| 80s | synth-pop (a LinnDrum, a gated snare, FM keys, a polysynth's chorus), the power ballad, or new wave |
+| 90s | eurodance (the off-beat bass, piano stabs, builds), grunge (a quiet verse, a loud chorus), or the R&B slow jam |
+| 2000s | pop-punk, the R&B of pizzicato stabs and 808s, or electro-pop |
+| 2010s | big-room EDM (builds and drops), tropical house, trap-pop, or the folk stomp |
+| 2020s | nu-disco, amapiano (the log drum, the shaker, jazz piano), or afrobeats |
+| kenyan | benga (the bass running through the chord, interlocking guitars, the kayamba's shaker), Kenyan rumba, or the Luo nyatiti lyre with its ongeng'o ring and the orutu fiddle |
+| yoga | a meditation (a tanpura, a bansuri's slow tune, singing bowls), a flow (hand drums like a tabla's, kalimba), or a kirtan (harmonium, tabla, manjira) |
+| elevator | bossa nova, lounge swing (brushes, a walking bass, vibraphone), or smooth (Rhodes, alto sax) |
+| corporate | uplifting (piano eighths, pizzicato, a glockenspiel's hook), tech (four on the floor, plucks), or acoustic (strummed guitar, claps, a whistled hook) |
+| worship | the ballad that builds from piano and pad to the band (an electric guitar's dotted-eighth echoes), a 6/8 hymn, or the anthem |
+| praise | gospel (the piano's pushed chords, organ, choir stabs, tambourine and claps), a 12/8 shuffle, or contemporary praise |
 
-The names `keltic`, `gamelan`, `spaghetti-western` and `space-opera` work too.
+The names `indonesian`, `keltic`, `spaghetti-western`, `space-opera`, `orchestral`, `symphony`, `sixties` (and the other decades in words, or as `1960s`), `benga`, `meditation`, `muzak`, `easy listening`, `lounge` and `gospel` work too, and `60's` is `60s`.
 
-The composer writes pieces of about two minutes (60 to 158 bpm). Each piece has its own key, mode, tempo, chord progressions, drum patterns, bassline, melody and a second voice answering it, laid out in sections with something changing every four bars. Within a piece the bass mutates at phrase ends, the melody comes back varied, and filters drift. The next piece usually moves to a neighbouring key. It never loops, though each genre keeps its style.
+The sixteen genres from classical on are each two to four styles, and one composer plays them (`src/music/styled.rs`): a style is a table in `src/music/styles.rs` of its meter, tempo, swing and modes, its chords, its form, its drums' lines, how its bass, chords, arpeggio, tune and second voice go, and its instruments. The tanpura, the singing bowl, the log drum and the 808 are the synthesiser's; every other instrument they play is a recording the first twelve use too.
 
-**Mixes.** Two genres joined with `+` (or chosen with the drummer keys) make a mix. The first writes the music: its form, meter, chords and tunes. The second drums it: its beat fitted to the first's meter, its kits and effects, and a tempo 60% of the way to its own. Each part gets an instrument from each genre. Any of the 132 pairs plays.
+The composer writes pieces of about two minutes (50 to 190 bpm). Each piece has its own key, mode, tempo, chord progressions, drum patterns, bassline, melody and a second voice answering it, laid out in sections with something changing every four bars. Within a piece the bass mutates at phrase ends, the melody comes back varied, and filters drift. The next piece usually moves to a neighbouring key. It never loops, though each genre keeps its style.
+
+**Mixes.** Two genres joined with `+` (or chosen with the drummer keys) make a mix. The first writes the music: its form, meter, chords and tunes. The second drums it: its beat fitted to the first's meter, its kits and effects, and a tempo 60% of the way to its own. Each part gets an instrument from each genre. Any of the 756 pairs plays.
 
 ## Recorded instruments
 
@@ -187,7 +205,7 @@ Three settings change how the music is made. Each is in every interface: a key i
 | tunes | rules, network | M | `--net-tunes` |
 | instruments | synth, recorded, network | I | `--voices synth\|recorded\|network` |
 
-- **Optimised tuning:** each genre's mix as an optimiser set it, so that its songs sound more like the genre's real recordings to the taggers that checked them ([below](#checked-against-real-music)): each channel's level and stereo width, the low and high shelves, the reverb, the tempo (within 12%), the swing, and how late the hits come. The notes stay as written. Six genres have a setting: ambient, techno, lo-fi, ska, indonesian and starconflict. The other six play as written either way, and a mix takes the setting of its first genre. The taggers turned out to like a brighter, more melody-forward mix than the recordings have, so a setting was kept only where the songs' loudness and brightness, measured directly, stayed near the recordings'.
+- **Optimised tuning:** each genre's mix as an optimiser set it, so that its songs sound more like the genre's real recordings to the taggers that checked them ([below](#checked-against-real-music)): each channel's level and stereo width, the low and high shelves, the reverb, the tempo (within 12%), the swing, and how late the hits come. The notes stay as written. Six genres have a setting: ambient, techno, lo-fi, ska, gamelan and starconflict. The other 22 play as written either way, and a mix takes the setting of its first genre. The taggers turned out to like a brighter, more melody-forward mix than the recordings have, so a setting was kept only where the songs' loudness and brightness, measured directly, stayed near the recordings'.
 - **Network tunes:** celtic's reels, jigs, hornpipes, marches and airs written by a small network (a GRU, 0.8 MB) that learned 1,061 tunes from O'Neill's *Music of Ireland* (1903), as the O'Neill's Project transcribed them. The rest of the piece (its chords, form and instruments) is the rules' either way, so only the tunes change. On the statistics of real tunes, the network's are much closer than the rules': the rules repeat the same note a third of the time, where O'Neill's tunes do so 5 to 14% of the time. Other genres keep their rules' tunes.
 - **Network instruments:** 18 held-note instruments (violin, violins, violas, cellos, contrabass, trumpet, trombone, horn, tuba, tenor sax, flute, clarinet, oboe, bassoon, recorder, ocarina and harmonica, with trumpet both held and with vibrato) played by small networks in the manner of DDSP. 250 times a second, a network of 234 KB gives a note's loudness, how it is shared among 48 harmonics, its noise in 16 bands and its vibrato, and oscillators and filtered noise play that. Each learned from its own recordings and plays within half a dB of their level. Everything else plays from the recordings, so the networks need them installed. SYNTH is the synthesiser alone, as `--no-samples` has it.
 
@@ -209,6 +227,7 @@ Each genre was measured against recordings of the real thing, and the clearest d
 - **The references:** 228 recordings, 20 or so a genre (6 for mariachi), all public domain or Creative Commons, from the Internet Archive, Wikimedia Commons, the Free Music Archive and Musopen. For a Williams-style space opera and a Morricone-style western none are open, so those genres were measured against the nearest open music. `tools/validate/refs-manifest.csv` lists each with its source and licence.
 - **The judges:** neural networks trained on millions of real recordings, used only to measure: Essentia's Discogs-EffNet (400 Discogs styles, and an embedding in which similar music lies close), its MTG-Jamendo instrument tagger, and Google's YAMNet (AudioSet's 521 sounds). None of them makes any of musicbox's sound; the optimised tuning ([above](#how-it-is-made)) is the one place their verdict steers it. Alongside them, signal measures: tempo, loudness, the spectrum's balance, stereo width, onsets.
 - **What they found, and what changed:** polka's loud bass drum on every beat made the tagger hear chiptune and synth-pop (polka 0.02): played light under the tuba, as a polka band's drummer does, it reads as polka (0.18, its top style). Synthwave had its pads buried under the bass and kick, and was nearly mono: they came forward, with a polysynth's chorus. Gamelan was over three times as bright as real gamelan; tavern and synthwave too heavy below, lo-fi too muffled, the space opera too bright: each was rebalanced. Mariachi's recorded violins and trumpets had lost the wide vibrato the style has.
+- **Not yet for the sixteen genres from classical on:** they have no references collected and no numbers in docs/validation.md. A first look with the same taggers found the clearest misses, and those changed: a gated synthesiser's snare and 808 hats made 80s read as chiptune, and so did benga's bass running in 16ths high up; flat eighths on the hats made rock read as electronic.
 
 ```
 tools/validate/get-models.sh                 # the taggers (41 MB)
@@ -221,7 +240,7 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 
 | file | contents |
 | --- | --- |
-| `src/music.rs`, `src/music/` | the composer, the synthesiser and the player (fleece's); the later genres each in a file of their own |
+| `src/music.rs`, `src/music/` | the composer, the synthesiser and the player (fleece's); the later genres each in a file of their own; the styled genres' composer (`styled.rs`) and their styles (`styles.rs`) |
 | `src/samples.rs` | the sampler: SoundFont and multisample loading (fleece's) |
 | `src/tap.rs` | what the player hands the displays: the last second of sound and what is playing |
 | `src/spectrum.rs` | the equalizer's FFT and bars |

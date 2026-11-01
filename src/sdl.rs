@@ -267,10 +267,11 @@ impl Window {
     }
 
     /// Sizes the texture to the renderer's output: the largest whole scale
-    /// that leaves it at least `MIN_W` x `MIN_H`.
+    /// that leaves it at least `MIN_W` x `MIN_H` (the window's least, which
+    /// all the genres' buttons, the settings and the transport fit).
     fn fit(&mut self) -> Result<(), String> {
-        const MIN_W: i32 = 400;
-        const MIN_H: i32 = 250;
+        const MIN_W: i32 = 480;
+        const MIN_H: i32 = 300;
         let (mut ow, mut oh) = (0, 0);
         unsafe { SDL_GetRendererOutputSize(self.ren, &mut ow, &mut oh) };
         let (ow, oh) = (ow.max(1), oh.max(1));

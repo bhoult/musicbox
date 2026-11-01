@@ -66,7 +66,7 @@ const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');
 
 // the genres the optimiser tuned (src/music/tuned.rs's TUNED), and those a
 // network writes tunes for
-const TUNED = ['ambient', 'techno', 'lo-fi', 'ska', 'indonesian', 'starconflict'];
+const TUNED = ['ambient', 'techno', 'lo-fi', 'ska', 'gamelan', 'starconflict'];
 const NET_TUNES = ['celtic'];
 
 function say(text, kind = 'note') {
@@ -355,7 +355,7 @@ function drawMade() {
   const help = {
     'tuned:false': ["Each genre's mix as it was written by hand."],
     'tuned:true': [
-      'The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, indonesian and starconflict.',
+      'The mix as an optimiser tuned it against real recordings, for six genres: ambient, techno, lo-fi, ska, gamelan and starconflict.',
       TUNED.includes(g),
       `${G} is one of them.`,
       `${G} is not one yet: it plays as written.`,
@@ -433,11 +433,11 @@ function makeExporter() {
 // ---- the buttons
 
 // the genres to write the music, the one that does lit and the drummer
-// underlined; the genres on drums, the one that is lit (the genre writing
-// the music, on its own drums)
+// underlined (a right-click puts a genre on drums); the drummer chosen from
+// a list too (the music's own drums first)
 function drawButtons() {
   const g = $('genres');
-  const d = $('drummers');
+  const d = $('drums');
   if (!g.children.length) {
     st.genres.forEach((name, i) => {
       const b = Object.assign(document.createElement('button'), { textContent: name });
@@ -448,14 +448,13 @@ function drawButtons() {
         setGenre(st.primary, i);
       };
       g.append(b);
-      const c = Object.assign(document.createElement('button'), { textContent: name });
-      c.dataset.key = '↑ ↓';
-      c.onclick = () => setGenre(st.primary, i);
-      d.append(c);
     });
+    // the drummer: the music's own drums, or any genre's
+    d.append(Object.assign(document.createElement('option'), { value: '', textContent: 'its own' }));
+    st.genres.forEach((name, i) => d.append(Object.assign(document.createElement('option'), { value: i, textContent: name })));
+    d.onchange = () => setGenre(st.primary, d.value === '' ? null : Number(d.value));
   }
   const p = st.genres[st.primary];
-  const drums = st.drums ?? st.primary;
   [...g.children].forEach((b, i) => {
     const [n, N] = [st.genres[i], cap(st.genres[i])];
     b.className = i === st.primary ? 'lit' : i === st.drums ? 'mark' : '';
@@ -466,10 +465,14 @@ function drawButtons() {
         : `${i === st.drums ? `${N} is on drums (underlined). ` : ''}Click: ${n} writes the music. Right-click: ${n} on drums.`,
     );
   });
-  [...d.children].forEach((b, i) => {
-    b.className = i === drums ? 'drum' : '';
-    setHelp(b, i === st.primary ? `${cap(p)} on its own drums.` : `${cap(st.genres[i])} on drums under ${p}'s music.`);
-  });
+  d.value = st.drums ?? '';
+  d.className = st.drums == null ? '' : 'drum';
+  setHelp(
+    d,
+    st.drums == null
+      ? `${cap(p)} on its own drums. Choose a genre to put on drums, or right-click one.`
+      : `${cap(st.genres[st.drums])} drums ${p}'s music. "Its own": ${p} on its own drums.`,
+  );
   drawMade();
 }
 
@@ -746,6 +749,8 @@ setVolume(savedVolume());
 
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+  // (the drummer's list takes its own arrows)
+  if (e.target.tagName === 'SELECT' && e.key.startsWith('Arrow')) return;
   if (e.ctrlKey || e.metaKey || e.altKey || !worker) return;
   const k = e.key;
   const act = {

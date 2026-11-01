@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>musicbox</title>
-<meta name="description" content="Music made up as it plays, without end, in twelve genres and any pair of them: musicbox's composer and synthesiser in the browser.">
+<meta name="description" content="Music made up as it plays, without end, in 28 genres and any pair of them: musicbox's composer and synthesiser in the browser.">
 <style>
   :root {
     --bg: #0e1116;
@@ -85,8 +85,21 @@
   .songid { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
   #sid { width: 32ch; max-width: 60vw; font-size: 13px; color: var(--dim); }
   h2 { font-size: 13px; font-weight: normal; color: var(--dim); margin: 16px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 4px; }
   .grid button { padding: 6px 4px; justify-content: center; }
+  /* the 28 genres in four rows of seven where there is room */
+  @media (min-width: 900px) { #genres { grid-template-columns: repeat(7, 1fr); } }
+  /* the genres' heading, the drummer chosen at its right */
+  .genrehead { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 6px 16px; margin: 16px 0 4px; }
+  .genrehead h2 { margin: 0; }
+  .drumsby { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  select {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--button); border: 0; padding: 5px 8px;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer;
+  }
+  select:hover { background: var(--button-hover); }
+  select.drum { background: var(--drum); }
+  select.drum:hover { background: var(--drum-hover); }
   footer { color: var(--faint); margin-top: 22px; font-size: 13px; }
   footer p { margin: 6px 0; }
   footer button.link { color: var(--accent); text-decoration: underline; }
@@ -192,12 +205,13 @@
       <button data-k="voices" data-v="synth" data-key="I">synth</button><button data-k="voices" data-v="recorded" data-key="I">recorded</button><button data-k="voices" data-v="network" data-key="I">network</button>
     </span>
   </div>
-  <h2 data-help="The genre writing the music: its form, meter, chords and tunes.">music by</h2>
+  <div class="genrehead">
+    <h2 data-help="The genre writing the music: its form, meter, chords and tunes. Right-click a genre to put it on drums.">music by</h2>
+    <label class="drumsby"><span data-help="The genre on drums: its beat, fitted to the music's meter, and its kits and effects.">drums by</span><select id="drums" data-key="↑ ↓"></select></label>
+  </div>
   <div class="grid" id="genres"></div>
-  <h2 data-help="The genre on drums: its beat, fitted to the music's meter, and its kits and effects.">drums by</h2>
-  <div class="grid" id="drummers"></div>
   <footer>
-    <p>Music made up as it plays, without end, in twelve genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, here as WebAssembly, and recordings of real instruments play it, fetched as each genre needs them. SYNTH plays a small synthesiser instead, with nothing to fetch. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, indonesian, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
+    <p>Music made up as it plays, without end, in 28 genres and any pair of them. As it starts, no AI model makes the sound or the music and no song is sampled: a composer of ordinary code (each genre's scales, chords, rhythms and forms, chosen among at random) writes it, here as WebAssembly, and recordings of real instruments play it, fetched as each genre needs them. SYNTH plays a small synthesiser instead, with nothing to fetch. Three settings bring in what was learned from real music: OPTIMISED, the mixes of six genres (ambient, techno, lo-fi, ska, gamelan, starconflict) as an optimiser tuned them against real recordings; NETWORK tunes, celtic tunes by a small network that learned O'Neill's <i>Music of Ireland</i>; NETWORK instruments, 18 instruments played by small networks that learned their recordings. <a href="https://github.com/bhoult/musicbox/blob/main/docs/neural.md">How each was made</a>.</p>
     <p>Hover over anything for what it does and its key, or see <button id="keys2" class="link">all the keys</button> (press ?). Each song has an id (beside its name, and in the address): it plays that song again, here or in the desktop app. GPL-3.0.</p>
   </footer>
 </main>
@@ -227,7 +241,7 @@
 <div id="start">
   <div class="box">
     <h1>musicbox</h1>
-    <p>Endless music in twelve genres, made up as it plays.</p>
+    <p>Endless music in 28 genres, made up as it plays.</p>
     <p class="small">It fetches each genre's recorded instruments as it needs them, 4 to 26 MB a genre.</p>
     <button id="go">▶ play</button>
   </div>

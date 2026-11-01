@@ -1,4 +1,4 @@
-//! musicbox: music made up as it plays, without end, in twelve genres and any
+//! musicbox: music made up as it plays, without end, in 28 genres and any
 //! pair of them, shown on the command line, with a window (a live equalizer
 //! and a genre selector) to open alongside.
 
@@ -193,7 +193,7 @@ fn help(code: i32) -> ! {
     eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
     eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
     eprintln!();
-    eprintln!("  GENRE: {} (or its number, 0-11)", music::cli_names());
+    eprintln!("  GENRE: {} (or its number, 0-{})", music::cli_names(), music::GENRES.len() - 1);
     eprintln!("         two joined with + (polka+techno): the first writes the music, the second drums it");
     eprintln!("  ID: a song's id, as the displays show it (ska.2817.0.3): that song, and on from it");
     eprintln!("  --gui: open the window (a live equalizer and the genre selector); G opens and closes it too");
