@@ -38,6 +38,13 @@ let gain = null;
 
 // where the recordings are (tools/web-samples.sh makes them)
 const SAMPLES = 'samples/';
+// the stamps tools/stamp-page.sh puts on this script's address, one for the
+// page's files and one for the recordings: each file is asked for with its
+// stamp, so an older copy a browser kept of one is never used with the rest
+// (a new app.js under an old index.html drew no controls that worked)
+const STAMPS = new URL(document.currentScript.src).searchParams;
+const V = `?v=${STAMPS.get('v') ?? ''}`;
+const R = `?r=${STAMPS.get('r') ?? ''}`;
 
 // a length as typed: auto (or 0); M:SS; 3.5m or 210s; a bare number in
 // minutes under 30, else seconds (as the desktop app reads it)
@@ -255,7 +262,7 @@ function loadRecordings(primary, drums) {
 
 async function tables() {
   if (rec.index) return;
-  const [j, b] = await Promise.all([fetch(`${SAMPLES}pack.json`), fetch(`${SAMPLES}pack.bin`)]);
+  const [j, b] = await Promise.all([fetch(`${SAMPLES}pack.json${V}`), fetch(`${SAMPLES}pack.bin${V}`)]);
   if (!j.ok || !b.ok) throw new Error(`the tables did not load (${j.status} ${b.status})`);
   rec.index = await j.json();
   rec.meta = await b.arrayBuffer();
@@ -267,7 +274,7 @@ async function decodeGroup(g) {
   const info = rec.index.groups[g];
   const pcm = new Int16Array(info.frames);
   if (!info.frames) return pcm;
-  const r = await fetch(`${SAMPLES}${info.file}`);
+  const r = await fetch(`${SAMPLES}${info.file}${R}`);
   if (!r.ok) throw new Error(`${info.name}: ${r.status}`);
   const f = (await audio.decodeAudioData(await r.arrayBuffer())).getChannelData(0);
   const n = Math.min(f.length, pcm.length);
@@ -316,12 +323,12 @@ async function fetchRecordings(primary, drums) {
 async function loadTunes() {
   if (rec.tunes) return;
   rec.tunes = [];
-  const r = await fetch('app/models/index.tsv');
+  const r = await fetch(`app/models/index.tsv${V}`);
   const lines = r.ok ? (await r.text()).split('\n').filter((l) => /^tunes\t/.test(l)) : [];
   for (const line of lines) {
     const [, genre, , file] = line.split('\t');
     const g = st.genres.indexOf(genre.trim());
-    const f = await fetch(`app/models/${file.trim()}`);
+    const f = await fetch(`app/models/${file.trim()}${V}`);
     if (g < 0 || !f.ok) continue;
     const bytes = await f.arrayBuffer();
     rec.tunes.push({ genre: g, bytes });
@@ -334,11 +341,11 @@ async function loadTunes() {
 // file), once, after the tables
 async function loadNets() {
   if (rec.nets) return;
-  const r = await fetch('app/models/index.tsv');
+  const r = await fetch(`app/models/index.tsv${V}`);
   const lines = r.ok ? (await r.text()).split('\n').filter((l) => /^(multi|gm)\t/.test(l)) : [];
   rec.nets = [];
   for (const line of lines) {
-    const f = await fetch(`app/models/${line.split('\t')[3].trim()}`);
+    const f = await fetch(`app/models/${line.split('\t')[3].trim()}${V}`);
     if (!f.ok) continue;
     const bytes = await f.arrayBuffer();
     rec.nets.push({ line, bytes });
@@ -412,7 +419,7 @@ async function exportSong(wav = false) {
 }
 
 function makeExporter() {
-  const ex = new Worker('app/worker.js');
+  const ex = new Worker(`app/worker.js${V}`);
   ex.groups = new Set();
   ex.onmessage = (e) => {
     if (e.data.type === 'error') say(e.data.error, 'error');
@@ -601,10 +608,10 @@ async function start() {
   const ctx = (audio = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' }));
   // (a server that sends the module as anything but application/wasm:
   // compiled from its bytes instead)
-  module = await WebAssembly.compileStreaming(fetch('app/musicbox.wasm')).catch(async () =>
-    WebAssembly.compile(await (await fetch('app/musicbox.wasm')).arrayBuffer()),
+  module = await WebAssembly.compileStreaming(fetch(`app/musicbox.wasm${V}`)).catch(async () =>
+    WebAssembly.compile(await (await fetch(`app/musicbox.wasm${V}`)).arrayBuffer()),
   );
-  await ctx.audioWorklet.addModule('app/worklet.js');
+  await ctx.audioWorklet.addModule(`app/worklet.js${V}`);
   const node = new AudioWorkletNode(ctx, 'musicbox', { numberOfInputs: 0, outputChannelCount: [2] });
   analyser = Object.assign(ctx.createAnalyser(), { fftSize: 8192, smoothingTimeConstant: 0 });
   gain = ctx.createGain();
@@ -615,11 +622,12 @@ async function start() {
   node.port.onmessage = (e) => {
     st.now = JSON.parse(e.data.now);
   };
-  worker = new Worker('app/worker.js');
+  worker = new Worker(`app/worker.js${V}`);
   const ch = new MessageChannel();
   worker.onmessage = (e) => {
     if (e.data.type === 'genres') {
       st.genres = e.data.genres;
+      st.primary = e.data.genre;
       drawButtons();
       // (the genres known: what the first song plays can be fetched)
       if (!st.waiting) begin();
@@ -632,13 +640,12 @@ async function start() {
       say(e.data.error, 'error');
     }
   };
-  st.primary = st.seed % 12;
   // silence till the first song is ready: the one the address names, read
   // and what it plays fetched; else a new one, made on the synthesiser
   // until its recordings are in
   const asked = decodeURIComponent(location.hash.slice(1));
   st.waiting = !!asked;
-  const init = { type: 'init', module, genre: st.primary, seed: st.seed, opts: optsCode({ ...st.opts, voices: 'synth' }), paused: true };
+  const init = { type: 'init', module, genre: null, seed: st.seed, opts: optsCode({ ...st.opts, voices: 'synth' }), paused: true };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   await ctx.resume();

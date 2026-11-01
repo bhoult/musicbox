@@ -131,8 +131,11 @@ cargo build --release --target wasm32-unknown-unknown --manifest-path web/Cargo.
 cp web/target/wasm32-unknown-unknown/release/musicbox_web.wasm docs/app/musicbox.wasm
 cp models/index.tsv models/*.mbn models/*.mbt docs/app/models/
 tools/web-samples.sh docs/samples  # the recordings for the page (needs ffmpeg with libopus)
+tools/stamp-page.sh                # after any change in docs/app or docs/samples
 python3 -m http.server -d docs     # then http://localhost:8000
 ```
+
+`tools/stamp-page.sh` writes a hash of the page's files, and one of the recordings, into the address `docs/index.html` loads `app/app.js` from, and the page asks for every file with them. GitHub Pages lets a browser keep a copy of each file for 10 minutes, so without the stamps a new `index.html` could run with the `app.js` from before, and its controls would not work.
 
 `tools/web-samples.sh` runs `musicbox --web-pack`, which plays 60 songs of each genre and 8 of each mix, at their own length, to see which recordings each uses. It writes them out as one stream for each instrument (a recording that two instruments share is stored once). A mix fetches its two genres' recordings and whatever more it was heard to play. Anything a song plays that was never heard plays on the synthesiser in the browser, as a part with no recording does on the desktop. It then compresses each stream to Opus, and copies the samples' sources and licences in with them. `web/lib.rs` builds src/music.rs and what it uses unchanged, and exports plain functions over the module's memory (no crates, no bindings generator); `docs/app/` is the page's JavaScript.
 
@@ -255,6 +258,7 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 | `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build, and the page, its worker and its audio worklet; `docs/app/mp3/`, its MP3 encoder |
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
+| `tools/stamp-page.sh` | puts a hash of the page's files on the addresses it loads them from |
 | `docs/samples/` | what it made: the page's recordings, with their sources and licences |
 | `tools/neural/` | the networks' training: `tunes.py` and `TUNES.md` (its sources and credits), `voices.py` |
 | `tools/tune/` | the optimiser |

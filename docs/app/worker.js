@@ -43,8 +43,8 @@ function put(array, f) {
 let encoder = null;
 async function lame() {
   if (!encoder) {
-    importScripts('mp3/WasmMediaEncoder.min.js');
-    const r = await fetch('mp3/mp3.wasm');
+    importScripts(`mp3/WasmMediaEncoder.min.js${location.search}`);
+    const r = await fetch(`mp3/mp3.wasm${location.search}`);
     if (!r.ok) throw new Error(`mp3.wasm: ${r.status}`);
     encoder = await WasmMediaEncoder.createEncoder('audio/mpeg', await r.arrayBuffer());
   }
@@ -86,9 +86,11 @@ async function handle(m) {
     case 'init': {
       x = (await WebAssembly.instantiate(m.module, {})).exports;
       const [lo, hi] = seedParts(m.seed);
-      w = x.mb_new(m.genre, lo, hi, m.opts ?? 0);
+      // (no genre: the seed's, among them all, as the desktop picks one)
+      const genre = m.genre ?? m.seed % x.mb_genre_count();
+      w = x.mb_new(genre, lo, hi, m.opts ?? 0);
       if (m.paused) x.mb_set_playing(w, 0);
-      postMessage({ type: 'genres', genres: JSON.parse(text(x.mb_genres(w))) });
+      postMessage({ type: 'genres', genres: JSON.parse(text(x.mb_genres(w))), genre });
       if (m.port) {
         port = m.port;
         port.onmessage = (ev) => produce(ev.data.need);

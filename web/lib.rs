@@ -377,6 +377,12 @@ pub unsafe extern "C" fn mb_genres(w: *mut Web) -> *const u8 {
     w.text.as_ptr()
 }
 
+/// How many genres there are (`mb_genres` names them).
+#[unsafe(no_mangle)]
+pub extern "C" fn mb_genre_count() -> u32 {
+    music::GENRES.len() as u32
+}
+
 /// A mix's id: `primary` writing the music, `drums` (-1: none) drumming it.
 #[unsafe(no_mangle)]
 pub extern "C" fn mb_mix_id(primary: u32, drums: i32) -> u32 {
