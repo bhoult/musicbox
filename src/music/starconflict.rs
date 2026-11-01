@@ -373,7 +373,7 @@ fn sw_violins_spic(r: &mut Rng) -> Patch {
     rec(sw_spic_synth(r), multi_or("violins", "stac", "Strings Pizzicato"), 72.0)
 }
 
-fn sw_violas_spic(r: &mut Rng) -> Patch {
+pub(super) fn sw_violas_spic(r: &mut Rng) -> Patch {
     rec(sw_spic_synth(r), multi_or("violas", "stac", "Viola"), 62.0)
 }
 
@@ -389,11 +389,11 @@ pub(super) fn sw_tremolo(r: &mut Rng) -> Patch {
 }
 
 /// The string ensemble held (the SoundFont's two, the fast one brighter).
-fn sw_ensemble(r: &mut Rng) -> Patch {
+pub(super) fn sw_ensemble(r: &mut Rng) -> Patch {
     rec(sw_strings_synth(r), samples::gm("Strings Fast"), 62.0)
 }
 
-fn sw_violas(r: &mut Rng) -> Patch {
+pub(super) fn sw_violas(r: &mut Rng) -> Patch {
     rec(sw_low_strings_synth(r), multi_or("violas", "sus", "Viola"), 62.0)
 }
 
@@ -402,7 +402,7 @@ pub(super) fn sw_cellos(r: &mut Rng) -> Patch {
     rec(sw_low_strings_synth(r), multi_or("cellos", "auto", "Cello"), 48.0)
 }
 
-fn sw_contrabass(r: &mut Rng) -> Patch {
+pub(super) fn sw_contrabass(r: &mut Rng) -> Patch {
     let p = Patch { cutoff: 900.0, keytrack: 1.0, ..sw_low_strings_synth(r) };
     rec(p, multi_or("contrabass", "sus", "Contrabass"), 40.0)
 }
@@ -412,16 +412,16 @@ fn sw_brass_synth(r: &mut Rng) -> Patch {
 }
 
 /// The brass section held (the SoundFont's), the horns' section.
-fn sw_brass(r: &mut Rng) -> Patch {
+pub(super) fn sw_brass(r: &mut Rng) -> Patch {
     rec(sw_brass_synth(r), samples::gm("Brass Section"), 60.0)
 }
 
-fn sw_horns(r: &mut Rng) -> Patch {
+pub(super) fn sw_horns(r: &mut Rng) -> Patch {
     rec(sw_brass_synth(r), samples::gm("French Horns"), 58.0)
 }
 
 /// The low brass's chords: trombones (CC0).
-fn sw_trombones(r: &mut Rng) -> Patch {
+pub(super) fn sw_trombones(r: &mut Rng) -> Patch {
     let p = Patch { unison: 2, detune: 6.0, width: 0.4, ..trombone_synth(r) };
     rec(p, multi_or("trombone", "sus", "Trombone"), 52.0)
 }
@@ -438,11 +438,11 @@ fn sw_oboe_synth(r: &mut Rng) -> Patch {
     }
 }
 
-fn sw_oboe(r: &mut Rng) -> Patch {
+pub(super) fn sw_oboe(r: &mut Rng) -> Patch {
     rec(sw_oboe_synth(r), multi_or("oboe", "auto", "Oboe"), 72.0)
 }
 
-fn sw_bassoon(r: &mut Rng) -> Patch {
+pub(super) fn sw_bassoon(r: &mut Rng) -> Patch {
     let p = Patch { vowel: 4, cutoff: r.range(900.0, 1200.0), ..sw_oboe_synth(r) };
     rec(p, multi_or("bassoon", "auto", "Bassoon"), 48.0)
 }
@@ -524,7 +524,7 @@ pub(super) fn sw_kit_snare_synth(r: &mut Rng) -> Vec<DrumPatch> {
 }
 
 /// The concert snare (CC0, six layers), or the field drum's (the western's).
-fn sw_kit_snare(r: &mut Rng) -> Vec<DrumPatch> {
+pub(super) fn sw_kit_snare(r: &mut Rng) -> Vec<DrumPatch> {
     let id = samples::multi("snare", "hit").or_else(|| samples::drum("Orchestra Kit", 38));
     rec_kit(sw_kit_snare_synth(r), &[id, id])
 }
@@ -548,7 +548,7 @@ fn sw_kit_triangle_synth(r: &mut Rng) -> Vec<DrumPatch> {
     vec![DrumPatch { f1: t.f0, ..t }]
 }
 
-fn sw_kit_triangle(r: &mut Rng) -> Vec<DrumPatch> {
+pub(super) fn sw_kit_triangle(r: &mut Rng) -> Vec<DrumPatch> {
     rec_kit(sw_kit_triangle_synth(r), &[samples::multi("triangle", "hit")])
 }
 
@@ -588,7 +588,7 @@ pub(super) fn sw_kit_cymbals_synth(r: &mut Rng) -> Vec<DrumPatch> {
 }
 
 /// The clash cymbals, the suspended cymbal's swells, the gong (CC0).
-fn sw_kit_cymbals(r: &mut Rng) -> Vec<DrumPatch> {
+pub(super) fn sw_kit_cymbals(r: &mut Rng) -> Vec<DrumPatch> {
     let v = sw_kit_cymbals_synth(r);
     let swell = |a: &str| samples::multi("cymbal", a).or_else(|| samples::gm("Reverse Cymbal"));
     let mut k = rec_kit(

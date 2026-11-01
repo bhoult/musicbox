@@ -396,7 +396,7 @@ impl Song {
         self.lifts.clear();
         self.pivot = None;
         let guest = self.guest;
-        let pull = |bpm: f64| guest.map_or(bpm, |g| bpm + 0.6 * (MID_BPM[g] - bpm));
+        let pull = |bpm: f64| guest.map_or(bpm, |g| bpm + 0.6 * (mid_bpm(g) - bpm));
         // the network's tunes in the rules' place, where it knows the type
         let net = if self.opts.net_tunes { crate::tunes::celtic() } else { None };
         let r = &mut self.rng;

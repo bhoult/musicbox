@@ -44,10 +44,27 @@ pub const GENRES: &[&str] = &[
     "TAVERN",
     "SKA",
     "MARIACHI",
-    "INDONESIAN",
+    "GAMELAN",
     "STARCONFLICT",
     "CELTIC",
     "WESTERN",
+    // the styled genres (styled.rs, styles.rs)
+    "CLASSICAL",
+    "ORCHESTRA",
+    "ROCK",
+    "60S",
+    "70S",
+    "80S",
+    "90S",
+    "2000S",
+    "2010S",
+    "2020S",
+    "KENYAN",
+    "YOGA",
+    "ELEVATOR",
+    "CORPORATE",
+    "WORSHIP",
+    "PRAISE",
 ];
 const AMBIENT: usize = 0;
 const TECHNO: usize = 1;
@@ -61,24 +78,65 @@ const INDONESIAN: usize = 8;
 const STARCONFLICT: usize = 9;
 pub const CELTIC: usize = 10;
 const WESTERN: usize = 11;
-/// Other names `find` takes for a genre (squashed, as it compares them).
+const CLASSICAL: usize = 12;
+const ORCHESTRA: usize = 13;
+const ROCK: usize = 14;
+const SIXTIES: usize = 15;
+const SEVENTIES: usize = 16;
+const EIGHTIES: usize = 17;
+const NINETIES: usize = 18;
+const NOUGHTIES: usize = 19;
+const TENS: usize = 20;
+const TWENTIES: usize = 21;
+const KENYAN: usize = 22;
+const YOGA: usize = 23;
+const ELEVATOR: usize = 24;
+const CORPORATE: usize = 25;
+const WORSHIP: usize = 26;
+const PRAISE: usize = 27;
+/// Other names `find` takes for a genre (squashed, as it compares them;
+/// gamelan's songs were INDONESIAN's once, so their ids still say so).
 const ALIASES: &[(&str, &str)] = &[
     ("KELTIC", "CELTIC"),
     ("SPAGHETTIWESTERN", "WESTERN"),
     ("SPAGHETTI", "WESTERN"),
-    ("GAMELAN", "INDONESIAN"),
+    ("INDONESIAN", "GAMELAN"),
     ("SPACEOPERA", "STARCONFLICT"),
+    ("ORCHESTRAL", "ORCHESTRA"),
+    ("SYMPHONY", "ORCHESTRA"),
+    ("SIXTIES", "60S"),
+    ("1960S", "60S"),
+    ("SEVENTIES", "70S"),
+    ("1970S", "70S"),
+    ("EIGHTIES", "80S"),
+    ("1980S", "80S"),
+    ("NINETIES", "90S"),
+    ("1990S", "90S"),
+    ("NOUGHTIES", "2000S"),
+    ("TWENTYTENS", "2010S"),
+    ("TWENTYTWENTIES", "2020S"),
+    ("BENGA", "KENYAN"),
+    ("MEDITATION", "YOGA"),
+    ("MUZAK", "ELEVATOR"),
+    ("EASYLISTENING", "ELEVATOR"),
+    ("LOUNGE", "ELEVATOR"),
+    ("GOSPEL", "PRAISE"),
 ];
 /// How many genres.
 const NG: usize = GENRES.len();
 
-// the later genres, each in a file of its own (src/music/)
+// the later genres, each in a file of its own (src/music/), and the styled
+// ones, their composer and their tables
 #[path = "music/celtic.rs"]
 mod celtic;
 #[path = "music/indonesian.rs"]
 mod indonesian;
 #[path = "music/starconflict.rs"]
 mod starconflict;
+#[path = "music/styled.rs"]
+mod styled;
+#[path = "music/styles.rs"]
+mod styles;
 #[path = "music/tuned.rs"]
 mod tuned;
 #[path = "music/western.rs"]
@@ -86,12 +144,14 @@ mod western;
 use celtic::*;
 use indonesian::*;
 use starconflict::*;
+use styled::*;
+use styles::*;
 use western::*;
 
 /// Whether `genre`'s pieces end on a final hit (its last bar its own in a mix,
 /// the drummer's beat left out).
 fn ends_on_a_hit(genre: usize) -> bool {
-    matches!(genre, POLKA | TAVERN | SKA | MARIACHI | INDONESIAN | STARCONFLICT | CELTIC | WESTERN)
+    matches!(genre, POLKA | TAVERN | SKA | MARIACHI | INDONESIAN | STARCONFLICT | CELTIC | WESTERN) || is_styled(genre)
 }
 /// The music's ids: a genre alone (below `NG`), or a mix of a primary genre and a
 /// secondary one (`mix_id`): the primary writes the music (its form, meter,
@@ -99,7 +159,11 @@ fn ends_on_a_hit(genre: usize) -> bool {
 /// tempo, near enough), and each part has an instrument of each.
 pub const IDS: usize = NG * (NG + 1);
 /// Each genre's tempo, about (a mix's lies 60 % of the way to its drummer's).
-const MID_BPM: [f64; NG] = [94.0, 132.0, 112.0, 90.0, 120.0, 115.0, 135.0, 118.0, 90.0, 108.0, 112.0, 100.0];
+const MID_BPM: [f64; CLASSICAL] = [94.0, 132.0, 112.0, 90.0, 120.0, 115.0, 135.0, 118.0, 90.0, 108.0, 112.0, 100.0];
+
+fn mid_bpm(g: usize) -> f64 {
+    if g < CLASSICAL { MID_BPM[g] } else { MID_BPM_STYLED[(g - CLASSICAL).min(NG - CLASSICAL - 1)] }
+}
 
 /// The id of `primary` alone, or mixed with `secondary` (another genre).
 pub fn mix_id(primary: usize, secondary: Option<usize>) -> usize {
@@ -130,12 +194,17 @@ pub fn cli_names() -> String {
 
 /// The composer's dice for `id`: the mixes of the first eight genres as they
 /// were numbered with eight (primary + 8 * (secondary + 1)), so a seed plays
-/// the music it did; any id with a later genre in it above those.
+/// the music it did; those of the first twelve as they were with twelve;
+/// any id with a styled genre in it above those.
 fn dice_key(id: usize) -> u64 {
     const OLD: usize = 8;
+    const TWELVE: usize = CLASSICAL;
     match parts(id) {
         (p, s) if p < OLD && s.is_none_or(|g| g < OLD) => (p + OLD * s.map_or(0, |g| g + 1)) as u64,
-        (p, s) => (OLD * (OLD + 1) + p + NG * s.map_or(0, |g| g + 1)) as u64,
+        (p, s) if p < TWELVE && s.is_none_or(|g| g < TWELVE) => {
+            (OLD * (OLD + 1) + p + TWELVE * s.map_or(0, |g| g + 1)) as u64
+        }
+        (p, s) => (OLD * (OLD + 1) + TWELVE * (TWELVE + 1) + p + NG * s.map_or(0, |g| g + 1)) as u64,
     }
 }
 
@@ -2083,6 +2152,7 @@ impl Synth {
             STARCONFLICT => 1.3,
             CELTIC => 0.75,
             WESTERN => 1.1,
+            g if is_styled(g) => room_styled(g),
             _ => 0.9,
         };
         let (writer, drummer) = parts(genre);
@@ -2891,6 +2961,7 @@ struct Song {
     sw: StarConflict,
     ce: Celtic,
     wn: Western,
+    sy: Styled,
     /// where the music is to end (`--ending natural`), else None: it goes on
     end: Option<End>,
     /// how long each piece is to be (seconds; 0: as long as it was written),
@@ -2981,6 +3052,7 @@ impl Song {
             sw: StarConflict::default(),
             ce: Celtic::default(),
             wn: Western::default(),
+            sy: Styled::default(),
             end: None,
             length: 0.0,
             piece_t0: 0.0,
@@ -3006,6 +3078,7 @@ impl Song {
             STARCONFLICT => self.sw.bs_at(self.sec_bar),
             CELTIC => self.ce.bar_steps.max(1),
             WESTERN => self.wn.bs_at(self.sec_bar),
+            g if is_styled(g) => self.sy.bar_steps.max(1),
             _ => 16,
         }
     }
@@ -3020,6 +3093,7 @@ impl Song {
             STARCONFLICT => self.sw.beat_steps.max(1),
             CELTIC => self.ce.beat_steps.max(1),
             WESTERN => self.wn.beat_steps.max(1),
+            g if is_styled(g) => self.sy.beat_steps.max(1),
             _ => 4,
         }
     }
@@ -3121,8 +3195,9 @@ impl Song {
     /// A progression from the genre's pool: eight bars, or sixteen with each
     /// chord held two (ambient, sometimes).
     fn draw_prog(&mut self) -> Vec<Harm> {
+        let pl = if is_styled(self.genre) { self.sy_pool() } else { pool(self.genre, self.mode) };
         let r = &mut self.rng;
-        let v = halves(r.pick(pool(self.genre, self.mode)));
+        let v = halves(r.pick(pl));
         if self.genre == AMBIENT && r.chance(0.35) {
             v.chunks(2).flat_map(|c| [c[0], c[1], c[0], c[1]]).collect()
         } else {
@@ -3215,8 +3290,14 @@ impl Song {
         }
         let len = self.bar_steps() as f64 * self.step_len();
         // (a jig's; mariachi's, the battle's and the gallop's 6/8 are even)
-        let lilt =
-            if self.beat_steps() == 6 && !matches!(self.genre, MARIACHI | STARCONFLICT | WESTERN) { 0.18 } else { 0.0 };
+        let lilt = if self.beat_steps() == 6
+            && !matches!(self.genre, MARIACHI | STARCONFLICT | WESTERN)
+            && !is_styled(self.genre)
+        {
+            0.18
+        } else {
+            0.0
+        };
         let mut b = Bar { t0, step: self.step_len(), swing: self.swing, lilt, lift: self.lift, ev };
         if self.sec_bar.is_multiple_of(8) && self.sec_bar > 0 && sec.kind == MAIN {
             // now and then an optional layer sits out a phrase
@@ -3231,6 +3312,7 @@ impl Song {
                 STARCONFLICT => &[L_BELL, L_HAT, L_CTR],
                 CELTIC => &[L_LEAD, L_PERC, L_HAT],
                 WESTERN => &[L_BELL, L_HAT, L_CTR],
+                g if is_styled(g) => &[L_CTR, L_ARP, L_PAD, L_PERC],
                 _ => &[L_HAT],
             };
             self.mute = if self.rng.chance(0.5) { self.rng.pick(opt) } else { 0 };
@@ -3252,6 +3334,7 @@ impl Song {
             STARCONFLICT => self.starconflict(s, &mut b, sec, m),
             CELTIC => self.celtic(s, &mut b, sec, m),
             WESTERN => self.western(s, &mut b, sec, m),
+            g if is_styled(g) => self.styled(s, &mut b, sec, m),
             _ => self.polka(&mut b, sec),
         }
         // a mix: the drummer's beat for the writer's (but for polka's,
@@ -3270,8 +3353,10 @@ impl Song {
         }
         // the arc: an intro opens the melodic parts' filters, an outro closes them
         let x = (self.sec_bar as f32 + 1.0) / sec.bars as f32;
+        let sweeps = self.genre < POLKA || (is_styled(self.genre) && self.style().sweep);
         let sweep = match sec.kind {
-            _ if self.genre >= POLKA => 20000.0,
+            _ if !sweeps => 20000.0,
+            INTRO | BUILD if is_styled(self.genre) => 600.0 * (x * 5.05).exp2(),
             INTRO => 600.0 * (x * 5.05).exp2(),
             OUTRO => 600.0 * ((1.0 - x) * 3.5 + 1.5).exp2(),
             _ => 20000.0,
@@ -3439,6 +3524,8 @@ impl Song {
             STARCONFLICT => [4.0, 0.0, 0.6, 1.2, 0.8, 3.0, 1.2],
             WESTERN => [1.0, 1.0, 1.0, 0.0, 0.6, 3.0, 2.0],
             INDONESIAN | CELTIC => [3.0, 3.0, 0.0, 0.5, 1.0, 1.0, 0.0],
+            // (the styled genres' styles draw their own)
+            g if is_styled(g) => [1.0; 7],
             // polka: major mostly, now and then a minor one
             _ => [4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         };
@@ -3450,8 +3537,14 @@ impl Song {
         self.pad_v.clear();
         self.keys_v.clear();
         if let (Some(g), Some(x)) = (self.guest, self.scratch.as_deref_mut()) {
-            // a mix's drums: tuned and levelled as the drummer's own pieces have them
-            sounds(g, &mut self.rng, x);
+            // a mix's drums: tuned and levelled as the drummer's own pieces
+            // have them (a styled drummer's in one of its styles)
+            if is_styled(g) {
+                self.sy.dstyle = pick_style(g, &mut self.rng);
+                sounds_style(&styles_of(g)[self.sy.dstyle].1, &mut self.rng, x);
+            } else {
+                sounds(g, &mut self.rng, x);
+            }
         }
         match self.genre {
             AMBIENT => self.piece_ambient(s),
@@ -3465,6 +3558,7 @@ impl Song {
             STARCONFLICT => self.piece_starconflict(s),
             CELTIC => self.piece_celtic(s),
             WESTERN => self.piece_western(s),
+            g if is_styled(g) => self.piece_styled(s),
             _ => self.piece_polka(s),
         }
         self.fuse(s);
@@ -3489,6 +3583,7 @@ impl Song {
             (STARCONFLICT, _) => self.sw.meter,
             (CELTIC, _) => self.ce.meter,
             (WESTERN, _) => self.wn.meter,
+            (g, _) if is_styled(g) => self.sy.meter,
             _ => "4/4",
         };
         self.log.push((self.bpm, self.root, self.mode, meter));
@@ -3506,9 +3601,11 @@ impl Song {
         // which progression: A for verses, B for choruses and later mains,
         // C for bridges and breaks
         let mains_before = self.plan[..self.sec].iter().filter(|x| x.kind == MAIN).count();
+        let styled_which = if is_styled(self.genre) { self.sy_which() } else { 0 };
         let r = &mut self.rng;
         let which = match (self.genre, sec.kind) {
             (POLKA | TAVERN, _) => 0,
+            (g, _) if is_styled(g) => styled_which,
             (_, BREAK) => 2,
             (AMBIENT, MAIN) => self.sec % 2,
             (TECHNO, MAIN) => (mains_before >= 1) as usize,
@@ -3589,6 +3686,7 @@ impl Song {
             STARCONFLICT => self.starconflict_section(),
             CELTIC => self.celtic_section(),
             WESTERN => self.western_section(),
+            g if is_styled(g) => self.styled_section(s),
             _ => self.polka_section(),
         }
         self.dress(s, dress);
@@ -5307,7 +5405,7 @@ impl Song {
         let (am, aa) = ska_tune(r, &a, mode, SK_LO, SK_HI, true);
         let (bm, ba) = ska_tune(r, &b, mode, SK_LO + 2, SK_HI + 2, false);
         // the form (at the tempo a mix's drummer will pull it to)
-        let bpm = self.guest.map_or(self.bpm, |g| self.bpm + 0.6 * (MID_BPM[g] - self.bpm));
+        let bpm = self.guest.map_or(self.bpm, |g| self.bpm + 0.6 * (mid_bpm(g) - self.bpm));
         let (plan, form, solos, intro) =
             if third { (ska_third_form(r), vec![0, 1], 0, SKI_RIFF) } else { ska_form(r, 240.0 / bpm, two_tone) };
         self.plan = plan.iter().map(|x| x.0).collect();
@@ -6550,7 +6648,7 @@ impl Song {
     /// of instruments one of the drummer's (now and then both).
     fn fuse(&mut self, s: &mut Synth) {
         let (Some(g), Some(x)) = (self.guest, self.scratch.as_deref()) else { return };
-        self.bpm += 0.6 * (MID_BPM[g] - self.bpm);
+        self.bpm += 0.6 * (mid_bpm(g) - self.bpm);
         s.dly.target = (self.step_len() * 3.0) as f32;
         let (bs, beats) = (self.bar_steps() as usize, (self.bar_steps() / self.beat_steps()) as usize);
         let compound = self.beat_steps() == 6;
@@ -6626,6 +6724,16 @@ impl Song {
                     s.ch[CH_KICK].drums = ska_kit_punk_kick(r);
                     s.ch[CH_SNARE].drums = ska_kit_punk_snare(r);
                     (s.ch[CH_KICK].gain, s.ch[CH_SNARE].gain) = (0.45, 1.4);
+                }
+            }
+            g if is_styled(g) => {
+                // the drummer's style's pump under its kick, and its swing
+                let st = &styles_of(g)[self.sy.dstyle].1;
+                for (c, k) in [(CH_BASS, 0.8), (CH_PAD, 1.0), (CH_KEYS, 0.7), (CH_ARP, 0.5), (CH_DRONE, 0.6)] {
+                    s.ch[c].duck = (st.pump * k).min(0.9);
+                }
+                if !compound && st.swing.1 > 0.0 {
+                    self.swing = self.swing.max(r.range(st.swing.0, st.swing.1));
                 }
             }
             _ => {}
@@ -6707,6 +6815,7 @@ impl Song {
             Some(STARCONFLICT) => self.starconflict_beat(s, b, sec, m),
             Some(CELTIC) => self.celtic_beat(s, b, sec, m),
             Some(WESTERN) => self.western_beat(s, b, sec, m),
+            Some(g) if is_styled(g) => self.styled_beat(s, b, sec, m),
             Some(_) => self.tavern_drums(b, sec, m),
             None => {}
         }
@@ -13218,6 +13327,7 @@ fn palette(g: usize, ch: usize) -> Option<&'static [(&'static str, Make)]> {
         (CELTIC, CH_KEYS | CH_PAD) => P_CE_STRUM,
         (CELTIC, CH_DRONE) => P_CE_DRONE,
         (CELTIC, CH_BASS) => P_CE_BASS,
+        (g, _) if is_styled(g) => return palette_styled(g, ch),
         _ => return None,
     })
 }
@@ -13266,6 +13376,7 @@ fn kit_palette(g: usize, ch: usize) -> Option<&'static [(&'static str, MakeKit)]
         (CELTIC, CH_KICK) => K_CE_KICK,
         (CELTIC, CH_SNARE) => K_CE_SNARE,
         (CELTIC, CH_PERC) => K_CE_PERC,
+        (g, _) if is_styled(g) => return kit_palette_styled(g, ch),
         _ => return None,
     })
 }
@@ -13293,6 +13404,10 @@ fn sounds(g: usize, r: &mut Rng, s: &mut Synth) {
         STARCONFLICT => sounds_starconflict(r, s),
         CELTIC => sounds_celtic(r, s),
         WESTERN => sounds_western(r, s),
+        g if is_styled(g) => {
+            let k = pick_style(g, r);
+            sounds_style(&styles_of(g)[k].1, r, s)
+        }
         _ => sounds_tavern(r, s),
     }
 }
@@ -16612,6 +16727,7 @@ fn end_tail(genre: usize) -> f64 {
         TECHNO | SYNTHWAVE => 2.5,
         // the gong ageng's ring
         INDONESIAN => 6.0,
+        YOGA | ORCHESTRA | WORSHIP => 6.0,
         _ => 3.5,
     }
 }

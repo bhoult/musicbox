@@ -160,7 +160,7 @@ pub(super) struct Indonesian {
 /// The tempo a piece is pulled to in a mix (60 % of the way to the
 /// drummer's, as `fuse` pulls the first bar), for all its sections.
 fn idn_pull(guest: Option<usize>, bpm: f64) -> f64 {
-    guest.map_or(bpm, |g| bpm + 0.6 * (MID_BPM[g] - bpm))
+    guest.map_or(bpm, |g| bpm + 0.6 * (mid_bpm(g) - bpm))
 }
 
 /// The colotomic instruments at beat `j` (0-based) of a `form`'s gongan of
