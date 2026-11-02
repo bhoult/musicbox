@@ -230,13 +230,15 @@ Each genre was measured against recordings of the real thing, and the clearest d
 - **The references:** 228 recordings, 20 or so a genre (6 for mariachi), all public domain or Creative Commons, from the Internet Archive, Wikimedia Commons, the Free Music Archive and Musopen. For a Williams-style space opera and a Morricone-style western none are open, so those genres were measured against the nearest open music. `tools/validate/refs-manifest.csv` lists each with its source and licence.
 - **The judges:** neural networks trained on millions of real recordings, used only to measure: Essentia's Discogs-EffNet (400 Discogs styles, and an embedding in which similar music lies close), its MTG-Jamendo instrument tagger, and Google's YAMNet (AudioSet's 521 sounds). None of them makes any of musicbox's sound; the optimised tuning ([above](#how-it-is-made)) is the one place their verdict steers it. Alongside them, signal measures: tempo, loudness, the spectrum's balance, stereo width, onsets.
 - **What they found, and what changed:** polka's loud bass drum on every beat made the tagger hear chiptune and synth-pop (polka 0.02): played light under the tuba, as a polka band's drummer does, it reads as polka (0.18, its top style). Synthwave had its pads buried under the bass and kick, and was nearly mono: they came forward, with a polysynth's chorus. Gamelan was over three times as bright as real gamelan; tavern and synthwave too heavy below, lo-fi too muffled, the space opera too bright: each was rebalanced. Mariachi's recorded violins and trumpets had lost the wide vibrato the style has.
-- **Not yet for the sixteen genres from classical on:** they have no references collected and no numbers in docs/validation.md. A first look with the same taggers found the clearest misses, and those changed: a gated synthesiser's snare and 808 hats made 80s read as chiptune, and so did benga's bass running in 16ths high up; flat eighths on the hats made rock read as electronic.
+- **The sixteen genres from classical on, against records:** measured against a private collection of 115 pop and rock records (only analysed; nothing of them is in this repository). Every genre read to the taggers as chiptune and video-game music many times more than records do. In the styled genres the kick was most of the energy and the tune almost none, and the stereo near mono: each band style now has a balance measured a channel at a time (`tools/validate/balance.py`), the rhythm guitars double-tracked. The SoundFont's electric bass was most of the chip, and is played darker (or as an upright where the period has one), and its recordings that hold a note on a loop of a few cycles are kept alive. The band genres still read as chip more than records do; docs/validation.md has the numbers.
+- **Earlier, for the sixteen:** a gated synthesiser's snare and 808 hats made 80s read as chiptune, and so did benga's bass running in 16ths high up; flat eighths on the hats made rock read as electronic.
 
 ```
 tools/validate/get-models.sh                 # the taggers (41 MB)
 tools/validate/render.sh after               # 8 songs a genre
 uv run tools/validate/critic.py ours.jsonl ~/.cache/musicbox/validate/ours/after
 uv run tools/validate/report.py refs.jsonl ours.jsonl
+uv run tools/validate/balance.py             # the band styles' balance, a channel at a time
 ```
 
 ## Files
@@ -262,7 +264,7 @@ uv run tools/validate/report.py refs.jsonl ours.jsonl
 | `docs/samples/` | what it made: the page's recordings, with their sources and licences |
 | `tools/neural/` | the networks' training: `tunes.py` and `TUNES.md` (its sources and credits), `voices.py` |
 | `tools/tune/` | the optimiser |
-| `tools/validate/` | the measuring against real music: the taggers, the renders, the comparison, the references' list |
+| `tools/validate/` | the measuring against real music: the taggers, the renders, the comparison, the references' list, the band styles' balance |
 | `docs/validation.md` | what was measured, and what changed |
 | `docs/neural.md` | the three settings: how each was made, and what it measured |
 

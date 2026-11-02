@@ -213,6 +213,10 @@ pub(super) struct Style {
     /// the parts double-tracked (a rhythm guitar's two takes, one to each
     /// side) and the second take's share
     pub(super) double: &'static [(usize, f32)],
+    /// the synthesisers through a chorus (a pad's, a lead's), and its level
+    pub(super) chorus: &'static [(usize, f32)],
+    /// the master's shelves (dB below 250 Hz and above 2.5 kHz)
+    pub(super) tilt: (f32, f32),
 }
 
 fn no_extra(_: &mut Rng, _: &mut Synth) {}
@@ -255,6 +259,8 @@ pub(super) const BASE: Style = Style {
     },
     balance: &[],
     double: &[],
+    chorus: &[],
+    tilt: (0.0, 0.0),
 };
 
 // -- forms
@@ -613,6 +619,9 @@ pub(super) fn sounds_style(st: &Style, r: &mut Rng, s: &mut Synth) {
     for &(ch, d) in st.double {
         (s.ch[ch].double, s.ch[ch].pan) = (d, 0.0);
     }
+    for &(ch, k) in st.chorus {
+        s.ch[ch].chorus = k;
+    }
     mix(&mut s.ch[CH_FX], 0.6, 0.0, 0.3, 0.0, 0.0);
     s.sc_rel = (-1.0 / (0.12 * SR)).exp();
     if st.pump > 0.0 {
@@ -635,7 +644,7 @@ pub(super) fn sounds_style(st: &Style, r: &mut Rng, s: &mut Synth) {
     (s.fx.crackle, s.fx.hiss, s.fx.wind_to, s.fx.rain_to) = (0.0, 0.0, 0.0, 0.0);
     s.m.wow_to = 0.0;
     s.m.set_lp(20000.0);
-    s.m.set_tilt(0.0, 0.0);
+    s.m.set_tilt(st.tilt.0, st.tilt.1);
     (s.m.gain, s.m.target, s.m.lk, s.m.lmax) = (1.5, 0.2, 0.5, 2.0);
     (sd.extra)(r, s);
 }

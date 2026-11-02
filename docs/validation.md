@@ -13,7 +13,7 @@ Each genre's songs were measured against recordings of the real genre, and the c
 **The judges:** pretrained neural networks, used only as measuring instruments (Essentia's models, CC BY-NC-SA 4.0, fetched by `tools/validate/get-models.sh`):
 
 - *Discogs-EffNet*, trained on millions of tracks labelled with Discogs's 400 styles. Its verdict on a song is the share it gives the genre's own styles (Polka; Ska; Celtic; Medieval and Renaissance for tavern; Score and Soundtrack for the film genres; Boom Bap, Instrumental and Jazzy Hip-Hop for lo-fi; it has no gamelan). Its embedding, a 1280-number summary of how a recording sounds, gives the other two measures: **similarity**, the cosine between a song's embedding and the mean of its genre's real recordings, and **nearest own**, the share of a genre's songs whose nearest genre mean is their own (for the real recordings, each left out of its genre's mean: the ceiling to compare against).
-- *MTG-Jamendo* (instruments) and Google's *YAMNet* (AudioSet's 521 sounds), to hear each instrument alone: `MUSICBOX_SOLO=lead,bass` renders only those channels.
+- *MTG-Jamendo* (instruments) and Google's *YAMNet* (AudioSet's 521 sounds), to hear each instrument alone: `MUSICBOX_SOLO=lead,bass` renders only those channels. `MUSICBOX_NOLEVEL=1` holds the master's leveller at unity (a channel alone is then as loud as it is in the mix), and `MUSICBOX_STYLE=K` plays a styled genre's Kth style (the dice otherwise as they fall).
 
 Alongside them, signal measures from Essentia: tempo, loudness and its range, the spectrum's centroid and the share of energy in five bands, stereo width (the side's share of the energy), onsets a second, key.
 
@@ -54,6 +54,19 @@ Before is the code as extracted from fleece; after is this version.
 
 **Tried and taken back:** a second round of tilts for synthwave and tavern, and a louder snare for lo-fi, which moved the spectrum closer but the embedding further. A rebalancing of celtic's tune types and keys was taken from The Session's tune database and then withdrawn: that database's licence forbids processing it with LLM tools, which this work is. Celtic is as fleece had it.
 
+## Against records: why it sounded like a computer from 1985
+
+Measured a second time (2026-11-01), against a private collection of 115 pop, rock, hip-hop and R&B records from 1956 to 2011 (only analysed: no audio, features or titles from them are in the repository; only the aggregate targets below). Every genre's songs, on recorded instruments too, read to the Discogs tagger as Chiptune 20 to 150 times more than the records do (median 0.01-0.10 against 0.0006), and to YAMNet as "video game music" (0.002-0.035 against 0.0004). Real instrumental recordings (celtic, polka) read 0.0002, so it is not the missing singer. On the synthesiser it is 0.2-0.33 in tavern, polka and mariachi: a Commodore's numbers.
+
+What it found:
+
+- **The styled genres' kick drowned the band.** Each of their instruments is brought to a reference loudness before its level is set; their drum kits were not, and played at the level of the kits they came from. Heard a channel at a time at its level in the mix, the kick was 46-87 % of the energy and the tune 1-5 %; the low band 0.75-0.94 of the energy against the records' 0.5, the middle 0.1-0.2 against 0.37, and the stereo near mono (the side 1-5 % of the energy against 14 %). Each band style now has a balance, a trim a channel, measured by `tools/validate/balance.py` and brought to a band's shares of the energy (the bass and kick most of the low end, the rhythm part and the tune most of the middle). The low band is now 0.50-0.65, the middle 0.28-0.44, the width 0.05-0.14 (the records': 0.42-0.58, 0.32-0.49, 0.09-0.19 in the decades they stand for). Sixteen styles double-track their rhythm guitar; the synthesiser styles' pads and leads have a chorus; hard rock, grunge and punk are 5 dB less bright.
+- **The SoundFont's bass is the chip.** Left out, a channel at a time, the bass is what moved the "video game" reading most (3.5-5 times, in rock, 70s, 80s, classical and polka). Alone, the SoundFont's picked and fingered basses read Chiptune 0.15-0.36; the same lines on a recorded upright bass, 0.005-0.010. A low-pass helps (600 Hz: 0.08-0.13); a longer release does not. The band styles now play the bass darker (about 1 kHz), and an upright where the period has one.
+- **Short loops.** The SoundFont holds many of its notes on a loop of one to ten cycles of the wave (the basses, guitars, electric pianos, clavinet, tuba, clarinet, harp): a held note is then one wave repeated, as a sound chip's is. Those 34 presets now wander a few cents in pitch, and the plucked ones lose their highs before their body. It moved the taggers little (a first version took a solo bass's Chiptune down by a third); it is for ears.
+- **What did not help:** humanised timing (8 ms) and velocity moved nothing; an EQ toward the records' bands alone made tavern read more chip (its instruments' upper middle, uncovered).
+
+Balancing made the band genres read more chip, not less: the kick had covered the bass and the tune, and now they are heard (rock 0.027 to 0.056, 2000s 0.031 to 0.125). The old twelve genres moved only with the short loops (their style shares and similarity held; celtic's rose, 0.18 to 0.22 and 0.634 to 0.660). Left out again, the bass and the lead are what still read as chip: the SoundFont's electric bass, and the synthesiser's own basses and leads in the electronic styles. The next step is better recordings of an electric bass (and a drum kit) than the SoundFont's, or a better bass on the synthesiser.
+
 ## What it can't tell
 
 The taggers are trained on records, so they hear production as much as music: the 78s' surface noise, a vocal (most mariachi, ska and lo-fi on record has one; musicbox has none), a mastering engineer's loudness. A song can move toward a genre's records in these numbers and sound no more like the genre, or the reverse. The numbers found where to listen (polka's kick, gamelan's brightness); whether each change is better is for ears. Eight songs a genre is few: a change of a song or two in "nearest own" is noise.
@@ -71,6 +84,7 @@ cd ~/.cache/musicbox/validate
 uv run ~/programming/musicbox/tools/validate/critic.py refs.jsonl refs        # the references (once)
 uv run ~/programming/musicbox/tools/validate/critic.py after.jsonl ours/after
 uv run ~/programming/musicbox/tools/validate/report.py refs.jsonl after.jsonl
+uv run ~/programming/musicbox/tools/validate/balance.py    # each band style's balance, its rows for styles.rs
 ```
 
 The references are fetched by hand from the manifest's URLs (Essentia's loader stalls on some Ogg and Opus files: convert those to WAV first).

@@ -13,9 +13,11 @@ A band's balance (each channel's share of the energy, as a mix of a pop or
 rock record carries it: the bass and the kick most of the low end, the
 rhythm part and the tune most of the middle, the tune where a singer would
 be) is ROLE, shared among the channels a style plays (each above 0.3 % of
-its energy; fx is left as it is). Trims are clamped to +-12 dB. It prints
-each style's row for styles.rs, and its low, middle and high bands' shares
-before and after (the records': about 0.5, 0.37, 0.10).
+its energy; fx is left as it is). The pieces are heard with the style's
+balance as it is, so each trim found is added to the row there (a style's
+instruments changed, it is run again). Trims are clamped to +-12 dB. It
+prints each style's row for styles.rs, and its low, middle and high bands'
+shares before and after (the records': about 0.5, 0.37, 0.10).
 """
 
 import os
@@ -48,6 +50,15 @@ def styles(src):
     return out
 
 
+def rows(src):
+    """Each style's balance as styles.rs has it (dB by channel)."""
+    out = {}
+    for m in re.finditer(r"const ([A-Z0-9_]+): Style = Style \{(.*?)\n\};", src, re.S):
+        b = re.search(r"balance: &\[(.*?)\]", m.group(2), re.S)
+        out[m.group(1)] = {c.lower(): float(v) for c, v in re.findall(r"\(CH_([A-Z]+),\s*(-?[0-9.]+)\)", b.group(1))} if b else {}
+    return out
+
+
 def render(job):
     bin_, g, k, seed, ch, tmp = job
     p = os.path.join(tmp, f"{g}-{k}-{seed}-{ch}.wav")
@@ -74,7 +85,8 @@ def main():
         seeds = args[i + 1].split(",")
         del args[i : i + 2]
     genres = args or BAND
-    names = styles(open(os.path.join(os.path.dirname(__file__), "../../src/music/styles.rs")).read())
+    src = open(os.path.join(os.path.dirname(__file__), "../../src/music/styles.rs")).read()
+    names, had = styles(src), rows(src)
     tmp = tempfile.mkdtemp()
     jobs = [(bin_, g, k, s, ch, tmp) for g in genres for k in range(len(names[g])) for s in seeds for ch in CH]
     energy, bands = {}, {}
@@ -92,10 +104,11 @@ def main():
             live = [i for i, c in enumerate(CH) if c in ROLE and share[i] > 0.003]
             want = np.array([ROLE[CH[i]] for i in live])
             want = want / want.sum() * share[live].sum()
-            trim = {i: float(np.clip(10 * np.log10(w / share[i]), -12, 12)) for i, w in zip(live, want)}
+            old = had.get(name, {})
+            trim = {i: float(np.clip(old.get(CH[i], 0.0) + 10 * np.log10(w / share[i]), -12, 12)) for i, w in zip(live, want)}
             after = share.copy()
             for i, db in trim.items():
-                after[i] = share[i] * 10 ** (db / 10)
+                after[i] = share[i] * 10 ** ((db - old.get(CH[i], 0.0)) / 10)
             after /= after.sum()
             b0, b1 = share @ band, after @ band
             row = ", ".join(f"(CH_{CH[i].upper()}, {db:.1f})" for i, db in sorted(trim.items()) if abs(db) >= 0.5)

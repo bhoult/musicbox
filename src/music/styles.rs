@@ -35,6 +35,18 @@ const FULL: u32 = KIT | L_OHAT | L_PERC;
 // ---------------------------------------------------------------- instruments
 
 /// A clavinet: a narrow pulse, bright and quick to die.
+/// A picked electric bass under a band, its tone rolled off (the
+/// SoundFont's, through the patch's low-pass about 1 kHz): bright and on
+/// its own, its recording reads as a chip's bass to the taggers
+/// (tools/validate); a fingered one has `ska_bass_flat`.
+fn bass_pick_dark(r: &mut Rng) -> Patch {
+    let p = ska_bass_pick(r);
+    if p.samp == 0 {
+        return p;
+    }
+    Patch { filter: true, cutoff: r.range(900.0, 1100.0), keytrack: 0.2, res: 0.0, env_amt: 0.0, ..p }
+}
+
 fn clav(r: &mut Rng) -> Patch {
     let p = Patch {
         wave: Wave::Square,
@@ -726,7 +738,7 @@ const RK_SOUND: Sound = Sound {
     tones: &[
         (CH_KEYS, ska_guitar_dist, 0.3, -0.4, 0.1, 0.0),
         (CH_LEAD, ska_guitar_fuzz, 0.32, 0.3, 0.16, 0.05),
-        (CH_BASS, ska_bass_pick, 0.45, 0.0, 0.03, 0.0),
+        (CH_BASS, bass_pick_dark, 0.45, 0.0, 0.03, 0.0),
         (CH_PAD, ska_organ_rec, 0.16, 0.2, 0.15, 0.0),
     ],
     kits: RK_KITS,
@@ -763,14 +775,15 @@ const RK_HARD: Style = Style {
     double: &[(CH_KEYS, 0.9)],
     balance: &[
         (CH_KICK, -3.0),
-        (CH_SNARE, -4.9),
-        (CH_HAT, 0.7),
-        (CH_PERC, 4.0),
-        (CH_BASS, 1.9),
-        (CH_PAD, 6.1),
-        (CH_LEAD, 7.0),
-        (CH_KEYS, 1.7),
+        (CH_SNARE, -4.3),
+        (CH_HAT, 2.5),
+        (CH_PERC, 3.9),
+        (CH_BASS, 1.8),
+        (CH_PAD, 6.2),
+        (CH_LEAD, 7.6),
+        (CH_KEYS, 1.1),
     ],
+    tilt: (0.0, -5.0),
     ..BASE
 };
 
@@ -792,15 +805,16 @@ const RK_ANTHEM: Style = Style {
     sound: RK_SOUND,
     double: &[(CH_KEYS, 0.9)],
     balance: &[
-        (CH_KICK, -2.9),
-        (CH_SNARE, -4.9),
-        (CH_HAT, 0.8),
+        (CH_KICK, -3.0),
+        (CH_SNARE, -4.3),
+        (CH_HAT, 2.5),
         (CH_PERC, 3.9),
-        (CH_BASS, 1.8),
-        (CH_PAD, 6.2),
-        (CH_LEAD, 5.9),
-        (CH_KEYS, 1.9),
+        (CH_BASS, 1.7),
+        (CH_PAD, 6.3),
+        (CH_LEAD, 6.8),
+        (CH_KEYS, 1.1),
     ],
+    tilt: (0.0, -5.0),
     ..BASE
 };
 
@@ -835,21 +849,21 @@ const RK_BLUES: Style = Style {
         tones: &[
             (CH_KEYS, ska_hammond, 0.24, -0.3, 0.15, 0.0),
             (CH_LEAD, ska_guitar_crunch, 0.32, 0.3, 0.16, 0.0),
-            (CH_BASS, ska_bass_finger, 0.45, 0.0, 0.03, 0.0),
+            (CH_BASS, ska_bass_flat, 0.45, 0.0, 0.03, 0.0),
             (CH_PAD, ska_organ_rec, 0.14, 0.2, 0.15, 0.0),
         ],
         alts: &[(CH_LEAD, &[("crunchy guitar", ska_guitar_crunch), ("harmonica", harmonica), ("tenor sax", sax)])],
         ..RK_SOUND
     },
     balance: &[
-        (CH_KICK, -2.7),
-        (CH_SNARE, -5.6),
-        (CH_HAT, 2.4),
-        (CH_PERC, 1.2),
-        (CH_BASS, 1.2),
-        (CH_PAD, 7.0),
-        (CH_LEAD, 4.2),
-        (CH_KEYS, 5.8),
+        (CH_KICK, -2.8),
+        (CH_SNARE, -5.7),
+        (CH_HAT, 2.3),
+        (CH_PERC, 1.1),
+        (CH_BASS, 1.5),
+        (CH_PAD, 6.9),
+        (CH_LEAD, 4.1),
+        (CH_KEYS, 5.7),
     ],
     ..BASE
 };
@@ -926,13 +940,13 @@ const SX_SOUL: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -4.6),
-        (CH_SNARE, -3.7),
-        (CH_PERC, 2.5),
-        (CH_BASS, 3.4),
-        (CH_PAD, 10.2),
-        (CH_LEAD, 5.9),
-        (CH_KEYS, 5.3),
+        (CH_KICK, -5.5),
+        (CH_SNARE, -3.4),
+        (CH_PERC, 2.7),
+        (CH_BASS, 3.6),
+        (CH_PAD, 10.4),
+        (CH_LEAD, 6.1),
+        (CH_KEYS, 5.6),
     ],
     ..BASE
 };
@@ -973,7 +987,7 @@ const SX_SURF: Style = Style {
         tones: &[
             (CH_LEAD, surf_guitar, 0.34, 0.2, 0.45, 0.0),
             (CH_KEYS, elec_clean, 0.22, -0.35, 0.3, 0.0),
-            (CH_BASS, ska_bass_pick, 0.45, 0.0, 0.05, 0.0),
+            (CH_BASS, bass_pick_dark, 0.45, 0.0, 0.05, 0.0),
             (CH_PAD, ska_farfisa, 0.16, -0.2, 0.25, 0.0),
         ],
         kits: SX_KITS,
@@ -983,13 +997,13 @@ const SX_SURF: Style = Style {
     },
     double: &[(CH_KEYS, 0.7)],
     balance: &[
-        (CH_KICK, -4.4),
-        (CH_SNARE, -2.3),
-        (CH_PERC, -8.0),
-        (CH_BASS, 3.3),
-        (CH_PAD, 11.6),
-        (CH_LEAD, 7.5),
-        (CH_KEYS, 5.1),
+        (CH_KICK, -5.0),
+        (CH_SNARE, -1.9),
+        (CH_PERC, -7.6),
+        (CH_BASS, 3.5),
+        (CH_PAD, 11.8),
+        (CH_LEAD, 8.2),
+        (CH_KEYS, 4.7),
     ],
     ..BASE
 };
@@ -1028,7 +1042,7 @@ const SX_BEAT: Style = Style {
     sound: Sound {
         tones: &[
             (CH_KEYS, twelve_string, 0.28, -0.3, 0.15, 0.0),
-            (CH_BASS, ska_bass_pick, 0.45, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_upright, 0.45, 0.0, 0.03, 0.0),
             (CH_LEAD, harmonica, 0.3, 0.2, 0.2, 0.0),
             (CH_BELL, elec_clean, 0.22, -0.2, 0.2, 0.0),
         ],
@@ -1038,7 +1052,7 @@ const SX_BEAT: Style = Style {
         ..BASE.sound
     },
     double: &[(CH_KEYS, 0.8)],
-    balance: &[(CH_KICK, -4.8), (CH_SNARE, -1.2), (CH_PERC, 3.9), (CH_BASS, 3.9), (CH_LEAD, 9.1), (CH_KEYS, 3.8)],
+    balance: &[(CH_KICK, -5.1), (CH_PERC, 4.8), (CH_BASS, 3.3), (CH_LEAD, 9.9), (CH_KEYS, 4.0)],
     ..BASE
 };
 
@@ -1103,7 +1117,7 @@ const SV_DISCO: Style = Style {
     density: (0.4, 0.5),
     sound: Sound {
         tones: &[
-            (CH_BASS, ska_bass_finger, 0.48, 0.0, 0.03, 0.0),
+            (CH_BASS, ska_bass_flat, 0.48, 0.0, 0.03, 0.0),
             (CH_KEYS, ska_guitar_clean, 0.22, -0.35, 0.1, 0.0),
             (CH_PAD, pad_strings, 0.2, 0.2, 0.25, 0.0),
             (CH_BELL, brass_section, 0.22, 0.3, 0.15, 0.0),
@@ -1115,7 +1129,15 @@ const SV_DISCO: Style = Style {
         ..BASE.sound
     },
     double: &[(CH_KEYS, 0.7)],
-    balance: &[(CH_KICK, -5.4), (CH_HAT, -2.1), (CH_BASS, 3.4), (CH_PAD, 5.3), (CH_LEAD, 5.6), (CH_KEYS, 8.7)],
+    balance: &[
+        (CH_KICK, -6.4),
+        (CH_SNARE, 0.7),
+        (CH_HAT, -1.9),
+        (CH_BASS, 4.4),
+        (CH_PAD, 5.5),
+        (CH_LEAD, 5.8),
+        (CH_KEYS, 8.1),
+    ],
     ..BASE
 };
 
@@ -1157,7 +1179,7 @@ const SV_FUNK: Style = Style {
     density: (0.45, 0.5),
     sound: Sound {
         tones: &[
-            (CH_BASS, ska_bass_finger, 0.5, 0.0, 0.03, 0.0),
+            (CH_BASS, ska_bass_flat, 0.5, 0.0, 0.03, 0.0),
             (CH_KEYS, clav, 0.24, -0.3, 0.08, 0.0),
             (CH_BELL, brass_section, 0.24, 0.3, 0.12, 0.0),
             (CH_LEAD, sax, 0.32, 0.15, 0.15, 0.0),
@@ -1172,13 +1194,13 @@ const SV_FUNK: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -5.8),
+        (CH_KICK, -7.0),
         (CH_HAT, -1.5),
-        (CH_BASS, 5.4),
+        (CH_BASS, 6.1),
         (CH_PAD, 12.0),
         (CH_LEAD, 6.3),
         (CH_BELL, 5.3),
-        (CH_KEYS, 7.4),
+        (CH_KEYS, 7.3),
     ],
     ..BASE
 };
@@ -1216,7 +1238,7 @@ const SV_SOFT: Style = Style {
     sound: Sound {
         tones: &[
             (CH_KEYS, ep_rhodes, 0.3, -0.25, 0.18, 0.0),
-            (CH_BASS, ska_bass_finger, 0.44, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_upright, 0.44, 0.0, 0.03, 0.0),
             (CH_LEAD, sax, 0.3, 0.2, 0.22, 0.0),
             (CH_PAD, pad_strings, 0.16, 0.2, 0.28, 0.0),
             (CH_BELL, pad_strings, 0.14, -0.3, 0.28, 0.0),
@@ -1235,14 +1257,14 @@ const SV_SOFT: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -5.0),
-        (CH_SNARE, 1.6),
-        (CH_HAT, -4.4),
-        (CH_PERC, 6.3),
+        (CH_KICK, -5.5),
+        (CH_SNARE, 1.8),
+        (CH_HAT, -4.2),
+        (CH_PERC, 6.5),
         (CH_BASS, 3.5),
-        (CH_PAD, 4.5),
-        (CH_LEAD, 3.2),
-        (CH_KEYS, 4.0),
+        (CH_PAD, 4.7),
+        (CH_LEAD, 3.4),
+        (CH_KEYS, 4.2),
     ],
     ..BASE
 };
@@ -1325,7 +1347,7 @@ const EI_SYNTHPOP: Style = Style {
     sweep: true,
     sound: Sound {
         tones: &[
-            (CH_BASS, ska_bass_pick, 0.36, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_pick_dark, 0.36, 0.0, 0.03, 0.0),
             (CH_KEYS, glass_fm, 0.24, -0.3, 0.2, 0.1),
             (CH_PAD, hoover, 0.18, 0.0, 0.3, 0.0),
             (CH_ARP, arp_pluck, 0.18, 0.3, 0.2, 0.2),
@@ -1338,12 +1360,12 @@ const EI_SYNTHPOP: Style = Style {
         (CH_KICK, -5.8),
         (CH_SNARE, 1.9),
         (CH_HAT, -3.5),
-        (CH_PERC, 1.0),
-        (CH_BASS, 4.2),
-        (CH_PAD, 4.3),
-        (CH_ARP, 5.3),
-        (CH_LEAD, 6.2),
-        (CH_KEYS, 8.6),
+        (CH_PERC, 1.1),
+        (CH_BASS, 4.1),
+        (CH_PAD, 5.4),
+        (CH_ARP, 4.9),
+        (CH_LEAD, 5.9),
+        (CH_KEYS, 8.7),
     ],
     ..BASE
 };
@@ -1394,7 +1416,7 @@ const EI_BALLAD: Style = Style {
         (CH_PERC, 1.7),
         (CH_BASS, 0.8),
         (CH_PAD, -1.3),
-        (CH_LEAD, 6.1),
+        (CH_LEAD, 6.2),
         (CH_BELL, 6.8),
         (CH_KEYS, 6.4),
     ],
@@ -1420,7 +1442,7 @@ const EI_NEWWAVE: Style = Style {
     tune: TU_HOOK,
     sound: Sound {
         tones: &[
-            (CH_BASS, ska_bass_pick, 0.45, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_pick_dark, 0.45, 0.0, 0.03, 0.0),
             (CH_KEYS, elec_clean, 0.24, -0.3, 0.2, 0.15),
             (CH_PAD, hoover, 0.16, 0.0, 0.25, 0.0),
             (CH_ARP, stab_saw, 0.18, 0.3, 0.2, 0.1),
@@ -1430,15 +1452,15 @@ const EI_NEWWAVE: Style = Style {
     },
     double: &[(CH_KEYS, 0.8)],
     balance: &[
-        (CH_KICK, -5.9),
-        (CH_SNARE, 2.2),
-        (CH_HAT, -4.2),
-        (CH_PERC, 2.3),
-        (CH_BASS, 3.5),
-        (CH_PAD, 7.3),
+        (CH_KICK, -5.8),
+        (CH_SNARE, 2.4),
+        (CH_HAT, -4.1),
+        (CH_PERC, 2.5),
+        (CH_BASS, 3.4),
+        (CH_PAD, 6.0),
         (CH_ARP, 7.0),
-        (CH_LEAD, 8.2),
-        (CH_KEYS, 9.4),
+        (CH_LEAD, 8.1),
+        (CH_KEYS, 10.0),
     ],
     ..BASE
 };
@@ -1495,15 +1517,16 @@ const NI_EURO: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -6.8),
-        (CH_SNARE, 9.9),
+        (CH_KICK, -8.2),
+        (CH_SNARE, 9.8),
         (CH_HAT, -2.3),
-        (CH_BASS, 10.7),
-        (CH_PAD, 5.9),
-        (CH_ARP, 9.8),
+        (CH_BASS, 10.6),
+        (CH_PAD, 6.8),
+        (CH_ARP, 9.7),
         (CH_LEAD, 12.0),
-        (CH_KEYS, 11.8),
+        (CH_KEYS, 11.7),
     ],
+    chorus: &[(CH_LEAD, 0.5), (CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1539,20 +1562,13 @@ const NI_GRUNGE: Style = Style {
         tones: &[
             (CH_KEYS, ska_guitar_dist, 0.3, -0.4, 0.12, 0.0),
             (CH_LEAD, ska_guitar_fuzz, 0.3, 0.35, 0.16, 0.0),
-            (CH_BASS, ska_bass_pick, 0.46, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_pick_dark, 0.46, 0.0, 0.03, 0.0),
         ],
         ..RK_SOUND
     },
     double: &[(CH_KEYS, 0.9)],
-    balance: &[
-        (CH_KICK, -1.1),
-        (CH_SNARE, -5.2),
-        (CH_HAT, 1.9),
-        (CH_PERC, 5.7),
-        (CH_BASS, 0.7),
-        (CH_LEAD, 7.6),
-        (CH_KEYS, 1.1),
-    ],
+    balance: &[(CH_KICK, -1.1), (CH_SNARE, -4.6), (CH_HAT, 3.6), (CH_PERC, 5.7), (CH_LEAD, 8.9)],
+    tilt: (0.0, -5.0),
     ..BASE
 };
 
@@ -1614,7 +1630,8 @@ const NI_RNB: Style = Style {
         alts: &[(CH_LEAD, &[("whistle", sine_lead), ("alto sax", ska_alto), ("synth voice", vox_chop)])],
         ..BASE.sound
     },
-    balance: &[(CH_KICK, -6.1), (CH_SNARE, 6.6), (CH_BASS, 5.0), (CH_PAD, 8.4), (CH_LEAD, 9.5), (CH_KEYS, 6.4)],
+    balance: &[(CH_KICK, -6.7), (CH_SNARE, 7.1), (CH_BASS, 5.0), (CH_PAD, 9.4), (CH_LEAD, 9.5), (CH_KEYS, 6.5)],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1644,12 +1661,13 @@ const NO_PUNK: Style = Style {
         tones: &[
             (CH_KEYS, ska_guitar_dist, 0.3, -0.4, 0.08, 0.0),
             (CH_LEAD, ska_guitar_fuzz, 0.3, 0.35, 0.12, 0.0),
-            (CH_BASS, ska_bass_pick, 0.46, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_pick_dark, 0.46, 0.0, 0.03, 0.0),
         ],
         ..RK_SOUND
     },
     double: &[(CH_KEYS, 0.9)],
-    balance: &[(CH_KICK, -2.3), (CH_SNARE, -6.2), (CH_HAT, 1.9), (CH_BASS, 3.4), (CH_LEAD, 7.9), (CH_KEYS, 2.9)],
+    balance: &[(CH_KICK, -2.5), (CH_SNARE, -5.7), (CH_HAT, 3.5), (CH_BASS, 3.3), (CH_LEAD, 8.9), (CH_KEYS, 2.2)],
+    tilt: (0.0, -5.0),
     ..BASE
 };
 
@@ -1708,7 +1726,8 @@ const NO_RNB: Style = Style {
         alts: &[(CH_KEYS, &[("pizzicato strings", pizzicato), ("FM keys", glass_fm), ("marimba", marimba)])],
         ..BASE.sound
     },
-    balance: &[(CH_KICK, -6.2), (CH_BASS, 6.6), (CH_PAD, 12.0), (CH_LEAD, 12.0), (CH_KEYS, 12.0)],
+    balance: &[(CH_KICK, -7.7), (CH_SNARE, 12.0), (CH_BASS, 5.8), (CH_PAD, 12.0), (CH_LEAD, 12.0), (CH_KEYS, 12.0)],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1752,15 +1771,16 @@ const NO_ELECTRO: Style = Style {
         ..NI_EURO.sound
     },
     balance: &[
-        (CH_KICK, -6.8),
-        (CH_SNARE, 9.5),
-        (CH_HAT, -2.6),
-        (CH_BASS, 10.6),
-        (CH_PAD, 7.8),
-        (CH_ARP, 7.2),
+        (CH_KICK, -8.4),
+        (CH_SNARE, 9.2),
+        (CH_HAT, -2.9),
+        (CH_BASS, 10.3),
+        (CH_PAD, 8.5),
+        (CH_ARP, 6.9),
         (CH_LEAD, 12.0),
         (CH_KEYS, 12.0),
     ],
+    chorus: &[(CH_LEAD, 0.45), (CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1825,15 +1845,16 @@ const TE_EDM: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -6.9),
-        (CH_SNARE, 10.4),
-        (CH_HAT, -0.7),
+        (CH_KICK, -9.3),
+        (CH_SNARE, 9.4),
+        (CH_HAT, -1.6),
         (CH_BASS, 12.0),
-        (CH_PAD, 10.1),
-        (CH_ARP, 6.1),
+        (CH_PAD, 10.2),
+        (CH_ARP, 5.2),
         (CH_LEAD, 11.7),
         (CH_KEYS, 12.0),
     ],
+    chorus: &[(CH_LEAD, 0.5), (CH_KEYS, 0.5), (CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1896,15 +1917,16 @@ const TE_TROPICAL: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -5.6),
+        (CH_KICK, -6.8),
         (CH_HAT, 0.6),
         (CH_PERC, -2.1),
         (CH_BASS, 3.8),
-        (CH_PAD, 4.1),
-        (CH_ARP, 2.3),
+        (CH_PAD, 5.2),
+        (CH_ARP, 2.4),
         (CH_LEAD, 6.1),
         (CH_KEYS, 12.0),
     ],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -1961,7 +1983,7 @@ const TE_TRAP: Style = Style {
         echo: (3.0, 0.3),
         ..BASE.sound
     },
-    balance: &[(CH_KICK, -5.7), (CH_BASS, 5.8), (CH_LEAD, 12.0), (CH_KEYS, 12.0)],
+    balance: &[(CH_KICK, -7.3), (CH_HAT, 3.8), (CH_BASS, 5.0), (CH_LEAD, 12.0), (CH_KEYS, 12.0)],
     ..BASE
 };
 
@@ -2015,13 +2037,13 @@ const TE_STOMP: Style = Style {
     },
     double: &[(CH_KEYS, 0.8)],
     balance: &[
-        (CH_KICK, -5.7),
-        (CH_SNARE, 10.8),
-        (CH_PERC, 3.0),
-        (CH_BASS, 5.0),
-        (CH_ARP, 6.4),
+        (CH_KICK, -7.0),
+        (CH_SNARE, 12.0),
+        (CH_PERC, 3.2),
+        (CH_BASS, 5.1),
+        (CH_ARP, 6.2),
         (CH_LEAD, 12.0),
-        (CH_KEYS, 2.5),
+        (CH_KEYS, 2.3),
     ],
     ..BASE
 };
@@ -2074,15 +2096,16 @@ const TW_NUDISCO: Style = Style {
         ..EI_SOUND
     },
     balance: &[
-        (CH_KICK, -5.7),
-        (CH_SNARE, 2.2),
-        (CH_HAT, -3.5),
-        (CH_BASS, 2.3),
-        (CH_PAD, 8.3),
-        (CH_ARP, 4.7),
-        (CH_LEAD, 6.8),
+        (CH_KICK, -6.0),
+        (CH_SNARE, 1.9),
+        (CH_HAT, -3.8),
+        (CH_BASS, 2.0),
+        (CH_PAD, 8.1),
+        (CH_ARP, 4.4),
+        (CH_LEAD, 6.5),
         (CH_KEYS, 12.0),
     ],
+    chorus: &[(CH_LEAD, 0.45), (CH_KEYS, 0.5), (CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -2147,14 +2170,15 @@ const TW_AMAPIANO: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -4.9),
-        (CH_HAT, -0.9),
-        (CH_PERC, 3.2),
-        (CH_BASS, 1.1),
-        (CH_PAD, 5.9),
-        (CH_LEAD, 8.0),
-        (CH_KEYS, 7.0),
+        (CH_KICK, -5.6),
+        (CH_HAT, -0.8),
+        (CH_PERC, 3.3),
+        (CH_BASS, 1.2),
+        (CH_PAD, 7.1),
+        (CH_LEAD, 8.1),
+        (CH_KEYS, 7.1),
     ],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -2199,7 +2223,7 @@ const TW_AFRO: Style = Style {
             (CH_BASS, bass_synth, 0.45, 0.0, 0.0, 0.0),
             (CH_KEYS, elec_clean, 0.24, -0.25, 0.18, 0.1),
             (CH_PAD, pad_warm, 0.15, 0.0, 0.3, 0.0),
-            (CH_LEAD, lead_square, 0.26, 0.15, 0.22, 0.15),
+            (CH_LEAD, ska_guitar_clean, 0.26, 0.15, 0.22, 0.15),
             (CH_BELL, marimba, 0.2, -0.3, 0.2, 0.1),
         ],
         kits: &[
@@ -2209,20 +2233,21 @@ const TW_AFRO: Style = Style {
             (CH_PERC, kit_perc_hand, 0.45, -0.25, 0.08),
         ],
         room: (0.8, 0.22),
-        alts: &[(CH_LEAD, &[("square lead", lead_square), ("alto sax", ska_alto), ("flute", flute)])],
+        alts: &[(CH_LEAD, &[("highlife guitar", ska_guitar_clean), ("alto sax", ska_alto), ("flute", flute)])],
         ..BASE.sound
     },
     double: &[(CH_KEYS, 0.7)],
     balance: &[
-        (CH_KICK, -6.3),
+        (CH_KICK, -7.0),
         (CH_SNARE, 12.0),
-        (CH_HAT, 1.2),
-        (CH_PERC, -1.1),
-        (CH_BASS, 6.4),
-        (CH_PAD, 5.8),
-        (CH_LEAD, 10.1),
-        (CH_KEYS, 9.4),
+        (CH_HAT, 0.9),
+        (CH_PERC, -1.3),
+        (CH_BASS, 6.1),
+        (CH_PAD, 7.4),
+        (CH_LEAD, 10.7),
+        (CH_KEYS, 9.2),
     ],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -2284,14 +2309,14 @@ const KE_BENGA: Style = Style {
             (CH_LEAD, jazz_guitar, 0.4, 0.25, 0.15, 0.0),
             (CH_BELL, elec_clean, 0.22, -0.3, 0.15, 0.0),
             (CH_KEYS, elec_clean, 0.22, -0.15, 0.12, 0.0),
-            (CH_BASS, ska_bass_finger, 0.38, 0.0, 0.03, 0.0),
+            (CH_BASS, ska_bass_flat, 0.38, 0.0, 0.03, 0.0),
         ],
         kits: KE_KITS,
         room: (0.76, 0.18),
         ..BASE.sound
     },
     double: &[(CH_KEYS, 0.7)],
-    balance: &[(CH_KICK, -4.4), (CH_SNARE, -0.6), (CH_HAT, -2.4), (CH_BASS, 5.0), (CH_LEAD, 2.8), (CH_KEYS, 3.3)],
+    balance: &[(CH_KICK, -4.8), (CH_SNARE, -0.7), (CH_HAT, -2.5), (CH_BASS, 5.3), (CH_LEAD, 2.6), (CH_KEYS, 3.5)],
     ..BASE
 };
 
@@ -2345,7 +2370,7 @@ const KE_RUMBA: Style = Style {
             (CH_LEAD, jazz_guitar, 0.4, 0.25, 0.18, 0.0),
             (CH_BELL, elec_clean, 0.22, -0.3, 0.18, 0.0),
             (CH_KEYS, jazz_guitar, 0.22, -0.15, 0.15, 0.0),
-            (CH_BASS, ska_bass_finger, 0.46, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_upright, 0.46, 0.0, 0.03, 0.0),
         ],
         kits: &[
             (CH_KICK, ska_kit_kick, 0.75, 0.0, 0.05),
@@ -2359,13 +2384,13 @@ const KE_RUMBA: Style = Style {
     },
     double: &[(CH_KEYS, 0.6)],
     balance: &[
-        (CH_KICK, -4.7),
-        (CH_SNARE, 0.9),
-        (CH_HAT, -2.1),
-        (CH_PERC, -6.8),
-        (CH_BASS, 5.1),
-        (CH_LEAD, 3.0),
-        (CH_KEYS, 9.2),
+        (CH_KICK, -4.5),
+        (CH_SNARE, 1.2),
+        (CH_HAT, -1.9),
+        (CH_PERC, -6.6),
+        (CH_BASS, 4.5),
+        (CH_LEAD, 3.1),
+        (CH_KEYS, 9.9),
     ],
     ..BASE
 };
@@ -2421,7 +2446,7 @@ const KE_NYATITI: Style = Style {
         room: (0.74, 0.16),
         ..BASE.sound
     },
-    balance: &[(CH_KICK, -4.8), (CH_HAT, 4.5), (CH_PERC, -2.8), (CH_BASS, 8.5), (CH_ARP, 1.5), (CH_LEAD, 9.6)],
+    balance: &[(CH_KICK, -5.0), (CH_HAT, 4.6), (CH_PERC, -2.7), (CH_BASS, 8.6), (CH_ARP, 1.6), (CH_LEAD, 9.7)],
     ..BASE
 };
 
@@ -2706,7 +2731,7 @@ const EL_LOUNGE: Style = Style {
         alts: &[(CH_LEAD, &[("vibraphone", vibes), ("alto sax", ska_alto), ("flute", flute), ("clarinet", clarinet)])],
         ..BASE.sound
     },
-    balance: &[(CH_SNARE, 11.7), (CH_HAT, -0.6), (CH_CYM, 3.3), (CH_BASS, -2.0), (CH_PAD, 1.1), (CH_KEYS, 1.8)],
+    balance: &[(CH_SNARE, 11.7), (CH_HAT, -0.7), (CH_CYM, 3.2), (CH_BASS, -2.0), (CH_PAD, 1.1), (CH_KEYS, 1.7)],
     ..BASE
 };
 
@@ -2735,7 +2760,7 @@ const EL_SMOOTH: Style = Style {
     sound: Sound {
         tones: &[
             (CH_KEYS, ep_rhodes, 0.28, -0.25, 0.2, 0.0),
-            (CH_BASS, bass_synth, 0.42, 0.0, 0.05, 0.0),
+            (CH_BASS, bass_upright, 0.42, 0.0, 0.05, 0.0),
             (CH_LEAD, ska_alto, 0.3, 0.2, 0.25, 0.0),
             (CH_PAD, pad_strings, 0.14, 0.1, 0.3, 0.0),
             (CH_BELL, vibes, 0.18, -0.3, 0.25, 0.0),
@@ -2751,13 +2776,13 @@ const EL_SMOOTH: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -4.8),
+        (CH_KICK, -5.1),
         (CH_SNARE, 12.0),
-        (CH_HAT, -2.7),
-        (CH_BASS, 1.8),
-        (CH_PAD, 4.5),
-        (CH_LEAD, 4.0),
-        (CH_KEYS, 3.1),
+        (CH_HAT, -2.9),
+        (CH_BASS, 2.0),
+        (CH_PAD, 4.4),
+        (CH_LEAD, 3.9),
+        (CH_KEYS, 3.0),
     ],
     ..BASE
 };
@@ -2813,7 +2838,7 @@ const CO_UPLIFT: Style = Style {
         tones: &[
             (CH_KEYS, piano, 0.28, -0.15, 0.2, 0.0),
             (CH_ARP, pizzicato, 0.22, 0.3, 0.15, 0.1),
-            (CH_BASS, ska_bass_finger, 0.4, 0.0, 0.03, 0.0),
+            (CH_BASS, ska_bass_flat, 0.4, 0.0, 0.03, 0.0),
             (CH_LEAD, glockenspiel, 0.26, 0.1, 0.2, 0.1),
             (CH_BELL, glockenspiel, 0.16, -0.2, 0.2, 0.1),
             (CH_PAD, pad_strings, 0.16, 0.0, 0.28, 0.0),
@@ -2834,16 +2859,17 @@ const CO_UPLIFT: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -5.6),
-        (CH_SNARE, 1.2),
-        (CH_HAT, 1.2),
+        (CH_KICK, -6.7),
+        (CH_SNARE, 1.3),
+        (CH_HAT, 1.3),
         (CH_PERC, 6.2),
-        (CH_BASS, 4.2),
-        (CH_PAD, 6.0),
-        (CH_ARP, 6.2),
-        (CH_LEAD, 8.5),
-        (CH_KEYS, 2.4),
+        (CH_BASS, 4.6),
+        (CH_PAD, 7.4),
+        (CH_ARP, 6.4),
+        (CH_LEAD, 8.6),
+        (CH_KEYS, 2.5),
     ],
+    chorus: &[(CH_PAD, 0.5)],
     ..BASE
 };
 
@@ -2887,14 +2913,15 @@ const CO_TECH: Style = Style {
         ..BASE.sound
     },
     balance: &[
-        (CH_KICK, -6.5),
+        (CH_KICK, -7.9),
         (CH_HAT, 0.8),
         (CH_BASS, 11.8),
-        (CH_PAD, 9.9),
+        (CH_PAD, 10.9),
         (CH_ARP, 6.7),
-        (CH_LEAD, 8.5),
-        (CH_KEYS, 11.7),
+        (CH_LEAD, 9.8),
+        (CH_KEYS, 12.0),
     ],
+    chorus: &[(CH_LEAD, 0.4), (CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -2942,15 +2969,7 @@ const CO_ACOUSTIC: Style = Style {
         ..BASE.sound
     },
     double: &[(CH_KEYS, 0.8)],
-    balance: &[
-        (CH_KICK, -5.0),
-        (CH_SNARE, 10.4),
-        (CH_PERC, 2.3),
-        (CH_BASS, 4.3),
-        (CH_ARP, 6.1),
-        (CH_LEAD, 5.5),
-        (CH_KEYS, 0.5),
-    ],
+    balance: &[(CH_KICK, -5.9), (CH_SNARE, 12.0), (CH_PERC, 2.4), (CH_BASS, 4.4), (CH_ARP, 6.4), (CH_LEAD, 5.6)],
     ..BASE
 };
 
@@ -2976,7 +2995,7 @@ const WO_SOUND: Sound = Sound {
         (CH_LEAD, piano, 0.3, 0.1, 0.3, 0.0),
         (CH_PAD, pad_shimmer, 0.2, 0.0, 0.45, 0.0),
         (CH_ARP, elec_clean, 0.18, 0.35, 0.3, 0.45),
-        (CH_BASS, ska_bass_finger, 0.4, 0.0, 0.05, 0.0),
+        (CH_BASS, ska_bass_flat, 0.4, 0.0, 0.05, 0.0),
     ],
     kits: WO_KITS,
     room: (0.88, 0.34),
@@ -3019,16 +3038,8 @@ const WO_BALLAD: Style = Style {
     end_hit: false,
     sound: WO_SOUND,
     double: &[(CH_ARP, 0.6)],
-    balance: &[
-        (CH_KICK, -4.4),
-        (CH_SNARE, -0.6),
-        (CH_PERC, 4.5),
-        (CH_BASS, 1.7),
-        (CH_PAD, -1.6),
-        (CH_ARP, 6.4),
-        (CH_LEAD, 6.3),
-        (CH_KEYS, 5.9),
-    ],
+    balance: &[(CH_KICK, -5.3), (CH_PERC, 4.6), (CH_BASS, 1.7), (CH_ARP, 6.7), (CH_LEAD, 6.5), (CH_KEYS, 6.1)],
+    chorus: &[(CH_PAD, 0.5)],
     ..BASE
 };
 
@@ -3073,7 +3084,7 @@ const WO_HYMN: Style = Style {
         ],
         ..WO_SOUND
     },
-    balance: &[(CH_KICK, -4.6), (CH_SNARE, 1.7), (CH_HAT, -0.6), (CH_BASS, 1.9), (CH_LEAD, 6.8), (CH_KEYS, 4.5)],
+    balance: &[(CH_KICK, -5.4), (CH_SNARE, 1.9), (CH_PERC, 0.6), (CH_BASS, 2.2), (CH_LEAD, 7.1), (CH_KEYS, 4.8)],
     ..BASE
 };
 
@@ -3109,15 +3120,16 @@ const WO_ANTHEM: Style = Style {
     sound: WO_SOUND,
     double: &[(CH_ARP, 0.6)],
     balance: &[
-        (CH_KICK, -5.6),
-        (CH_SNARE, 2.2),
-        (CH_PERC, 7.2),
+        (CH_KICK, -6.3),
+        (CH_SNARE, 2.5),
+        (CH_PERC, 7.4),
         (CH_BASS, 3.9),
-        (CH_PAD, 1.1),
-        (CH_ARP, 8.6),
-        (CH_LEAD, 7.3),
-        (CH_KEYS, 4.8),
+        (CH_PAD, 2.4),
+        (CH_ARP, 8.9),
+        (CH_LEAD, 7.4),
+        (CH_KEYS, 4.9),
     ],
+    chorus: &[(CH_PAD, 0.5)],
     ..BASE
 };
 
@@ -3134,7 +3146,7 @@ const PR_SOUND: Sound = Sound {
     tones: &[
         (CH_KEYS, piano, 0.28, -0.2, 0.18, 0.0),
         (CH_PAD, pad_organ, 0.18, 0.15, 0.2, 0.0),
-        (CH_BASS, ska_bass_finger, 0.46, 0.0, 0.03, 0.0),
+        (CH_BASS, ska_bass_flat, 0.46, 0.0, 0.03, 0.0),
         (CH_LEAD, ska_hammond, 0.3, 0.2, 0.2, 0.0),
         (CH_BELL, pad_choir, 0.22, -0.2, 0.3, 0.0),
     ],
@@ -3190,15 +3202,7 @@ const PR_GOSPEL: Style = Style {
     second: SV_STABS,
     density: (0.42, 0.5),
     sound: PR_SOUND,
-    balance: &[
-        (CH_KICK, -5.2),
-        (CH_SNARE, -0.6),
-        (CH_HAT, 0.9),
-        (CH_BASS, 4.4),
-        (CH_PAD, 4.6),
-        (CH_LEAD, 6.1),
-        (CH_KEYS, 4.8),
-    ],
+    balance: &[(CH_KICK, -6.1), (CH_HAT, 1.1), (CH_BASS, 4.9), (CH_PAD, 4.7), (CH_LEAD, 6.2), (CH_KEYS, 5.0)],
     ..BASE
 };
 
@@ -3244,14 +3248,14 @@ const PR_SHUFFLE: Style = Style {
     density: (0.36, 0.42),
     sound: PR_SOUND,
     balance: &[
-        (CH_KICK, -5.4),
-        (CH_HAT, -2.1),
-        (CH_PERC, 2.5),
-        (CH_BASS, 3.9),
-        (CH_PAD, 4.2),
-        (CH_LEAD, 5.5),
-        (CH_BELL, 6.3),
-        (CH_KEYS, 6.6),
+        (CH_KICK, -6.2),
+        (CH_HAT, -1.9),
+        (CH_PERC, 2.6),
+        (CH_BASS, 4.3),
+        (CH_PAD, 4.4),
+        (CH_LEAD, 5.7),
+        (CH_BELL, 6.5),
+        (CH_KEYS, 6.8),
     ],
     ..BASE
 };
@@ -3294,7 +3298,7 @@ const PR_MODERN: Style = Style {
         tones: &[
             (CH_KEYS, steel_guitar, 0.28, -0.25, 0.18, 0.0),
             (CH_ARP, elec_clean, 0.18, 0.35, 0.25, 0.4),
-            (CH_BASS, ska_bass_pick, 0.44, 0.0, 0.03, 0.0),
+            (CH_BASS, bass_pick_dark, 0.44, 0.0, 0.03, 0.0),
             (CH_LEAD, lead_saw, 0.26, 0.1, 0.22, 0.1),
             (CH_PAD, pad_warm, 0.16, 0.0, 0.35, 0.0),
         ],
@@ -3306,14 +3310,16 @@ const PR_MODERN: Style = Style {
     },
     double: &[(CH_KEYS, 0.8), (CH_ARP, 0.6)],
     balance: &[
-        (CH_KICK, -5.3),
-        (CH_SNARE, -1.5),
-        (CH_BASS, 4.3),
-        (CH_PAD, 4.2),
-        (CH_ARP, 8.6),
-        (CH_LEAD, 9.6),
-        (CH_KEYS, 3.1),
+        (CH_KICK, -6.2),
+        (CH_SNARE, -1.6),
+        (CH_HAT, 0.5),
+        (CH_BASS, 4.4),
+        (CH_PAD, 5.8),
+        (CH_ARP, 8.8),
+        (CH_LEAD, 10.3),
+        (CH_KEYS, 3.0),
     ],
+    chorus: &[(CH_PAD, 0.6)],
     ..BASE
 };
 
@@ -3392,7 +3398,7 @@ pub(super) fn palette_styled(g: usize, ch: usize) -> Option<&'static [(&'static 
         ROCK | NOUGHTIES => &[
             (CH_LEAD, &[("overdriven guitar", ska_guitar_fuzz), ("distorted guitar", ska_guitar_dist)]),
             (CH_KEYS, &[("distorted guitar", ska_guitar_dist), ("organ", ska_organ_rec)]),
-            (CH_BASS, &[("picked bass", ska_bass_pick)]),
+            (CH_BASS, &[("picked bass", bass_pick_dark)]),
             (CH_PAD, &[("organ", ska_organ_rec)]),
         ],
         SIXTIES => &[
@@ -3405,7 +3411,7 @@ pub(super) fn palette_styled(g: usize, ch: usize) -> Option<&'static [(&'static 
         SEVENTIES => &[
             (CH_LEAD, &[("strings", strings_fast), ("tenor sax", sax), ("flute", flute)]),
             (CH_KEYS, &[("clavinet", clav), ("funk guitar", ska_guitar_clean), ("Rhodes", ep_rhodes)]),
-            (CH_BASS, &[("bass", ska_bass_finger)]),
+            (CH_BASS, &[("bass", ska_bass_flat)]),
             (CH_BELL, &[("horns", brass_section)]),
             (CH_PAD, &[("strings", pad_strings)]),
         ],
@@ -3440,7 +3446,7 @@ pub(super) fn palette_styled(g: usize, ch: usize) -> Option<&'static [(&'static 
             (CH_BELL, &[("second guitar", elec_clean)]),
             (CH_KEYS, &[("rhythm guitar", jazz_guitar)]),
             (CH_ARP, &[("nyatiti", nyatiti)]),
-            (CH_BASS, &[("bass", ska_bass_finger)]),
+            (CH_BASS, &[("bass", ska_bass_flat)]),
         ],
         YOGA => &[
             (CH_LEAD, &[("bansuri", bansuri), ("pan flute", pan_flute)]),
@@ -3460,7 +3466,7 @@ pub(super) fn palette_styled(g: usize, ch: usize) -> Option<&'static [(&'static 
             (CH_LEAD, &[("glockenspiel", glockenspiel), ("whistle", whistle)]),
             (CH_KEYS, &[("piano", piano), ("steel-string guitar", steel_guitar)]),
             (CH_ARP, &[("pizzicato strings", pizzicato), ("marimba", marimba)]),
-            (CH_BASS, &[("bass", ska_bass_finger)]),
+            (CH_BASS, &[("bass", ska_bass_flat)]),
             (CH_PAD, &[("strings", pad_strings)]),
         ],
         WORSHIP => &[
@@ -3474,7 +3480,7 @@ pub(super) fn palette_styled(g: usize, ch: usize) -> Option<&'static [(&'static 
             (CH_KEYS, &[("piano", piano)]),
             (CH_PAD, &[("organ", pad_organ)]),
             (CH_BELL, &[("choir", pad_choir)]),
-            (CH_BASS, &[("bass", ska_bass_finger)]),
+            (CH_BASS, &[("bass", ska_bass_flat)]),
         ],
     };
     pal.iter().find(|x| x.0 == ch).map(|x| x.1)
