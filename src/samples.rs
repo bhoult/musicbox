@@ -232,6 +232,59 @@ const FX: f64 = 4294967296.0;
 /// The fade a sample that runs out ends with (10 ms, samples).
 const END_FADE: f64 = 480.0;
 
+/// The SoundFont's recordings that hold a note on a loop of a few cycles of
+/// the wave (24 or fewer, after an attack of 30 ms or more: a synthesiser's
+/// wave loops from its first milliseconds, and is meant to hold still), and
+/// whether each is plucked or struck (it decays). Played over and over, so
+/// short a loop holds the sound still, as no instrument does: the note is
+/// kept alive (`Life`). Its pitch wanders by up to `DRIFT` cents, a new aim
+/// every `DRIFT_EVERY` seconds reached in about `DRIFT_GLIDE`; a plucked or
+/// struck one's highs die before its body, a low-pass falling from
+/// `LIFE_OPEN` (Hz: the attack as recorded) to `LIFE_FLOOR` harmonics over a
+/// time that shortens up the keyboard. By name, so that the browser's copy
+/// (its loops played out longer) keeps the same notes alive.
+const LIVELY: &[(&str, bool)] = &[
+    ("Nylon String Guitar", true),
+    ("Steel String Guitar", true),
+    ("12-String Guitar", true),
+    ("Jazz Guitar", true),
+    ("Clean Guitar", true),
+    ("Palm Muted Guitar", true),
+    ("Funk Guitar", true),
+    ("Mandolin", true),
+    ("Banjo", true),
+    ("Harp", true),
+    ("Acoustic Bass", true),
+    ("Fingered Bass", true),
+    ("Picked Bass", true),
+    ("Fretless Bass", true),
+    ("Slap Bass", true),
+    ("Tine Electric Piano", true),
+    ("Detuned Tine EP", true),
+    ("Harpsichord", true),
+    ("Clavinet", true),
+    ("Celesta", true),
+    ("Music Box", true),
+    ("Vibraphone", true),
+    ("Kalimba", true),
+    ("Overdrive Guitar", false),
+    ("Distortion Guitar", false),
+    ("Reed Organ", false),
+    ("Bandoneon", false),
+    ("Harmonica", false),
+    ("Clarinet", false),
+    ("Shenai", false),
+    ("Whistle", false),
+    ("Harmon Mute Trumpet", false),
+    ("Trombone", false),
+    ("Tuba", false),
+];
+const DRIFT: f32 = 3.0;
+const DRIFT_EVERY: f32 = 0.35;
+const DRIFT_GLIDE: f32 = 0.15;
+const LIFE_OPEN: f32 = 8000.0;
+const LIFE_FLOOR: f32 = 4.0;
+
 /// A sustained recording ("sus", "vib") at least `LOOP_MIN` seconds long
 /// loops `LOOP` (seconds from its onset) while the gate is open, the last
 /// `LOOP_XF` of each time round crossfaded into the start's: the manifest's
@@ -313,6 +366,8 @@ pub struct Bank {
     multis: Vec<(String, String, u16)>,
     gms: Vec<(String, u16)>,
     kits: Vec<(String, [u16; 128])>,
+    /// the instruments whose notes are kept alive (`LIVELY`), and whether each decays
+    lively: Vec<(u16, bool)>,
     /// what loading skipped, and why
     pub warnings: Vec<String>,
 }
@@ -327,7 +382,16 @@ impl Bank {
             multis: Vec::new(),
             gms: Vec::new(),
             kits: Vec::new(),
+            lively: Vec::new(),
             warnings: Vec::new(),
+        }
+    }
+
+    /// A preset named: `p` is `id` (and, one of `LIVELY`, its notes kept alive).
+    fn name_gm(&mut self, p: &str, id: u16) {
+        self.gms.push((p.to_string(), id));
+        if let Some(&(_, decays)) = LIVELY.iter().find(|x| x.0 == p) {
+            self.lively.push((id, decays));
         }
     }
 
@@ -585,7 +649,26 @@ pub struct Sampler {
     pub loops: bool,
     /// a gain on the zones (an "auto" instrument's short articulation's)
     g: f32,
+    /// a short loop's note kept alive (`LIFE_PERIODS`)
+    life: Life,
 }
+
+/// What keeps a short loop's note alive: whether it is (and whether it
+/// decays, a pluck's or a strike's), its age (samples), the pitch's wander
+/// (semitones) and its aim, the dice, the low-pass's state (two poles, left
+/// and right).
+#[derive(Clone, Copy)]
+struct Life {
+    on: bool,
+    decays: bool,
+    age: u32,
+    drift: f32,
+    aim: f32,
+    dice: u32,
+    lp: [[f32; 2]; 2],
+}
+
+const LIFE: Life = Life { on: false, decays: false, age: 0, drift: 0.0, aim: 0.0, dice: 1, lp: [[0.0; 2]; 2] };
 
 pub const SAMPLER: Sampler = Sampler {
     n: 0,
@@ -601,6 +684,7 @@ pub const SAMPLER: Sampler = Sampler {
     excl: 0,
     loops: true,
     g: 1.0,
+    life: LIFE,
 };
 
 /// Frames `i` and `j` (mono or interleaved stereo) `fr` of the way between.
@@ -655,6 +739,13 @@ impl Sampler {
         self.excl = z0.excl;
         self.loops = true;
         self.g = g;
+        let lively = b.lively.iter().find(|x| x.0 == id).filter(|_| key.is_none());
+        self.life = Life {
+            on: lively.is_some(),
+            decays: lively.is_some_and(|x| x.1),
+            dice: (note.to_bits() ^ vel.to_bits().rotate_left(13) ^ rr.wrapping_mul(0x9e37_79b9)) | 1,
+            ..LIFE
+        };
         true
     }
 
@@ -665,6 +756,20 @@ impl Sampler {
     pub fn fill(&mut self, b: &Bank, pitch: f32, gate: bool, out: &mut [[f32; 2]]) -> bool {
         out.fill([0.0; 2]);
         let mut any = false;
+        let life = &mut self.life;
+        let pitch = if life.on {
+            let every = (DRIFT_EVERY * RATE) as u32;
+            if life.age % every < out.len() as u32 {
+                life.dice ^= life.dice << 13;
+                life.dice ^= life.dice >> 17;
+                life.dice ^= life.dice << 5;
+                life.aim = ((life.dice >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.0 * DRIFT / 100.0;
+            }
+            life.drift += (life.aim - life.drift) * (1.0 - (-(out.len() as f32) / (DRIFT_GLIDE * RATE)).exp());
+            pitch + life.drift
+        } else {
+            pitch
+        };
         for k in 0..self.n as usize {
             if !self.live[k] {
                 continue;
@@ -762,6 +867,25 @@ impl Sampler {
             self.pos[k] = pos;
             any |= self.live[k];
         }
+        let life = &mut self.life;
+        if life.on && life.decays {
+            // the highs dying first: two one-poles, their corner falling from
+            // open to a few harmonics (once a block)
+            let f0 = 440.0 * ((pitch - 69.0) / 12.0).exp2();
+            let tau = (0.5 * (220.0 / f0).sqrt()).clamp(0.08, 1.5) * RATE;
+            let floor = f0 * LIFE_FLOOR;
+            let fc = floor + (LIFE_OPEN - floor).max(0.0) * (-(life.age as f32) / tau).exp();
+            let a = 1.0 - (-std::f32::consts::TAU * fc.min(18000.0) / RATE).exp();
+            for o in out.iter_mut() {
+                let [p0, p1] = &mut life.lp;
+                for ((x, y0), y1) in o.iter().zip(p0.iter_mut()).zip(p1.iter_mut()) {
+                    *y0 += a * (x - *y0);
+                    *y1 += a * (*y0 - *y1);
+                }
+                *o = *p1;
+            }
+        }
+        life.age = life.age.saturating_add(out.len() as u32);
         if self.hold == 0 && self.env == self.sus {
             if self.env != 1.0 {
                 for o in out.iter_mut() {
@@ -1492,7 +1616,7 @@ fn load_sf2(b: &mut Bank, path: &Path, melodic: &[&str], kits: &[&str]) -> Resul
             };
             let id = b.add(zones, &covers, false, None);
             if b.normalise(id, mid, p) {
-                b.gms.push((p.clone(), id));
+                b.name_gm(p, id);
             }
         } else {
             // each key its own instrument
@@ -2532,7 +2656,9 @@ impl Partial {
         }
         let gr = &self.groups[g];
         self.bank.multis.extend(gr.multis.iter().cloned());
-        self.bank.gms.extend(gr.gms.iter().cloned());
+        for (p, id) in gr.gms.clone() {
+            self.bank.name_gm(&p, id);
+        }
         self.bank.kits.extend(gr.kits.iter().cloned());
         Ok(())
     }

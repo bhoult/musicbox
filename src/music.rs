@@ -1540,6 +1540,9 @@ struct Master {
     /// and the most it adds
     lk: f32,
     lmax: f32,
+    /// the leveller held at unity (`MUSICBOX_NOLEVEL`, for tools/validate to
+    /// hear a channel alone at its level in the mix)
+    still: bool,
     lim: Limiter,
     /// a tilt: shelves below 250 Hz and above 2.5 kHz (linear gains; 1: flat),
     /// one-pole each, and their filters' state (left, right)
@@ -1574,6 +1577,7 @@ impl Master {
             agc: 1.0,
             lk: 0.5,
             lmax: 2.0,
+            still: std::env::var_os("MUSICBOX_NOLEVEL").is_some(),
             lim: Limiter::new(0.89),
             lo_g: 1.0,
             hi_g: 1.0,
@@ -1647,6 +1651,9 @@ impl Master {
 
     /// The leveller, once a block.
     fn block(&mut self, n: usize) {
+        if self.still {
+            return;
+        }
         let want = (self.target / (self.ms.sqrt() + 1e-6)).powf(self.lk).clamp(0.5, self.lmax);
         self.agc += (want - self.agc) * (n as f32 / (2.5 * SR));
     }
@@ -1882,6 +1889,14 @@ struct Channel {
     cline: Vec<f32>,
     cw: usize,
     cph: f32,
+    /// a second take's share on the right (0: none): what it plays on the
+    /// left, and on the right a copy a little late, its lateness wandering
+    /// as a player's does (a part double-tracked, panned hard); its line,
+    /// where it writes, the wander's phases
+    double: f32,
+    dline: Vec<f32>,
+    dw: usize,
+    dph: [f32; 2],
     /// the optimiser's level on it, and its spread on the pan (1: as written)
     trim: f32,
     spread: f32,
@@ -1892,6 +1907,20 @@ const CHORUS_LEN: usize = 1024;
 const CHORUS_DELAY: f32 = 0.007;
 const CHORUS_DEPTH: f32 = 0.0025;
 const CHORUS_RATE: f32 = 0.6;
+/// The second take's lateness (s), how far it wanders, and the wander's two rates (Hz).
+const DOUBLE_DELAY: f32 = 0.014;
+const DOUBLE_DEPTH: f32 = 0.0008;
+const DOUBLE_RATES: [f32; 2] = [0.23, 0.071];
+
+/// A chorus's or a double's line, `secs` back from where it writes (`w`).
+fn tap(line: &[f32], w: usize, secs: f32) -> f32 {
+    let back = secs * SR;
+    let i = back as usize;
+    let fr = back - i as f32;
+    let a = line[(w + CHORUS_LEN - i) % CHORUS_LEN];
+    let b = line[(w + CHORUS_LEN - i - 1) % CHORUS_LEN];
+    a + (b - a) * fr
+}
 
 impl Channel {
     fn new(voices: usize, drums: usize) -> Channel {
@@ -1926,6 +1955,10 @@ impl Channel {
             cline: Vec::new(),
             cw: 0,
             cph: 0.0,
+            double: 0.0,
+            dline: Vec::new(),
+            dw: 0,
+            dph: [0.0, 0.37],
             trim: 1.0,
             spread: 1.0,
         }
@@ -2015,14 +2048,6 @@ impl Channel {
             if self.cline.is_empty() {
                 self.cline = vec![0.0; CHORUS_LEN];
             }
-            let tap = |line: &[f32], w: usize, secs: f32| {
-                let back = secs * SR;
-                let i = back as usize;
-                let fr = back - i as f32;
-                let a = line[(w + CHORUS_LEN - i) % CHORUS_LEN];
-                let b = line[(w + CHORUS_LEN - i - 1) % CHORUS_LEN];
-                a + (b - a) * fr
-            };
             // the dry a little down, so it is no louder for the copies
             let dry = 1.0 / (1.0 + 0.5 * self.chorus);
             for o in self.buf[..n].iter_mut() {
@@ -2032,6 +2057,20 @@ impl Channel {
                 let r = tap(&self.cline, self.cw, CHORUS_DELAY + CHORUS_DEPTH * sin01(self.cph + 0.5));
                 *o = [(o[0] + self.chorus * l) * dry, (o[1] + self.chorus * r) * dry];
                 self.cw = (self.cw + 1) % CHORUS_LEN;
+            }
+        }
+        if self.double > 0.0 {
+            if self.dline.is_empty() {
+                self.dline = vec![0.0; CHORUS_LEN];
+            }
+            for o in self.buf[..n].iter_mut() {
+                let m = 0.5 * (o[0] + o[1]);
+                self.dline[self.dw] = m;
+                self.dph = [wrap(self.dph[0] + DOUBLE_RATES[0] / SR), wrap(self.dph[1] + DOUBLE_RATES[1] / SR)];
+                let late = DOUBLE_DELAY + DOUBLE_DEPTH * 0.5 * (sin01(self.dph[0]) + sin01(self.dph[1]));
+                let take = tap(&self.dline, self.dw, late);
+                *o = [m, m + (take - m) * self.double];
+                self.dw = (self.dw + 1) % CHORUS_LEN;
             }
         }
         self.gain_s += (self.gain - self.gain_s) * 0.05;
@@ -10678,6 +10717,7 @@ fn new_bass(r: &mut Rng, mode: usize, style: u8) -> [Step; 16] {
 fn mix(c: &mut Channel, gain: f32, pan: f32, rev: f32, dly: f32, duck: f32) {
     c.gain = gain;
     c.chorus = 0.0;
+    c.double = 0.0;
     c.pan = pan;
     c.rev = rev;
     c.dly = dly;

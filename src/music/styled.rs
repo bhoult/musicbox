@@ -206,6 +206,13 @@ pub(super) struct Style {
     /// the last bar a hit (else a chord left to ring)
     pub(super) end_hit: bool,
     pub(super) sound: Sound,
+    /// each channel's trim (dB) on its level: the style's channels heard
+    /// alone, measured over whole pieces, and brought to a band's balance
+    /// (tools/validate/balance.py)
+    pub(super) balance: &'static [(usize, f32)],
+    /// the parts double-tracked (a rhythm guitar's two takes, one to each
+    /// side) and the second take's share
+    pub(super) double: &'static [(usize, f32)],
 }
 
 fn no_extra(_: &mut Rng, _: &mut Synth) {}
@@ -246,6 +253,8 @@ pub(super) const BASE: Style = Style {
         alts: &[],
         kit_alts: &[],
     },
+    balance: &[],
+    double: &[],
 };
 
 // -- forms
@@ -598,6 +607,12 @@ pub(super) fn sounds_style(st: &Style, r: &mut Rng, s: &mut Synth) {
         s.ch[ch].drums = make(r);
         mix(&mut s.ch[ch], gain, pan, rev, 0.0, 0.0);
     }
+    for &(ch, db) in st.balance {
+        s.ch[ch].gain *= 10f32.powf(db / 20.0);
+    }
+    for &(ch, d) in st.double {
+        (s.ch[ch].double, s.ch[ch].pan) = (d, 0.0);
+    }
     mix(&mut s.ch[CH_FX], 0.6, 0.0, 0.3, 0.0, 0.0);
     s.sc_rel = (-1.0 / (0.12 * SR)).exp();
     if st.pump > 0.0 {
@@ -699,6 +714,11 @@ impl Song {
         let w: Vec<f32> = list.iter().map(|x| x.0).collect();
         let r = &mut self.rng;
         self.sy.style = r.weighted(&w);
+        // (`MUSICBOX_STYLE=K`: the Kth style, for tools/validate to measure
+        // each; the dice as they were)
+        if let Some(k) = std::env::var("MUSICBOX_STYLE").ok().and_then(|v| v.parse::<usize>().ok()) {
+            self.sy.style = k.min(list.len() - 1);
+        }
         let st = &list[self.sy.style].1;
         self.mode = r.weighted(&st.modes);
         self.bpm = r.range(st.bpm.0, st.bpm.1) as f64;
