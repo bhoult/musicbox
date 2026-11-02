@@ -35,6 +35,8 @@
   main { max-width: 1120px; margin: 0 auto; padding: 16px; }
   header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 28px; letter-spacing: 3px; color: var(--accent); text-transform: uppercase; }
+  header .title { display: flex; align-items: baseline; gap: 6px 16px; flex-wrap: wrap; }
+  .tagline { color: var(--dim); font-size: 13px; font-style: italic; }
   header .right { display: flex; align-items: baseline; gap: 14px; color: var(--dim); font-size: 13px; }
   a { color: var(--accent); }
   .now { display: flex; justify-content: space-between; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin: 6px 0 2px; }
@@ -143,7 +145,10 @@
 <body>
 <main>
   <header>
-    <h1>musicbox</h1>
+    <div class="title">
+      <h1>musicbox</h1>
+      <span class="tagline">for when quantity takes priority over quality</span>
+    </div>
     <div class="right">
       <button id="keys" class="link" data-help="Every key, in one list." data-key="?">keys</button>
       <a href="https://github.com/bhoult/musicbox">source and desktop app</a>
@@ -241,6 +246,7 @@
 <div id="start">
   <div class="box">
     <h1>musicbox</h1>
+    <p class="tagline">for when quantity takes priority over quality</p>
     <p>Endless music in 28 genres, made up as it plays.</p>
     <p class="small">It fetches each genre's recorded instruments as it needs them, 4 to 26 MB a genre.</p>
     <button id="go">▶ play</button>

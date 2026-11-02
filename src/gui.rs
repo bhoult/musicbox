@@ -417,6 +417,11 @@ impl Gui {
         }
         let rw = font::width(&right, 1);
         self.text(w - m - rw, m + 4, &right, DIM, 1);
+        let tag = "FOR WHEN QUANTITY TAKES PRIORITY OVER QUALITY";
+        let tx = m + font::width("MUSICBOX", 2) + 14;
+        if tx + font::width(tag, 1) + 24 <= w - m - rw {
+            self.text(tx, m + 4, tag, DIM, 1);
+        }
         self.sid = Some((w - m - rw - 2, m + 1, w - m + 2, m + 14));
         self.tip(
             self.sid,
