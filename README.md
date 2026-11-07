@@ -8,7 +8,7 @@ Music made up as it plays, without end, in 28 genres and any pair of them. It pl
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
-[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id, the equalizer, the transport, the song's bar, the volume, the length, saving, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
+[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id, the equalizer, the transport, the song's bar, the volume, the length, saving, the reverb and echo, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
 
 As it comes, no AI model makes any of the sound or the music, and no song is sampled. The music comes from a composer that is ordinary code: for each genre, rules for its scales, chords, rhythms, song forms and who plays what, and a random number generator choosing among them. It is generated at random and without end by software that an AI wrote. A genre and a seed always give the same music.
 
@@ -77,7 +77,7 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 
 ## The window
 
-![The window: mariachi drummed by techno, on network instruments; the equalizer, the transport, the three settings, the genre selector and the volume](docs/window.png)
+![The window: mariachi drummed by techno, on network instruments; the equalizer, the transport, the three settings, the genre selector, and the reverb, echo and volume](docs/window.png)
 
 `--gui` or G opens it. It has six parts:
 
