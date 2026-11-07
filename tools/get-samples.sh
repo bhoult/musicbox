@@ -18,13 +18,18 @@
 #     harmonica, psaltery, kalimba, vibraphone, marimba, glockenspiel, balafon, guiro, shakers,
 #     claps, cajon, congas, bongos, frame drum, tambourine, finger cymbals, snares, bass drum,
 #     cymbals, hi-hat, gong, triangle, anvil, slapstick, vibraslap, bell tree and agogo bells.
+#   - Karoryfer Samples' Big Rusty Drums and Black And Blue Basses (github.com/sfzinstruments), CC0
+#     1.0 (public domain), as their release zips pinned by size and sha256, of which the folders
+#     taken are unpacked: a drum kit (each hit's microphones mixed to stereo) and two electric
+#     basses, fingered and picked.
 # and writes into DEST: the SoundFont files; multi/<instrument>/<articulation>/*.wav (48 kHz,
 # 16-bit, trimmed); manifest.tsv (what the sampler reads); sources.tsv (each file's origin);
 # SOURCES.md; and licenses/ (each source's license and readme, verbatim).
 #
-# Disk space: about 1 GB in DEST (216 MB SoundFont, 790 MB multi/), plus about 3 GB
-# of git clones in the cache (MUSICBOX_SAMPLES_SRC, default ~/.cache/musicbox/samples-src), which
-# is only needed to rebuild multi/ and can be deleted afterwards.
+# Disk space: about 1 GB in DEST (216 MB SoundFont, about 900 MB multi/), plus about 3 GB of git
+# clones and 1.6 GB of zips (and what is unpacked of them) in the cache (MUSICBOX_SAMPLES_SRC,
+# default ~/.cache/musicbox/samples-src), which is only needed to rebuild multi/ and can be
+# deleted afterwards.
 #
 # Needs bash, git (2.27 or newer), curl, ffmpeg with ffprobe, and python3 (3.8 or newer,
 # standard library only). Idempotent: what is present and valid is skipped. Set
@@ -105,6 +110,19 @@ else
       say "present: $name at ${commit:0:12}"
     fi
   done 3< <(helper repos)
+  while IFS=$'\t' read -r name url size sum <&3; do
+    zip="$SRC/zips/${url##*/}"
+    if sf_valid "$zip" "$size" "$sum"; then
+      say "present: $name"
+    else
+      mkdir -p "$SRC/zips"
+      say "downloading $name ($size bytes) from $url"
+      curl -fL --retry 3 "${progress[@]}" -o "$zip.part" "$url"
+      sf_valid "$zip.part" "$size" "$sum" || { rm -f "$zip.part"; die "$name: wrong size or sha256"; }
+      mv "$zip.part" "$zip"
+    fi
+    helper extract "$zip" "$SRC" "$name"
+  done 3< <(helper archives)
   # (the helper checks that every file is audio and not a Git LFS pointer: neither repository
   # uses LFS today)
   helper build "$SRC" "$DEST"

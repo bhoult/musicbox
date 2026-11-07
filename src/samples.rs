@@ -387,10 +387,15 @@ impl Bank {
         }
     }
 
-    /// A preset named: `p` is `id` (and, one of `LIVELY`, its notes kept alive).
+    /// A preset named: `p` is `id` (and, one of `LIVELY`, its notes kept
+    /// alive: the SoundFont's, not a recording standing in for it, whose
+    /// zones have no SoundFont envelope, `GM_RECORDED`).
     fn name_gm(&mut self, p: &str, id: u16) {
         self.gms.push((p.to_string(), id));
-        if let Some(&(_, decays)) = LIVELY.iter().find(|x| x.0 == p) {
+        let sf2 = self.insts.get(id as usize - 1).and_then(|i| self.zones.get(i.zones.start as usize));
+        if let Some(&(_, decays)) = LIVELY.iter().find(|x| x.0 == p)
+            && sf2.is_some_and(|z| z.hold_tc > -32768.0)
+        {
             self.lively.push((id, decays));
         }
     }
@@ -492,8 +497,14 @@ impl Bank {
 
     /// RMS over the first `secs` of `id` at `note`, its loudest layer.
     fn rms_over(&self, id: u16, note: f32, secs: f32) -> f32 {
+        self.rms_at(id, note, 1.0, secs)
+    }
+
+    /// RMS over the first `secs` of `id` at `note` and velocity `vel` (the
+    /// layer it picks, at that layer's own level).
+    fn rms_at(&self, id: u16, note: f32, vel: f32, secs: f32) -> f32 {
         let mut s = SAMPLER;
-        if !s.start(self, id, note, 1.0, i64::MAX, 0) {
+        if !s.start(self, id, note, vel, i64::MAX, 0) {
             return 0.0;
         }
         let pitch = s.key;
@@ -524,6 +535,90 @@ impl Bank {
             z.gr *= k;
         }
         true
+    }
+
+    /// The recordings in place of SoundFont presets and kit pieces
+    /// (`GM_RECORDED`; the recorded kit's pieces in `KITS_RECORDED` for
+    /// `KIT_KEYS`): each a copy of the recording, each velocity layer at
+    /// the level of what it stands in for at that velocity (the
+    /// recordings' layers are evened, the SoundFont's soft ones quieter),
+    /// a drum in its piece's choke class, so that a genre's parts keep the
+    /// balance and dynamics they were set at.
+    fn recorded(&mut self) {
+        for &(preset, inst, art, note, secs) in GM_RECORDED {
+            let Some(rec) = self.multi(inst, art) else { continue };
+            let Some(gi) = self.gms.iter().position(|g| g.0 == preset) else { continue };
+            let was = self.gms[gi].1;
+            let notes = [note - 12.0, note - 6.0, note, note + 6.0, note + 12.0];
+            let g = self.layer_gains(was, rec, &notes, secs);
+            self.gms[gi].1 = self.copy_inst(rec, &g, 0);
+        }
+        for &kit in KITS_RECORDED {
+            let Some(k) = self.kits.iter().position(|x| x.0 == kit) else { continue };
+            for &(key, art) in KIT_KEYS {
+                let (Some(rec), was) = (self.multi("kit", art), self.kits[k].1[key as usize]) else { continue };
+                if was == 0 {
+                    continue;
+                }
+                let g = self.layer_gains(was, rec, &[60.0], 0.5);
+                let excl = self.insts[was as usize - 1].zones.clone().next().map_or(0, |z| self.zones[z as usize].excl);
+                let id = self.copy_inst(rec, &g, excl);
+                self.kits[k].1[key as usize] = id;
+            }
+        }
+    }
+
+    /// How much louder each velocity layer of `rec` is to be to sound as
+    /// `was` does at that layer's middle velocity: their power over the
+    /// first `secs` of `notes`.
+    fn layer_gains(&self, was: u16, rec: u16, notes: &[f32], secs: f32) -> Vec<f32> {
+        let inst = &self.insts[rec as usize - 1];
+        (0..inst.layers)
+            .map(|li| {
+                let vs: Vec<usize> = (0..128).filter(|&v| inst.layer[v] as usize == li).collect();
+                let v = vs.get(vs.len() / 2).map_or(1.0, |&v| v as f32 / 127.0);
+                let pow = |id: u16| notes.iter().map(|&n| self.rms_at(id, n, v, secs).powi(2)).sum::<f32>();
+                let (a, b) = (pow(was), pow(rec));
+                if a > 1e-12 && b > 1e-12 { (a / b).sqrt() } else { 1.0 }
+            })
+            .collect()
+    }
+
+    /// A copy of the instrument `id` (its zones' recordings shared), each
+    /// velocity layer `g[layer]` times as loud (a zone in two layers, as
+    /// the first), in choke class `excl`. Its id.
+    fn copy_inst(&mut self, id: u16, g: &[f32], excl: u8) -> u16 {
+        let src = &self.insts[id as usize - 1];
+        let (zr, layer, layers, key, old) = (src.zones.clone(), src.layer, src.layers, src.key, src.cells.clone());
+        let mut zg: Vec<Option<f32>> = vec![None; (zr.end - zr.start) as usize];
+        for (i, c) in old.iter().enumerate() {
+            for k in 0..c.rr as usize * c.per as usize {
+                let z = self.picks[c.first as usize + k] - zr.start;
+                zg[z as usize].get_or_insert(g.get(i % layers).copied().unwrap_or(1.0));
+            }
+        }
+        let base = self.zones.len() as u32;
+        let zones: Vec<Zone> = self.zones[zr.start as usize..zr.end as usize]
+            .iter()
+            .zip(&zg)
+            .map(|(z, g)| {
+                let g = g.unwrap_or(1.0);
+                Zone { gl: z.gl * g, gr: z.gr * g, excl, ..*z }
+            })
+            .collect();
+        self.zones.extend(zones);
+        let mut cells = Vec::with_capacity(old.len());
+        for c in old {
+            let first = self.picks.len() as u32;
+            let n = c.rr as usize * c.per as usize;
+            for i in 0..n {
+                let p = self.picks[c.first as usize + i];
+                self.picks.push(p - zr.start + base);
+            }
+            cells.push(Cell { first, ..c });
+        }
+        self.insts.push(Inst { layer, layers, cells, key, auto: None, zones: base..self.zones.len() as u32 });
+        self.insts.len() as u16
     }
 
     /// Adds an instrument made of `zones`, each covering keys and
@@ -1685,8 +1780,41 @@ pub fn load(dir: &Path) -> Result<Bank, String> {
     if !any || b.insts.is_empty() {
         return Err(format!("nothing loaded from {} ({})", dir.display(), b.warnings.join("; ")));
     }
+    b.recorded();
     Ok(b)
 }
+
+/// SoundFont presets played by recordings when they are loaded: the
+/// preset, the recording (a multisampled instrument and articulation), the
+/// notes their levels are matched over (an octave either side of this),
+/// and how long a note to match them over.
+const GM_RECORDED: &[(&str, &str, &str, f32, f32)] =
+    &[("Fingered Bass", "bass_finger", "pluck", 36.0, 1.0), ("Picked Bass", "bass_pick", "pluck", 36.0, 1.0)];
+
+/// The SoundFont kits a recorded kit (the manifest's instrument "kit", a
+/// piece an articulation) plays in, and the piece for each General MIDI key.
+const KITS_RECORDED: &[&str] = &["Standard", "Room", "Power", "Jazz"];
+const KIT_KEYS: &[(u8, &str)] = &[
+    (35, "kick"),
+    (36, "kick"),
+    (37, "stick"),
+    (38, "snare"),
+    (40, "snare"),
+    (42, "hat"),
+    (44, "hat_pedal"),
+    (46, "hat_open"),
+    (41, "tom_floor"),
+    (43, "tom_lo"),
+    (45, "tom_mid"),
+    (47, "tom_mid"),
+    (48, "tom_hi"),
+    (50, "tom_hi"),
+    (49, "crash"),
+    (57, "crash"),
+    (51, "ride"),
+    (59, "ride"),
+    (53, "ride_bell"),
+];
 
 static BANK: OnceLock<Bank> = OnceLock::new();
 static CONFIG: OnceLock<(PathBuf, bool)> = OnceLock::new();

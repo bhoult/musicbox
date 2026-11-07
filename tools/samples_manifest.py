@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Builds musicbox's multi-sample directory from the CC0 Versilian libraries.
+"""Builds musicbox's multi-sample directory from the CC0 Versilian and Karoryfer libraries.
 
 Called by tools/get-samples.sh; Python standard library only, plus ffmpeg/ffprobe.
 
   samples_manifest.py repos                  print "name<TAB>url<TAB>commit" per source
   samples_manifest.py folders NAME           print the folders to check out from source NAME
+  samples_manifest.py archives               print "name<TAB>url<TAB>bytes<TAB>sha256" per archive
+  samples_manifest.py extract ZIP SRC NAME   unpack what is taken from archive NAME (its ZIP)
+                                             into SRC/NAME, what is there and whole kept
   samples_manifest.py uptodate DEST          exit 0 if DEST's multi/ was built by this exact
                                              selection and its files are all there
   samples_manifest.py build SRC DEST         convert SRC/<source>/... into DEST/multi, and write
@@ -37,6 +40,7 @@ import subprocess
 import sys
 import time
 import wave
+import zipfile
 from array import array
 from concurrent.futures import ThreadPoolExecutor
 
@@ -494,8 +498,75 @@ RING_SECONDS = 10.0
 MAX_SECONDS.update({"ring": RING_SECONDS, "clash": 4.0, "open": 2.5, "tumba": 2.5, "quinto": 2.0})
 # -- end indonesian / celtic
 
-UNPITCHED_NAMES = {u[0] for u in UNPITCHED}
+# -- the band (2026-11-06): Karoryfer Samples' CC0 drum kit and electric basses, from release zips
+# (the SoundFont's band instruments read as a sound chip's to the taggers: tools/validate). The
+# archives: name -> (url, bytes, sha256, the folders taken from it, its licence files).
+ARCHIVES = {
+    "Big-Rusty-Drums": (
+        "https://github.com/sfzinstruments/karoryfer.big-rusty-drums/releases/download/v1.100/Big_Rusty_Drums_1100.zip",
+        619600370, "d4a9990acd19376d91ce446dae415c81428728b5adebb6a88eddbb3a6aac8744",
+        ["Samples/kick_24/kick", "Samples/snare_14/center", "Samples/snare_14/sidestick",
+         "Samples/hihat_14/cl", "Samples/hihat_14/chik", "Samples/hihat_14/open", "Samples/tom_14/center",
+         "Samples/tom_15/center", "Samples/tom_18/center", "Samples/tom_22/center", "Samples/crash_17/cr",
+         "Samples/ride_22/rd", "Samples/ride_22/bl"],
+        ["LICENSE"]),
+    "Black-And-Blue-Basses": (
+        "https://github.com/sfzinstruments/karoryfer.black-and-blue-basses/releases/download/v1.002/"
+        "Black_And_Blue_Basses_1002.zip",
+        1008690586, "cf77fc782abf996826fe75cfd948d356968de7c8b967c471c6a433835d2b4f55",
+        ["Samples/darkblack/reg", "Samples/babyblue/reg"],
+        ["license"]),
+}
+# The basses: the fingered hollowbody (darkblack: every note B0-E4, mp and f of its four dynamics,
+# two of its four round robins) and the picked solidbody (babyblue: f and ff, two each), plucked
+# (no loop: a note rings and dies as recorded). Their files name each note an octave above its
+# sound, in lower case with flats (darkblack_e2_mf_rr1.wav sounds E1, 41.2 Hz).
+BASS_NOTE_RE = re.compile(r"_([a-g])(b?)(\d)_")
+BASSES = [
+    ("bass_finger", "pluck", "Black-And-Blue-Basses", "Samples/darkblack/reg",
+     [("mp", r"_mp_rr[12]\.wav$"), ("f", r"_f_rr[12]\.wav$")], -12),
+    ("bass_pick", "pluck", "Black-And-Blue-Basses", "Samples/babyblue/reg",
+     [("f", r"_f_rr[12]\.wav$"), ("ff", r"_ff_rr[12]\.wav$")], -12),
+]
+# The kit: each hit's microphones mixed to one stereo file, as the kit's own default program
+# (Programs/01-full.sfz) mixes them: the close microphones at its levels and pans (a drummer's
+# view: the high tom left, the floor tom right), the overheads as recorded; a few of its velocity
+# layers, two round robins. Microphones: (subfolder, gain dB, pan -1..1, or None: as recorded).
+MICS_KICK = [("kick", 0.0, 0.0)]
+MICS_SNARE = [("btm", 0.0, 0.0), ("top", -8.0, 0.0), ("oh", -4.4, None)]
+MICS_HAT = [("cl", -3.1, 0.0), ("oh", -3.1, None)]
+MICS_TOM = {k: [("cl", 0.0, pan), ("oh", -3.1, None)]
+            for k, pan in (("hi", -0.67), ("mid", -0.36), ("lo", 0.38), ("floor", 0.69))}
+MICS_RIDE = [("cl", -12.4, 0.53), ("oh", -4.4, None)]
+MICS_CRASH = [("cl", -11.1, -0.52), ("oh", -3.1, None)]
+MIX_HEADROOM = 0.5   # each hit's mix scaled by this (its level is set after, by gain_db)
+# (articulation, archive, folder, microphones, the file name for a layer and round robin, the
+# layers, the round robins)
+KIT = [
+    ("kick", "Big-Rusty-Drums", "Samples/kick_24/kick", MICS_KICK, "k_vl%d_rr%d.flac", (2, 5, 8, 11, 14), (1, 2)),
+    ("snare", "Big-Rusty-Drums", "Samples/snare_14/center", MICS_SNARE, "sn_center_vl%d_rr%d.flac",
+     (2, 4, 6, 8, 10), (1, 2)),
+    ("stick", "Big-Rusty-Drums", "Samples/snare_14/sidestick", MICS_SNARE, "sn_ss_vl%d_rr%d.flac", (2, 4), (1, 2)),
+    ("hat", "Big-Rusty-Drums", "Samples/hihat_14/cl", MICS_HAT, "ht_cl_vl%d_rr%d.flac", (2, 4, 6), (1, 2)),
+    ("hat_pedal", "Big-Rusty-Drums", "Samples/hihat_14/chik", MICS_HAT, "ht_chik_vl%d_rr%d.flac", (2, 5), (1, 2)),
+    ("hat_open", "Big-Rusty-Drums", "Samples/hihat_14/open", MICS_HAT, "ht_open_vl%d_rr%d.flac", (2, 4, 6), (1, 2)),
+    ("tom_hi", "Big-Rusty-Drums", "Samples/tom_14/center", MICS_TOM["hi"], "t14_vl%d_rr%d.flac", (2, 4, 6), (1, 2)),
+    ("tom_mid", "Big-Rusty-Drums", "Samples/tom_15/center", MICS_TOM["mid"], "t15_vl%d_rr%d.flac", (2, 4, 7), (1, 2)),
+    ("tom_lo", "Big-Rusty-Drums", "Samples/tom_18/center", MICS_TOM["lo"], "t18_vl%d_rr%d.flac", (2, 5, 8), (1, 2)),
+    ("tom_floor", "Big-Rusty-Drums", "Samples/tom_22/center", MICS_TOM["floor"], "t22_vl%d_rr%d.flac", (2, 4, 7),
+     (1, 2)),
+    ("crash", "Big-Rusty-Drums", "Samples/crash_17/cr", MICS_CRASH, "cr_vl%d_rr%d.flac", (2, 4, 5), (1, 2)),
+    ("ride", "Big-Rusty-Drums", "Samples/ride_22/rd", MICS_RIDE, "rd_vl%d_rr%d.flac", (3, 6, 10), (1, 2)),
+    ("ride_bell", "Big-Rusty-Drums", "Samples/ride_22/bl", MICS_RIDE, "rd_bl_vl%d_rr%d.flac", (2, 4), (1, 2)),
+]
+MAX_SECONDS.update({"kick": 1.5, "snare": 2.0, "stick": 1.0, "hat": 1.2, "hat_pedal": 1.2, "hat_open": 3.0,
+                    "tom_hi": 2.5, "tom_mid": 2.5, "tom_lo": 3.0, "tom_floor": 3.0, "crash": 4.5, "ride": 4.0,
+                    "ride_bell": 4.0})
+KIT_NAMES = {"kit"}
+
+UNPITCHED_NAMES = {u[0] for u in UNPITCHED} | KIT_NAMES
 LICENSE_FILES = {"VSCO-2-CE": ["LICENSE", "README.md", "Readme.txt"], "VCSL": ["LICENSE", "README.md"]}
+LICENSE_FILES.update({name: a[4] for name, a in ARCHIVES.items()})
 MUSESCORE_DOCS = ["MuseScore_General_License.md", "MuseScore_General_Readme.md"]
 
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -558,6 +629,34 @@ def plan(src):
                 out.append(dict(instrument=inst, articulation=art, root=root, layer=li, nlayers=len(layers),
                                 layer_name=layers[li][0], rr=rr, repo=repo, folder=folder, src=fn,
                                 named=note_name(named), pitched=True))
+    for inst, art, repo, folder, layers, fix in BASSES:
+        d = os.path.join(src, repo, folder)
+        if not os.path.isdir(d):
+            die("missing source folder %s" % d)
+        groups = {}
+        for fn in sorted(os.listdir(d)):
+            li = [i for i, (_, rx) in enumerate(layers) if re.search(rx, fn)]
+            if not li:
+                continue
+            m = BASS_NOTE_RE.search(fn)
+            if not m:
+                die("no note in %s/%s" % (folder, fn))
+            named = (int(m.group(3)) + 1) * 12 + "c d ef g a b".index(m.group(1)) - (1 if m.group(2) else 0)
+            for i in li:
+                groups.setdefault((i, named + fix), []).append((fn, named))
+        if not groups:
+            die("nothing selected in %s" % folder)
+        for (li, root), files in sorted(groups.items()):
+            for rr, (fn, named) in enumerate(files, 1):
+                out.append(dict(instrument=inst, articulation=art, root=root, layer=li, nlayers=len(layers),
+                                layer_name=layers[li][0], rr=rr, repo=repo, folder=folder, src=fn,
+                                named=note_name(named), pitched=True))
+    for art, repo, folder, mics, pattern, layers, rrs in KIT:
+        for li, vl in enumerate(layers):
+            for rr in rrs:
+                out.append(dict(instrument="kit", articulation=art, root=60, layer=li, nlayers=len(layers),
+                                layer_name="vl%d" % vl, rr=rr, repo=repo, folder=folder, src=pattern % (vl, rr),
+                                mics=mics, named="", pitched=False))
     for inst, art, repo, folder, layers in UNPITCHED:
         for li, files in enumerate(layers):
             for rr, fn in enumerate(files, 1):
@@ -592,8 +691,8 @@ def check_wav_header(path):
         h = f.read(64)
     if h.startswith(b"version https://git-lfs"):
         die("%s is a Git LFS pointer, not audio. Install git-lfs and run 'git lfs pull' in its clone." % path)
-    if h[:4] != b"RIFF" or h[8:12] != b"WAVE":
-        die("%s is not a RIFF/WAVE file" % path)
+    if not (h[:4] == b"RIFF" and h[8:12] == b"WAVE" or h[:4] == b"fLaC"):
+        die("%s is not a RIFF/WAVE or FLAC file" % path)
 
 
 RESAMPLER = None
@@ -636,6 +735,55 @@ def decode(path, cents=0):
     return a, ch
 
 
+def channels_of(path):
+    p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels",
+                        "-of", "default=nw=1:nk=1", "file:" + path], capture_output=True, text=True)
+    if p.returncode != 0 or not p.stdout.strip().isdigit():
+        die("ffprobe failed on %s: %s" % (path, p.stderr.strip()))
+    return int(p.stdout.strip())
+
+
+def decode_mix(parts):
+    """Microphones mixed to stereo, as 48 kHz 16-bit interleaved samples: (array('h'), 2). `parts`:
+    (path, gain dB, pan -1..1 for a mono microphone placed by constant power, or None: a stereo one
+    as recorded), the sum scaled by MIX_HEADROOM."""
+    args = ["ffmpeg", "-nostdin", "-v", "error"]
+    chains = []
+    for i, (path, db, pan) in enumerate(parts):
+        args += ["-i", "file:" + path]
+        g = 10 ** (db / 20) * MIX_HEADROOM
+        ch = channels_of(path)
+        if pan is None:
+            if ch == 1:
+                chains.append("[%d:a]pan=stereo|c0=%.6f*c0|c1=%.6f*c0[m%d]" % (i, g * 0.7071, g * 0.7071, i))
+            else:
+                chains.append("[%d:a]pan=stereo|c0=%.6f*c0|c1=%.6f*c1[m%d]" % (i, g, g, i))
+        else:
+            th = (pan + 1) * math.pi / 4
+            gl, gr = g * math.cos(th), g * math.sin(th)
+            if ch == 1:
+                chains.append("[%d:a]pan=stereo|c0=%.6f*c0|c1=%.6f*c0[m%d]" % (i, gl, gr, i))
+            else:
+                chains.append("[%d:a]pan=stereo|c0=%.6f*c0+%.6f*c1|c1=%.6f*c0+%.6f*c1[m%d]"
+                              % (i, gl / 2, gl / 2, gr / 2, gr / 2, i))
+    mix = "".join("[m%d]" % i for i in range(len(parts)))
+    chains.append("%samix=inputs=%d:normalize=0:duration=longest,aresample=%d:%sdither_method=triangular[out]"
+                  % (mix, len(parts), RATE, resampler()))
+    args += ["-filter_complex", ";".join(chains), "-map", "[out]", "-ac", "2", "-ar", str(RATE), "-f", "s16le",
+             "-c:a", "pcm_s16le", "-"]
+    p = subprocess.run(args, capture_output=True)
+    if p.returncode != 0:
+        die("ffmpeg could not mix %s: %s" % (parts[0][0], p.stderr.decode(errors="replace").strip()))
+    a = array("h")
+    a.frombytes(p.stdout[: len(p.stdout) // 4 * 4])
+    if sys.byteorder == "big":
+        a.byteswap()
+    clipped = sum(1 for x in a if x >= 32767 or x <= -32768)
+    if clipped > 4:
+        die("the mix of %s clips (%d samples): lower MIX_HEADROOM" % (parts[0][0], clipped))
+    return a, 2
+
+
 def peak_of(a):
     return max(max(a), -min(a)) if len(a) else 0
 
@@ -671,10 +819,18 @@ def sumsq(a):
 
 
 def convert(job, src, stage):
-    path = os.path.join(src, job["repo"], job["folder"], job["src"])
-    check_wav_header(path)
-    key = (job["repo"], job["folder"], job["src"])
-    a, ch = decode(path, TUNE_FILE.get(key + (job["instrument"],), TUNE_FILE.get(key, 0)))
+    if job.get("mics"):
+        parts = [(os.path.join(src, job["repo"], job["folder"], sub, job["src"]), db, pan)
+                 for sub, db, pan in job["mics"]]
+        for part in parts:
+            check_wav_header(part[0])
+        path = parts[0][0]
+        a, ch = decode_mix(parts)
+    else:
+        path = os.path.join(src, job["repo"], job["folder"], job["src"])
+        check_wav_header(path)
+        key = (job["repo"], job["folder"], job["src"])
+        a, ch = decode(path, TUNE_FILE.get(key + (job["instrument"],), TUNE_FILE.get(key, 0)))
     frames = len(a) // ch
     pk = peak_of(a)
     if frames < 480 or pk < 64:
@@ -900,6 +1056,20 @@ def sources_md(jobs, gains, dest):
         for (folder, inst, art), n in sorted(seen.items()):
             w("  - `%s`: %s/%s, %d file%s" % (folder, inst, art, n, "" if n == 1 else "s"))
         w("")
+    for name, (url, size, sha, _, lic) in ARCHIVES.items():
+        w("## %s (Karoryfer Samples)\n" % name.replace("-", " "))
+        w("- URL: %s" % url)
+        w("- Size and sha256: %d bytes, `%s`" % (size, sha))
+        w("- License: CC0 1.0 Universal (`%s`)." % lic[0])
+        w("- Taken (folder: instrument/articulation, files):")
+        seen = {}
+        for j in jobs:
+            if j["repo"] == name:
+                k = (j["folder"], j["instrument"], j["articulation"])
+                seen[k] = seen.get(k, 0) + 1
+        for (folder, inst, art), n in sorted(seen.items()):
+            w("  - `%s`: %s/%s, %d file%s" % (folder, inst, art, n, "" if n == 1 else "s"))
+        w("")
     w("## Processing\n")
     w("- Decoded and resampled to 48 kHz with ffmpeg (soxr where available), 16-bit with triangular dither;"
       " channels as recorded (stereo, but for the harmonica, recorded in mono).")
@@ -925,6 +1095,11 @@ def sources_md(jobs, gains, dest):
       " to note, and the player scales a note by its velocity already. A trim raises a file at most %g dB and"
       " lowers it at most %g dB; `sources.tsv` lists each file's level and trim."
       % (TARGET_DB, HELD_WINDOW, ", ".join(HELD), SHORT_WINDOW, LEVEL_BOOST, LEVEL_CUT))
+    w("- The kit: each hit's microphones (the same file name in each microphone's folder) mixed to stereo"
+      " with ffmpeg as the kit's default program mixes them, then scaled by %g; see `KIT` and `MICS_*` in"
+      " `tools/samples_manifest.py`." % MIX_HEADROOM)
+    w("- The basses: their files name each note an octave above its sound (`darkblack_e2_mf_rr1.wav`"
+      " sounds E1, 41.2 Hz), so 12 is taken from the named note.")
     w("- Octave fixes applied (folder: semitones added to the named note):")
     for (repo, folder), fix in sorted(ROOT_FIX_FOLDER.items()):
         w("  - %s `%s`: %+d" % (repo, folder, fix))
@@ -1022,11 +1197,41 @@ def summary(dest):
         sys.exit(1)
 
 
+def extract(zpath, src, name):
+    """Unpacks archive `name`'s taken folders and licence files from `zpath` into src/name (a file
+    there already, the same size, kept). Member names are checked: no absolute paths, no '..'."""
+    _, _, _, folders, lic = ARCHIVES[name]
+    dest = os.path.join(src, name)
+    n = 0
+    with zipfile.ZipFile(zpath) as z:
+        for info in z.infolist():
+            fn = info.filename
+            if info.is_dir() or not (fn in lic or any(fn.startswith(f + "/") for f in folders)):
+                continue
+            parts = fn.split("/")
+            if fn.startswith("/") or "\\" in fn or ".." in parts or any(not x for x in parts):
+                die("%s: a member's name is unsafe: %r" % (zpath, fn))
+            out = os.path.join(dest, *parts)
+            if os.path.isfile(out) and os.path.getsize(out) == info.file_size:
+                continue
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with z.open(info) as f, open(out + ".part", "wb") as g:
+                shutil.copyfileobj(f, g)
+            os.replace(out + ".part", out)
+            n += 1
+    log("%s: %d files unpacked into %s" % (name, n, dest))
+
+
 def main():
     a = sys.argv[1:]
     if a[:1] == ["repos"]:
         for name, (url, commit) in REPOS.items():
             print("%s\t%s\t%s" % (name, url, commit))
+    elif a[:1] == ["archives"]:
+        for name, (url, size, sha, _, _) in ARCHIVES.items():
+            print("%s\t%s\t%d\t%s" % (name, url, size, sha))
+    elif a[:1] == ["extract"] and len(a) == 4:
+        extract(os.path.abspath(a[1]), os.path.abspath(a[2]), a[3])
     elif a[:1] == ["folders"] and len(a) == 2:
         for f in folders(a[1]):
             print(f)

@@ -200,11 +200,12 @@ target/release/musicbox --samples-list        # what loads
 target/release/musicbox mariachi --no-samples # the synthesiser alone
 ```
 
-The script needs git, curl, ffmpeg and python3. It also keeps about 3 GB of git clones in `~/.cache/musicbox/samples-src`, which can be deleted afterwards. If fleece's samples are already in `~/.local/share/fleece/samples` and musicbox's own directory doesn't exist, musicbox reads fleece's. `--samples DIR` reads any other directory.
+The script needs git, curl, ffmpeg and python3. It also keeps about 3 GB of git clones and 1.6 GB of zips (and what it unpacks of them) in `~/.cache/musicbox/samples-src`, which can be deleted afterwards. If fleece's samples are already in `~/.local/share/fleece/samples` and musicbox's own directory doesn't exist, musicbox reads fleece's. `--samples DIR` reads any other directory.
 
-The recordings come from two sources:
+The recordings come from three sources:
 - MuseScore General 0.2: MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins.
 - Versilian Studios' VS Chamber Orchestra 2: Community Edition and Versilian Community Sample Library: CC0.
+- Karoryfer Samples' Big Rusty Drums and Black And Blue Basses: CC0. The kit (each hit's close microphones and overheads mixed as the kit's own program mixes them) plays wherever a genre asked for the SoundFont's acoustic kits (Standard, Room, Power, Jazz), and the basses wherever it asked for its fingered or picked bass: each piece and each velocity layer at the level of what it stands in for, so a genre keeps the balance it was set at.
 
 `SOURCES.md` and `licenses/` in the samples directory list everything taken. The bank takes about 1 GB of memory and loads before the first note (0.6 s here), so every piece plays on it.
 
