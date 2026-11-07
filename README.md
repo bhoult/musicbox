@@ -32,6 +32,8 @@ target/release/musicbox --export ska.2817.1.2 ska.mp3                # a song by
 target/release/musicbox celtic --net-tunes --voices network    # tunes and instruments by networks
 ```
 
+`tools/install.sh` builds it and installs it for your user: the program in `~/.local/bin`, its networks in `~/.local/share/musicbox/models`, and a launcher in the desktop's applications that opens it with its window (with no terminal, closing the window ends it). Run it again after each change; the recordings come from `tools/get-samples.sh`.
+
 ## The command line
 
 The terminal shows what is playing and the keys, redrawn in place:
