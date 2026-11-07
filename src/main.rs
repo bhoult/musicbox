@@ -56,6 +56,12 @@ pub enum Action {
     /// how loud it plays: set (per cent), or a step louder or quieter
     SetVolume(u32),
     Louder(i32),
+    /// the listener's reverb and echo: either set (per cent), or a step
+    /// more or less of it
+    SetReverb(u32),
+    SetEcho(u32),
+    Wetter(i32),
+    MoreEcho(i32),
     /// the piece playing saved as an MP3
     Export,
     /// how the music is made: the optimiser's settings on or off, the
@@ -88,6 +94,8 @@ pub struct State {
     pub length: f64,
     /// how loud it plays (per cent)
     pub volume: u32,
+    /// the listener's reverb and echo
+    pub effects: music::Effects,
     /// a message for a few seconds (a window that would not open), and a
     /// word on an export
     pub msg: Option<(String, Instant)>,
@@ -157,6 +165,16 @@ fn louder(volume: u32, by: i32) -> u32 {
     (volume as i32 + by * VOLUME_STEP as i32).clamp(0, 100) as u32
 }
 
+/// `by` steps more or less of an effect, from 0 to `EFFECT_MAX`.
+fn more(effect: u32, by: i32) -> u32 {
+    (effect as i32 + by * music::EFFECT_STEP as i32).clamp(0, music::EFFECT_MAX as i32) as u32
+}
+
+/// An effect's per cent as given (0 to `EFFECT_MAX`, a % sign or not).
+fn parse_effect(s: &str) -> Option<u32> {
+    s.trim_end_matches('%').parse().ok().filter(|&v| v <= music::EFFECT_MAX)
+}
+
 /// A length as shown: M:SS, or "auto".
 pub fn show_length(secs: f64) -> String {
     if secs <= 0.0 { "auto".into() } else { clock(secs) }
@@ -183,15 +201,18 @@ fn usage() -> ! {
 /// The usage, then exit with `code` (0 when asked for).
 fn help(code: i32) -> ! {
     eprintln!(
-        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--volume V] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE]"
+        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--volume V] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE] [ROOM]"
     );
     eprintln!(
         "       musicbox --wav GENRE[+DRUMS] SECONDS OUT.wav [--seed N] [--length L] [--ending natural|fade|cut] [--fade SECS]"
     );
-    eprintln!("       musicbox --export GENRE[+DRUMS] OUT.mp3 [--seed N] [--song K] [--length L]");
-    eprintln!("       musicbox --export ID OUT.mp3");
+    eprintln!("       musicbox --export GENRE[+DRUMS] OUT.mp3 [--seed N] [--song K] [--length L] [ROOM]");
+    eprintln!("       musicbox --export ID OUT.mp3 [ROOM]");
     eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
     eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
+    eprintln!(
+        "  ROOM: [--reverb R] [--echo E], 0 to 200 per cent of the genre's own (100, the default: as it has them)"
+    );
     eprintln!();
     eprintln!("  GENRE: {} (or its number, 0-{})", music::cli_names(), music::GENRES.len() - 1);
     eprintln!("         two joined with + (polka+techno): the first writes the music, the second drums it");
@@ -201,6 +222,8 @@ fn help(code: i32) -> ! {
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
     eprintln!("  --length L: how long each song is (3:00, 2.5m, 150s; auto, the default: as long as it was written)");
     eprintln!("  --volume V: how loud it plays, 0 to 100 (100 by default); - and + turn it down and up");
+    eprintln!("  --reverb R, --echo E: more or less of the genre's reverb and echo, 0 (none) to 200 per cent;");
+    eprintln!("         past 100 the reverb is longer and an echo repeats the tunes; 7 8 and 9 0 turn them");
     eprintln!("  --samples DIR: the recorded instruments (tools/get-samples.sh fetches them; default");
     eprintln!("         ~/.local/share/musicbox/samples); --no-samples: the synthesiser alone");
     eprintln!("  --export: the Kth song (1 by default) of the music and seed on its own, start to end, to an MP3");
@@ -214,6 +237,7 @@ fn help(code: i32) -> ! {
     eprintln!();
     eprintln!("  keys: left/right genre, up/down drums, space next song, B back, , and . 10 s back and on,");
     eprintln!("        S stop/start, R replay, [ ] length, T type a length, D type a song's id, - + volume,");
+    eprintln!("        7 8 reverb, 9 0 echo,");
     eprintln!("        X export the song, O tuned, M network tunes, I instruments, E equalizer, G window, Q quit");
     std::process::exit(code);
 }
@@ -230,6 +254,7 @@ fn main() {
     let mut fade = 0.0f64;
     let mut length = 0.0f64;
     let mut volume = 100u32;
+    let mut effects = music::Effects::default();
     let mut genre: Option<usize> = None;
     let mut from: Option<music::SongId> = None;
     let mut opts = music::Opts::default();
@@ -276,6 +301,14 @@ fn main() {
             "--volume" => {
                 i += 1;
                 volume = value(i).trim_end_matches('%').parse().ok().filter(|&v| v <= 100).unwrap_or_else(|| usage());
+            }
+            "--reverb" => {
+                i += 1;
+                effects.reverb = parse_effect(&value(i)).unwrap_or_else(|| usage());
+            }
+            "--echo" => {
+                i += 1;
+                effects.echo = parse_effect(&value(i)).unwrap_or_else(|| usage());
             }
             "--tuned" => opts.tuned = true,
             "--net-tunes" => opts.net_tunes = true,
@@ -350,18 +383,19 @@ fn main() {
         return;
     }
     if let Some(x) = export {
-        music::export_cli(&x, seed, song, length, opts);
+        music::export_cli(&x, seed, song, length, opts, effects);
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, Start { length, volume, opts, from });
+    play(id, seed, gui, eq, Start { length, volume, effects, opts, from });
 }
 
-/// How playing starts: the length asked of each piece, the volume, how the
-/// music is made, and a song to begin on.
+/// How playing starts: the length asked of each piece, the volume, the
+/// reverb and echo, how the music is made, and a song to begin on.
 struct Start {
     length: f64,
     volume: u32,
+    effects: music::Effects,
     opts: music::Opts,
     from: Option<music::SongId>,
 }
@@ -388,7 +422,7 @@ fn export_dir() -> std::path::PathBuf {
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
 fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
-    let Start { length, volume, opts, from } = start;
+    let Start { length, volume, effects, opts, from } = start;
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -405,9 +439,10 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
         }
     };
     player.set_length(length);
+    player.set_effects(effects);
     let tap = player.tap();
     let (primary, drums) = music::parts(id);
-    let mut st = State { primary, drums, seed, sampled, opts, eq, length, volume, msg: None, note: None };
+    let mut st = State { primary, drums, seed, sampled, opts, eq, length, volume, effects, msg: None, note: None };
     let mut term = term::Term::start();
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {
@@ -473,6 +508,16 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
                 Action::Louder(by) => {
                     st.volume = louder(st.volume, by);
                     player.set_volume(st.volume);
+                }
+                Action::SetReverb(_) | Action::SetEcho(_) | Action::Wetter(_) | Action::MoreEcho(_) => {
+                    match a {
+                        Action::SetReverb(v) => st.effects.reverb = v.min(music::EFFECT_MAX),
+                        Action::SetEcho(v) => st.effects.echo = v.min(music::EFFECT_MAX),
+                        Action::Wetter(by) => st.effects.reverb = more(st.effects.reverb, by),
+                        Action::MoreEcho(by) => st.effects.echo = more(st.effects.echo, by),
+                        _ => {}
+                    }
+                    player.set_effects(st.effects);
                 }
                 Action::Export => player.export(export_dir()),
                 Action::Tuned | Action::NetTunes | Action::Voices | Action::SetOpts(_) => {

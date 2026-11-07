@@ -300,6 +300,24 @@ impl Term {
         l.push("  t type a length  e equalizer  ", "2");
         l.push(if window { "g close window" } else { "g window" }, "2");
         lines.push(l);
+        // the room: each lit when it is not the genre's own
+        let mut l = Line::new(cols);
+        let fx = st.effects;
+        let shade = |v: u32| {
+            if v == 0 {
+                "1;33"
+            } else if v != 100 {
+                "1;36"
+            } else {
+                "36"
+            }
+        };
+        l.push("  7 8 reverb ", "2");
+        l.push(&format!("{}%", fx.reverb), shade(fx.reverb));
+        l.push("  9 0 echo ", "2");
+        l.push(&format!("{}%", fx.echo), shade(fx.echo));
+        l.push("  (100%: the genre's own)", "2");
+        lines.push(l);
         // how it is made: each choice lit when it is not the music as written
         let mut l = Line::new(cols);
         let o = st.opts;
@@ -443,6 +461,10 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b']' => Some(Action::Longer(1)),
         b'-' | b'_' => Some(Action::Louder(-1)),
         b'+' | b'=' => Some(Action::Louder(1)),
+        b'7' => Some(Action::Wetter(-1)),
+        b'8' => Some(Action::Wetter(1)),
+        b'9' => Some(Action::MoreEcho(-1)),
+        b'0' => Some(Action::MoreEcho(1)),
         b'e' | b'E' => Some(Action::Eq),
         b'o' | b'O' => Some(Action::Tuned),
         b'm' | b'M' => Some(Action::NetTunes),

@@ -115,6 +115,9 @@ async function handle(m) {
     case 'opts':
       x.mb_set_opts(w, m.code);
       break;
+    case 'effects':
+      x.mb_set_effects(w, m.code);
+      break;
     // a song's id read (for the page to fetch what it needs), then played
     case 'parse': {
       const id = put(new TextEncoder().encode(m.text), (p, n) => JSON.parse(text(x.mb_song_id(w, p, n))));
@@ -130,7 +133,7 @@ async function handle(m) {
     // a song by its id, alone: an MP3, or a WAV when asked (or when the
     // encoder will not load)
     case 'export': {
-      const p = put(new TextEncoder().encode(m.sid), (q, n) => x.mb_song_wav(w, q, n, m.year));
+      const p = put(new TextEncoder().encode(m.sid), (q, n) => x.mb_song_wav(w, q, n, m.year, m.effects ?? (100 | (100 << 16))));
       if (!p) {
         postMessage({ type: 'error', error: `no song ${m.sid}` });
         break;

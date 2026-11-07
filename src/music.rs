@@ -1346,7 +1346,12 @@ struct Reverb {
     /// comb feedback (0.7 .. 0.98: the length of the tail) and damping (0 .. 1: its darkness)
     fb: f32,
     damp: f32,
+    /// the listener's longer tail (0: as the genre has it; 1: the feedback at `LONG_FB`)
+    longer: f32,
 }
+
+/// The comb feedback the listener's reverb past 100 % goes toward.
+const LONG_FB: f32 = 0.93;
 
 impl Reverb {
     fn new(size: f32) -> Reverb {
@@ -1363,6 +1368,7 @@ impl Reverb {
             ar: APS.iter().map(|&n| ap(n + 23)).collect(),
             fb: 0.84,
             damp: 0.4,
+            longer: 0.0,
         }
     }
 
@@ -1370,7 +1376,7 @@ impl Reverb {
     fn tick(&mut self, x: f32) -> (f32, f32) {
         // a whisper of DC keeps the loops out of denormals
         let x = x * 0.015 + 1e-18;
-        let (fb, damp) = (self.fb, self.damp);
+        let (fb, damp) = (self.fb + (LONG_FB - self.fb).max(0.0) * self.longer, self.damp);
         let comb = |c: &mut Comb| {
             let y = c.b[c.i];
             c.z = y * (1.0 - damp) + c.z * damp;
@@ -2017,7 +2023,19 @@ impl Channel {
     }
 
     /// The channel filter, then into the buses.
-    fn mix(&mut self, n: usize, sc: &[f32], dry: &mut [[f32; 2]], rs: &mut [f32], ds: &mut [f32], r2s: &mut [f32]) {
+    /// (`dly`, `more`: its sends to the delay and to the listener's echo, `es`.)
+    #[allow(clippy::too_many_arguments)]
+    fn mix(
+        &mut self,
+        n: usize,
+        sc: &[f32],
+        dry: &mut [[f32; 2]],
+        rs: &mut [f32],
+        ds: &mut [f32],
+        r2s: &mut [f32],
+        (dly, more): (f32, f32),
+        es: &mut [f32],
+    ) {
         self.lp_s += (self.lp - self.lp_s) * 0.03;
         let on = self.lp_s < 19000.0;
         if on && !self.filtering {
@@ -2089,11 +2107,66 @@ impl Channel {
             dry[i][1] += r;
             let m = (l + r) * 0.5;
             rs[i] += m * self.rev;
-            ds[i] += m * self.dly;
+            ds[i] += m * dly;
             r2s[i] += m * self.rev2;
+        }
+        if more > 0.0 {
+            for i in 0..n {
+                es[i] += (self.buf[i][0] * gl + self.buf[i][1] * gr) * 0.5 * (1.0 - self.duck * sc[i]) * more;
+            }
         }
     }
 }
+
+/// The listener's reverb and echo, per cent of the genre's own (100: as it
+/// has them, the music byte for byte as it was; 0: none). Past 100 the
+/// reverb is wetter with a longer tail, and an echo of its own, three steps
+/// late, repeats the tunes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Effects {
+    pub reverb: u32,
+    pub echo: u32,
+}
+
+impl Default for Effects {
+    fn default() -> Effects {
+        Effects { reverb: 100, echo: 100 }
+    }
+}
+
+/// The most each effect goes to, and the step a key moves it.
+pub const EFFECT_MAX: u32 = 200;
+pub const EFFECT_STEP: u32 = 10;
+
+impl Effects {
+    /// As one number (for an atomic, and the browser), and back.
+    pub fn code(self) -> u32 {
+        self.reverb.min(EFFECT_MAX) | self.echo.min(EFFECT_MAX) << 16
+    }
+
+    pub fn from_code(c: u32) -> Effects {
+        Effects { reverb: (c & 0xFFFF).min(EFFECT_MAX), echo: (c >> 16).min(EFFECT_MAX) }
+    }
+
+    /// The flags that ask for these (none at 100 %).
+    pub fn flags(self) -> String {
+        let mut f = String::new();
+        if self.reverb != 100 {
+            f += &format!(" --reverb {}", self.reverb);
+        }
+        if self.echo != 100 {
+            f += &format!(" --echo {}", self.echo);
+        }
+        f
+    }
+}
+
+/// The listener's echo's sends past 100 %, per channel (the tunes', a little
+/// of the pad's), at 200 %; its feedback there; how much of it goes on to the
+/// reverb.
+const ECHO_SEND: [f32; NCH] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.35, 0.45, 0.35, 0.3, 0.0, 0.0];
+const ECHO_FB: (f32, f32) = (0.3, 0.5);
+const ECHO_REV: f32 = 0.2;
 
 /// What the second reverb does: nothing, gate (synthwave's snare), rumble (techno's kick).
 const R2_OFF: u8 = 0;
@@ -2111,6 +2184,15 @@ struct Synth {
     dly: Delay,
     dly_out: f32,
     dly_rev: f32,
+    /// the listener's reverb and echo as asked; the reverb's wet and the
+    /// echo as they come of it (1: as the genre has them); the echo's own
+    /// line (made when first wanted), and a step's length (samples, as the
+    /// bar playing has it) for its time
+    heard: Effects,
+    room: f32,
+    echo: f32,
+    more: Option<Box<Delay>>,
+    step: f32,
     rev2: Reverb,
     r2mode: u8,
     r2gain: f32,
@@ -2132,6 +2214,7 @@ struct Synth {
     rs: [f32; BLOCK],
     ds: [f32; BLOCK],
     r2s: [f32; BLOCK],
+    es: [f32; BLOCK],
     scb: [f32; BLOCK],
 }
 
@@ -2168,10 +2251,33 @@ impl Synth {
                 a.b.fill(0.0);
             }
         }
-        self.dly.l.fill(0.0);
-        self.dly.r.fill(0.0);
-        self.dly.lz = [0.0; 2];
-        self.dly.hz = [0.0; 2];
+        for d in std::iter::once(&mut self.dly).chain(self.more.as_deref_mut()) {
+            d.l.fill(0.0);
+            d.r.fill(0.0);
+            d.lz = [0.0; 2];
+            d.hz = [0.0; 2];
+        }
+    }
+
+    /// The listener's reverb and echo, and back. Past 100 % the reverb's
+    /// wet goes as the square (four times at 200 %: the genre's own is often
+    /// 30 dB under the music).
+    fn effects(&self) -> Effects {
+        self.heard
+    }
+
+    fn set_effects(&mut self, e: Effects) {
+        if e == self.heard {
+            return;
+        }
+        self.heard = e;
+        let r = e.reverb as f32 / 100.0;
+        self.room = if r > 1.0 { r * r } else { r };
+        self.echo = e.echo as f32 / 100.0;
+        self.rev.longer = (r - 1.0).clamp(0.0, 1.0);
+        if self.echo > 1.0 && self.more.is_none() {
+            self.more = Some(Box::new(Delay::new()));
+        }
     }
 
     fn new(genre: usize) -> Synth {
@@ -2210,6 +2316,11 @@ impl Synth {
             dly: Delay::new(),
             dly_out: 1.0,
             dly_rev: 0.2,
+            heard: Effects::default(),
+            room: 1.0,
+            echo: 1.0,
+            more: None,
+            step: 6000.0,
             rev2: Reverb::new(if techno { 1.3 } else { 0.7 }),
             r2mode: R2_OFF,
             r2gain: 1.0,
@@ -2229,6 +2340,7 @@ impl Synth {
             rs: [0.0; BLOCK],
             ds: [0.0; BLOCK],
             r2s: [0.0; BLOCK],
+            es: [0.0; BLOCK],
             scb: [0.0; BLOCK],
         }
     }
@@ -2302,7 +2414,12 @@ impl Synth {
         self.rs[..n].fill(0.0);
         self.ds[..n].fill(0.0);
         self.r2s[..n].fill(0.0);
-        let Synth { ch, fx, dry, rs, ds, r2s, scb, solo, .. } = self;
+        let more = (self.echo - 1.0).max(0.0);
+        if more > 0.0 {
+            self.es[..n].fill(0.0);
+        }
+        let as_written = self.echo.min(1.0);
+        let Synth { ch, fx, dry, rs, ds, r2s, es, scb, solo, .. } = self;
         let bank = samples::bank();
         for (ci, c) in ch.iter_mut().enumerate() {
             let mut any = c.render(n, bank);
@@ -2310,15 +2427,34 @@ impl Synth {
                 any |= fx.render(&mut c.buf[..n]);
             }
             if any && (*solo == 0 || *solo >> ci & 1 == 1) {
-                c.mix(n, &scb[..n], &mut dry[..n], &mut rs[..n], &mut ds[..n], &mut r2s[..n]);
+                let sends = (c.dly * as_written, ECHO_SEND[ci] * more);
+                c.mix(n, &scb[..n], &mut dry[..n], &mut rs[..n], &mut ds[..n], &mut r2s[..n], sends, &mut es[..n]);
             }
         }
-        self.rev_s += (self.rev_wet * self.rev_k - self.rev_s) * 0.01;
+        self.rev_s += (self.rev_wet * self.rev_k * self.room - self.rev_s) * 0.01;
+        // the listener's echo: three steps late (at most a second), its
+        // repeats longer the more of it
+        let mut echoed = None;
+        if more > 0.0
+            && let Some(d) = self.more.as_deref_mut()
+        {
+            d.target = (3.0 * self.step).min(SR);
+            d.fb = ECHO_FB.0 + (ECHO_FB.1 - ECHO_FB.0) * more.min(1.0);
+            d.lpk = 0.3;
+            echoed = Some(d);
+        }
         for i in 0..n {
-            let (dl, dr) = self.dly.tick(self.ds[i]);
-            let (rl, rr) = self.rev.tick(self.rs[i] + (dl + dr) * self.dly_rev);
-            let mut l = self.dry[i][0] + dl * self.dly_out + rl * self.rev_s;
-            let mut r = self.dry[i][1] + dr * self.dly_out + rr * self.rev_s;
+            let (mut dl, mut dr) = self.dly.tick(self.ds[i]);
+            let mut send = self.rs[i] + (dl + dr) * self.dly_rev;
+            (dl, dr) = (dl * self.dly_out, dr * self.dly_out);
+            if let Some(d) = echoed.as_deref_mut() {
+                let (a, b) = d.tick(self.es[i]);
+                (dl, dr) = (dl + a, dr + b);
+                send += (a + b) * ECHO_REV;
+            }
+            let (rl, rr) = self.rev.tick(send);
+            let mut l = self.dry[i][0] + dl + rl * self.rev_s;
+            let mut r = self.dry[i][1] + dr + rr * self.rev_s;
             if self.r2mode != R2_OFF {
                 let (a, b) = self.rev2.tick(self.r2s[i]);
                 if self.r2mode == R2_GATE {
@@ -15650,11 +15786,12 @@ impl std::fmt::Display for SongId {
             write!(f, ".{}s", self.length.round())?;
         }
         let o = self.opts;
-        let set: String = [(o.tuned, 'o'), (o.net_tunes, 't'), (o.voices == Voices::Synth, 's'), (o.voices == Voices::Net, 'n')]
-            .iter()
-            .filter(|x| x.0)
-            .map(|x| x.1)
-            .collect();
+        let set: String =
+            [(o.tuned, 'o'), (o.net_tunes, 't'), (o.voices == Voices::Synth, 's'), (o.voices == Voices::Net, 'n')]
+                .iter()
+                .filter(|x| x.0)
+                .map(|x| x.1)
+                .collect();
         if !set.is_empty() {
             write!(f, ".{set}")?;
         }
@@ -15829,6 +15966,7 @@ impl Engine {
             if self.t >= next_bar {
                 let start = self.pos;
                 let len = self.song.bar(&mut self.syn, start, &mut self.ev);
+                self.syn.step = (len / self.song.bar_steps() as f64) as f32;
                 self.ev[self.evi..].sort_by_key(|e| e.0);
                 self.cur = (start, len);
                 self.pos += len;
@@ -15981,6 +16119,8 @@ struct Mix {
     /// a song, or a point in the one playing, to go to at once (set from
     /// outside)
     go: Option<Go>,
+    /// the listener's reverb and echo (set from outside)
+    effects: Effects,
     /// the songs played, oldest first, the latest `SNAPS` with the engine as
     /// each began (to play it again as it was), and which is playing
     hist: Vec<(SongId, Option<Box<Engine>>)>,
@@ -16032,6 +16172,7 @@ impl Mix {
             exported: 0,
             opts,
             go: None,
+            effects: Effects::default(),
             hist: Vec::new(),
             pos: 0,
         }
@@ -16044,7 +16185,9 @@ impl Mix {
             return None;
         }
         self.exported = self.export;
-        self.next.as_ref().unwrap_or(&self.cur).snap.clone()
+        let mut e = self.next.as_ref().unwrap_or(&self.cur).snap.clone()?;
+        e.syn.set_effects(self.effects);
+        Some(e)
     }
 
     /// Whether a genre switch, a skip, a replay or another way of making
@@ -16141,7 +16284,9 @@ impl Mix {
         let e = self.next.as_ref().unwrap_or(&self.cur);
         let Some(snap) = e.snap.as_ref() else { return };
         let id = e.id();
-        let near = |k: Option<usize>, h: &[(SongId, Option<Box<Engine>>)]| k.filter(|&k| h.get(k).is_some_and(|x| x.0.same(&id)));
+        let near = |k: Option<usize>, h: &[(SongId, Option<Box<Engine>>)]| {
+            k.filter(|&k| h.get(k).is_some_and(|x| x.0.same(&id)))
+        };
         let at = near(Some(self.pos), &self.hist)
             .or_else(|| near(Some(self.pos + 1), &self.hist))
             .or_else(|| near(self.pos.checked_sub(1), &self.hist));
@@ -16227,9 +16372,11 @@ impl Mix {
                 }
             }
             let o = &mut out[2 * done..2 * (done + n)];
+            self.cur.syn.set_effects(self.effects);
             self.cur.render(o);
             if let Some(nx) = &mut self.next {
                 let t = &mut self.tmp[..2 * n];
+                nx.syn.set_effects(self.effects);
                 nx.render(t);
                 for k in 0..n {
                     // smoothstep weights that sum to one: no louder than either side
@@ -16374,6 +16521,8 @@ struct Controls {
     go: Mutex<Option<Go>>,
     /// how loud it plays (per cent: `gain`)
     volume: AtomicU32,
+    /// the listener's reverb and echo (`Effects::code`)
+    effects: AtomicU32,
 }
 
 impl Controls {
@@ -16383,6 +16532,7 @@ impl Controls {
             want: AtomicUsize::new(genre),
             opts: AtomicU32::new(opts.code()),
             volume: AtomicU32::new(volume),
+            effects: AtomicU32::new(Effects::default().code()),
             ..Default::default()
         };
         if let Some(id) = from {
@@ -16402,6 +16552,7 @@ impl Controls {
         mix.length = f64::from_bits(self.length.load(Ordering::Relaxed));
         mix.export = self.export.load(Ordering::Relaxed);
         mix.opts = Opts::from_code(self.opts.load(Ordering::Relaxed));
+        mix.effects = Effects::from_code(self.effects.load(Ordering::Relaxed));
         // (after the rest: a song gone to sets what it asks, which `go`
         // stored after this)
         if let Ok(mut g) = self.go.try_lock()
@@ -16643,6 +16794,12 @@ impl Player {
     /// buffer, eased in across it.
     pub fn set_volume(&self, volume: u32) {
         self.ctl.volume.store(volume.min(100), Ordering::Relaxed);
+    }
+
+    /// The listener's reverb and echo, from the next buffer: the music
+    /// made the same, heard in another room (and so exported).
+    pub fn set_effects(&self, e: Effects) {
+        self.ctl.effects.store(e.code(), Ordering::Relaxed);
     }
 
     /// Plays the song `id` from its start at once (crossfading), as the
@@ -16914,6 +17071,10 @@ impl Stream {
         self.mix.opts = opts;
     }
 
+    pub fn set_effects(&mut self, e: Effects) {
+        self.mix.effects = e;
+    }
+
     pub fn now(&self) -> Now {
         self.mix.now()
     }
@@ -16923,8 +17084,9 @@ impl Stream {
 /// file's bytes, and what its MP3's tag says (made in `year`; the
 /// browser's export, whose MP3 its page encodes).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub fn song_wav(id: &SongId, year: u64) -> (Vec<u8>, mp3::Tags) {
-    let e = Engine::played_to(id);
+pub fn song_wav(id: &SongId, year: u64, effects: Effects) -> (Vec<u8>, mp3::Tags) {
+    let mut e = Engine::played_to(id);
+    e.syn.set_effects(effects);
     let tags = song_tags(&e, year);
     let pcm: Vec<i16> = render_piece(e, id.length).into_iter().map(to_i16).collect();
     (wav_bytes(&pcm), tags)
@@ -16941,7 +17103,7 @@ fn song_tags(e: &Engine, year: u64) -> mp3::Tags {
     } else {
         format!(", {} {}", KEY_NAMES[root.rem_euclid(12) as usize], MODE_NAMES.get(mode).copied().unwrap_or(""))
     };
-    let again = format!("musicbox --export {id} OUT.mp3");
+    let again = format!("musicbox --export {id} OUT.mp3{}", e.syn.effects().flags());
     mp3::Tags {
         title: format!("{what}, song {piece} ({meter}, {bpm:.0} bpm{key})"),
         artist: "musicbox".into(),
@@ -17033,7 +17195,7 @@ fn export_piece(e: Engine, length: f64, path: &str) -> Result<f64, String> {
 /// `seed`, on its own, to an MP3 (or a WAV); or `--export ID OUT.mp3`, the
 /// song with that id (its length and settings as it gives them). Made as
 /// it first played: the songs before it in its run played to get there.
-pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64, opts: Opts) {
+pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64, opts: Opts, effects: Effects) {
     let id = args.first().and_then(|a| {
         SongId::parse(a).or_else(|| {
             find(a).map(|g| SongId { music: canon(g), seed, run: 0, song: song.max(1), length, opts, exact: true })
@@ -17048,7 +17210,8 @@ pub fn export_cli(args: &[String], seed: u64, song: usize, length: f64, opts: Op
     };
     samples::load_now();
     let t0 = Instant::now();
-    let snap = Engine::played_to(&id);
+    let mut snap = Engine::played_to(&id);
+    snap.syn.set_effects(effects);
     let (bpm, root, mode, meter) = snap.song.log.last().copied().unwrap_or_default();
     match export_piece(snap, id.length, path) {
         Ok(secs) => println!(
@@ -17357,7 +17520,8 @@ mod tests {
                 for code in 0..12 {
                     for exact in [true, false] {
                         let opts = Opts::from_code(code);
-                        let id = SongId { music, seed: 4_000_000_000 + music as u64, run: 7, song: 3, length, opts, exact };
+                        let id =
+                            SongId { music, seed: 4_000_000_000 + music as u64, run: 7, song: 3, length, opts, exact };
                         let s = id.to_string();
                         assert_eq!(SongId::parse(&s), Some(id), "{s}");
                         assert_eq!(SongId::parse(&s.to_uppercase()), Some(id), "{s}");
@@ -17769,6 +17933,40 @@ mod tests {
         // the thread is gone (its clone of the counter with it), the child reaped
         assert_eq!(Arc::strong_count(&frames), 1, "the thread still runs");
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "child {pid} not reaped");
+    }
+
+    #[test]
+    fn the_listeners_reverb_and_echo_change_the_room_not_the_music() {
+        assert_eq!(Effects::from_code(Effects { reverb: 170, echo: 30 }.code()), Effects { reverb: 170, echo: 30 });
+        assert_eq!(Effects::from_code(u32::MAX), Effects { reverb: EFFECT_MAX, echo: EFFECT_MAX });
+        assert_eq!(
+            (Effects::default().flags(), Effects { reverb: 0, echo: 150 }.flags()),
+            (String::new(), " --reverb 0 --echo 150".into())
+        );
+        let heard = |turned: Option<Effects>, then: Effects| {
+            let mut e = Engine::new(SKA, 11);
+            if let Some(t) = turned {
+                e.syn.set_effects(t);
+            }
+            e.syn.set_effects(then);
+            let mut out = vec![0.0f32; 2 * 48000 * 8];
+            e.render(&mut out);
+            out
+        };
+        let plain = heard(None, Effects::default());
+        // turned up and back: as it was, to the bit
+        assert_eq!(plain, heard(Some(Effects { reverb: 200, echo: 200 }), Effects::default()));
+        // either turned: another sound, the same loudness about
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        for fx in
+            [Effects { reverb: 0, echo: 0 }, Effects { reverb: 200, echo: 100 }, Effects { reverb: 100, echo: 200 }]
+        {
+            let o = heard(None, fx);
+            assert_ne!(o, plain, "{fx:?}");
+            assert!(o.iter().all(|v| v.is_finite()));
+            let r = rms(&o) / rms(&plain);
+            assert!((0.7..1.4).contains(&r), "{fx:?}: {r}");
+        }
     }
 
     #[test]

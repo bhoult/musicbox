@@ -75,6 +75,10 @@
   .length .label { margin-right: 0; }
   #vol { min-width: 4ch; text-align: right; color: var(--accent); }
   #vol.off { color: var(--amber); }
+  .effect { flex: 0 1 230px; min-width: 190px; gap: 8px; }
+  .effect .label { margin-right: 0; }
+  .effect .time { min-width: 4ch; text-align: right; color: var(--accent); }
+  .effect .time.off { color: var(--amber); }
   input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
   input[type=text] {
     font: inherit; color: var(--accent); background: var(--panel);
@@ -195,6 +199,16 @@
       <button id="export" data-help="Save the whole song playing as an MP3 (192 kb/s), named by its id, its tag naming the genre, tempo and key." data-key="X">mp3</button>
       <button id="wav" data-help="Save the whole song playing as a WAV: uncompressed, about 11 MB a minute." data-key="shift-X">wav</button>
     </span>
+    <span class="group effect" data-help="The reverb: 100% is the genre's own, 0 none, and past 100 it is wetter and its tail longer. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="7 8">
+      <span class="label">reverb</span>
+      <input type="range" id="reverb" min="0" max="200" step="10" value="100" aria-label="Reverb, per cent of the genre's own">
+      <span id="reverbv" class="time">100%</span>
+    </span>
+    <span class="group effect" data-help="The echo: 100% is the genre's own (many have none), 0 none, and past 100 an echo in time repeats the tunes. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="9 0">
+      <span class="label">echo</span>
+      <input type="range" id="echo" min="0" max="200" step="10" value="100" aria-label="Echo, per cent of the genre's own">
+      <span id="echov" class="time">100%</span>
+    </span>
   </div>
   <div class="row" id="made">
     <span class="group">
@@ -231,6 +245,8 @@
     <dt><kbd>S</kbd></dt><dd>stop / start</dd>
     <dt><kbd>,</kbd><kbd>.</kbd></dt><dd>10 s back / on</dd>
     <dt><kbd>-</kbd><kbd>+</kbd></dt><dd>volume</dd>
+    <dt><kbd>7</kbd><kbd>8</kbd></dt><dd>reverb</dd>
+    <dt><kbd>9</kbd><kbd>0</kbd></dt><dd>echo</dd>
     <dt><kbd>[</kbd><kbd>]</kbd></dt><dd>length</dd>
     <dt><kbd>T</kbd></dt><dd>type a length</dd>
     <dt><kbd>D</kbd></dt><dd>type a song's id</dd>
@@ -252,6 +268,6 @@
     <button id="go">▶ play</button>
   </div>
 </div>
-<script src="app/app.js?v=8b2040d663&r=cd1133d125"></script>
+<script src="app/app.js?v=4e8d325aaf&r=cd1133d125"></script>
 </body>
 </html>

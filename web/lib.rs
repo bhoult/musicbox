@@ -120,6 +120,15 @@ pub unsafe extern "C" fn mb_set_opts(w: *mut Web, opts: u32) {
     unsafe { web(w) }.stream.set_opts(music::Opts::from_code(opts));
 }
 
+/// The listener's reverb and echo (`Effects::code`), from the next frames.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_set_effects(w: *mut Web, effects: u32) {
+    unsafe { web(w) }.stream.set_effects(music::Effects::from_code(effects));
+}
+
 /// The `n` bytes of text at `p`, as a song's id.
 ///
 /// # Safety
@@ -390,17 +399,17 @@ pub extern "C" fn mb_mix_id(primary: u32, drums: i32) -> u32 {
 }
 
 /// The song whose id is at `p` (`n` bytes of text), alone, as `--export
-/// ID` makes it: a WAV file's bytes (their length from `mb_bytes_len`), and
+/// ID` makes it, in the listener's reverb and echo (`effects`): a WAV file's bytes (their length from `mb_bytes_len`), and
 /// the ID3v2 tag for its MP3 (made in `year`; `mb_tag`). Null when the id
 /// is none.
 ///
 /// # Safety
 /// `w` is a handle from `mb_new`; `p` and `n` as `mb_alloc` gave and took them.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mb_song_wav(w: *mut Web, p: *const u8, n: u32, year: u32) -> *const u8 {
+pub unsafe extern "C" fn mb_song_wav(w: *mut Web, p: *const u8, n: u32, year: u32, effects: u32) -> *const u8 {
     let w = unsafe { web(w) };
     let Some(id) = (unsafe { song_id(p, n) }) else { return std::ptr::null() };
-    let (wav, tags) = music::song_wav(&id, year as u64);
+    let (wav, tags) = music::song_wav(&id, year as u64, music::Effects::from_code(effects));
     w.bytes = wav;
     w.tag = mp3::id3v2(&tags);
     w.bytes.as_ptr()

@@ -20,6 +20,9 @@ const st = {
   // the desktop)
   opts: { tuned: false, netTunes: false, voices: 'recorded' },
   volume: 100,
+  // the reverb and the echo, per cent of the genre's own (as the engine's
+  // Effects)
+  effects: { reverb: 100, echo: 100 },
 };
 // the hover help: the control under the mouse, the one whose help shows,
 // one clicked (quiet until the mouse moves on), the help's timer, and when
@@ -27,6 +30,7 @@ const st = {
 const tip = { over: null, shown: null, quiet: null, timer: 0, warm: -1e9 };
 const VOICES = ['synth', 'recorded', 'network'];
 const optsCode = (o) => (o.tuned ? 1 : 0) | (o.netTunes ? 2 : 0) | (VOICES.indexOf(o.voices) << 2);
+const effectsCode = (f) => f.reverb | (f.echo << 16);
 let worker = null;
 let exporter = null;
 let module = null;
@@ -165,6 +169,33 @@ function setVolume(v) {
 function savedVolume() {
   try {
     const v = parseInt(localStorage.getItem('musicbox.volume') ?? '', 10);
+    return Number.isFinite(v) ? v : 100;
+  } catch {
+    return 100;
+  }
+}
+
+// ---- the reverb and the echo: per cent of the genre's own, 0 to 200 (and
+// remembered in this browser); what is saved has them too
+
+const EFFECT_STEP = 10;
+const EFFECT_MAX = 200;
+
+function setEffect(k, v) {
+  const to = Math.min(EFFECT_MAX, Math.max(0, Math.round(v / EFFECT_STEP) * EFFECT_STEP));
+  st.effects = { ...st.effects, [k]: Number.isFinite(to) ? to : 100 };
+  $(k).value = st.effects[k];
+  $(`${k}v`).textContent = `${st.effects[k]}%`;
+  $(`${k}v`).classList.toggle('off', st.effects[k] === 0);
+  worker?.postMessage({ type: 'effects', code: effectsCode(st.effects) });
+  try {
+    localStorage.setItem(`musicbox.${k}`, String(st.effects[k]));
+  } catch {}
+}
+
+function savedEffect(k) {
+  try {
+    const v = parseInt(localStorage.getItem(`musicbox.${k}`) ?? '', 10);
     return Number.isFinite(v) ? v : 100;
   } catch {
     return 100;
@@ -415,7 +446,7 @@ async function exportSong(wav = false) {
     for (const { genre, bytes } of rec.tunes) exporter.postMessage({ type: 'tunes', genre, bytes: bytes.slice(0) });
     exporter.tunes = true;
   }
-  exporter.postMessage({ type: 'export', sid: n.sid, wav, year: new Date().getFullYear() });
+  exporter.postMessage({ type: 'export', sid: n.sid, wav, year: new Date().getFullYear(), effects: effectsCode(st.effects) });
 }
 
 function makeExporter() {
@@ -647,6 +678,7 @@ async function start() {
   st.waiting = !!asked;
   const init = { type: 'init', module, genre: null, seed: st.seed, opts: optsCode({ ...st.opts, voices: 'synth' }), paused: true };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
+  worker.postMessage({ type: 'effects', code: effectsCode(st.effects) });
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   await ctx.resume();
   if (asked) goTo(asked);
@@ -753,6 +785,14 @@ $('volume').onwheel = (e) => {
   setVolume(st.volume + (e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP));
 };
 setVolume(savedVolume());
+for (const k of ['reverb', 'echo']) {
+  $(k).oninput = (e) => setEffect(k, +e.target.value);
+  $(k).onwheel = (e) => {
+    e.preventDefault();
+    setEffect(k, st.effects[k] + (e.deltaY < 0 ? EFFECT_STEP : -EFFECT_STEP));
+  };
+  setEffect(k, savedEffect(k));
+}
 
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
@@ -782,6 +822,10 @@ document.addEventListener('keydown', (e) => {
     '-': () => setVolume(st.volume - VOLUME_STEP),
     '=': () => setVolume(st.volume + VOLUME_STEP),
     '+': () => setVolume(st.volume + VOLUME_STEP),
+    7: () => setEffect('reverb', st.effects.reverb - EFFECT_STEP),
+    8: () => setEffect('reverb', st.effects.reverb + EFFECT_STEP),
+    9: () => setEffect('echo', st.effects.echo - EFFECT_STEP),
+    0: () => setEffect('echo', st.effects.echo + EFFECT_STEP),
     t: () => {
       $('typed').value = '';
       $('typed').focus();

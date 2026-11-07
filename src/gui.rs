@@ -18,6 +18,51 @@ use crate::spectrum::{self, Spectrum};
 use crate::tap::{Now, Tap};
 use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, VOLUME_STEP, clock, music, parse_length, show_length};
 
+/// A slider at the bottom right: its name, its most, the step a click
+/// lands on, what it says and its keys, and the actions that set it and
+/// turn it a step.
+#[derive(Clone, Copy)]
+struct Knob {
+    name: &'static str,
+    most: u32,
+    step: u32,
+    help: &'static str,
+    keys: &'static str,
+    set: fn(u32) -> Action,
+    by: fn(i32) -> Action,
+}
+
+/// The volume, the reverb, the echo.
+const KNOBS: [Knob; 3] = [
+    Knob {
+        name: "VOLUME",
+        most: 100,
+        step: VOLUME_STEP,
+        help: "The volume. It changes what you hear, not the equalizer or exports. The mouse wheel turns it too.",
+        keys: "- +",
+        set: Action::SetVolume,
+        by: Action::Louder,
+    },
+    Knob {
+        name: "REVERB",
+        most: music::EFFECT_MAX,
+        step: music::EFFECT_STEP,
+        help: "The reverb: 100% is the genre's own, 0 none, and past 100 it is wetter and its tail longer. Exports have it too. The mouse wheel turns it.",
+        keys: "7 8",
+        set: Action::SetReverb,
+        by: Action::Wetter,
+    },
+    Knob {
+        name: "ECHO",
+        most: music::EFFECT_MAX,
+        step: music::EFFECT_STEP,
+        help: "The echo: 100% is the genre's own (many have none), 0 none, and past 100 an echo in time repeats the tunes. Exports have it too. The mouse wheel turns it.",
+        keys: "9 0",
+        set: Action::SetEcho,
+        by: Action::MoreEcho,
+    },
+];
+
 const BG: u32 = 0x0E1116;
 const PANEL: u32 = 0x141A21;
 const TEXT: u32 = 0xEBEEF5;
@@ -70,9 +115,10 @@ pub struct Gui {
     field: Option<Rect>,
     /// the slider held, and the length it last set
     drag: Option<f64>,
-    /// the volume's slider, as last drawn, and (held) the volume it last set
-    vol: Option<Rect>,
-    vol_drag: Option<u32>,
+    /// the sliders (`KNOBS`: the volume, the reverb, the echo), as last
+    /// drawn, and (held) which and what it last set
+    knob: [Option<Rect>; 3],
+    knob_drag: Option<(usize, u32)>,
     /// the song's bar, as last drawn, the seconds it spans, and the point
     /// in the song it is held at (gone to when let go)
     bar: Option<Rect>,
@@ -120,7 +166,7 @@ fn wrap(s: &str, cols: usize) -> Vec<String> {
 }
 
 /// The keys, as the list of them shows them.
-const KEYS: [(&str, &str); 19] = [
+const KEYS: [(&str, &str); 21] = [
     ("LEFT RIGHT", "GENRE"),
     ("UP DOWN", "DRUMS"),
     ("SPACE", "NEXT SONG"),
@@ -129,6 +175,8 @@ const KEYS: [(&str, &str); 19] = [
     ("S", "STOP / START"),
     (", .", "10 S BACK / ON"),
     ("- +", "VOLUME"),
+    ("7 8", "REVERB"),
+    ("9 0", "ECHO"),
     ("[ ]", "LENGTH"),
     ("T", "TYPE A LENGTH"),
     ("D", "TYPE A SONG'S ID"),
@@ -157,8 +205,8 @@ impl Gui {
             slider: None,
             field: None,
             drag: None,
-            vol: None,
-            vol_drag: None,
+            knob: [None; 3],
+            knob_drag: None,
             bar: None,
             span: 0.0,
             scrub: None,
@@ -196,17 +244,24 @@ impl Gui {
         x0 + (f * (x1 - x0 - 1) as f64).round() as i32
     }
 
-    /// The volume at `x` on its slider: 0 to 100, in steps.
-    fn vol_at(&self, x: i32) -> u32 {
-        let Some((x0, _, x1, _)) = self.vol else { return 0 };
+    /// The value at `x` on the slider `k`: 0 to its most, in its steps.
+    fn knob_at(&self, k: usize, x: i32) -> u32 {
+        let Some((x0, _, x1, _)) = self.knob[k] else { return 0 };
+        let Knob { most, step, .. } = KNOBS[k];
         let f = ((x - x0) as f64 / (x1 - x0 - 1).max(1) as f64).clamp(0.0, 1.0);
-        ((f * 100.0 / VOLUME_STEP as f64).round() as u32 * VOLUME_STEP).min(100)
+        ((f * most as f64 / step as f64).round() as u32 * step).min(most)
     }
 
-    /// Where a volume sits on its slider.
-    fn vol_x(&self, volume: u32) -> i32 {
-        let Some((x0, _, x1, _)) = self.vol else { return 0 };
-        x0 + (volume.min(100) as f64 / 100.0 * (x1 - x0 - 1) as f64).round() as i32
+    /// Where a value sits on the slider `k`.
+    fn knob_x(&self, k: usize, v: u32) -> i32 {
+        let Some((x0, _, x1, _)) = self.knob[k] else { return 0 };
+        let most = KNOBS[k].most;
+        x0 + (v.min(most) as f64 / most as f64 * (x1 - x0 - 1) as f64).round() as i32
+    }
+
+    /// The slider under the mouse at `at`.
+    fn knob_under(&self, at: (i32, i32)) -> Option<usize> {
+        (0..KNOBS.len()).find(|&k| inside(self.knob[k], at))
     }
 
     /// The point in the song at `x` on its bar (seconds).
@@ -264,17 +319,17 @@ impl Gui {
                     if self.scrub.is_some() {
                         self.scrub = Some(self.bar_secs(x));
                     }
-                    if let Some(was) = self.vol_drag {
-                        let vol = self.vol_at(x);
-                        if vol != was {
-                            self.vol_drag = Some(vol);
-                            v.push(Action::SetVolume(vol));
+                    if let Some((k, was)) = self.knob_drag {
+                        let to = self.knob_at(k, x);
+                        if to != was {
+                            self.knob_drag = Some((k, to));
+                            v.push((KNOBS[k].set)(to));
                         }
                     }
                 }
                 sdl::SDL_MOUSEBUTTONUP => {
                     self.drag = None;
-                    self.vol_drag = None;
+                    self.knob_drag = None;
                     v.extend(self.scrub.take().map(Action::SeekTo));
                 }
                 sdl::SDL_MOUSEWHEEL => {
@@ -282,8 +337,10 @@ impl Gui {
                     if over && e.wheel() != 0 {
                         v.push(Action::Longer(e.wheel().signum()));
                     }
-                    if self.mouse.is_some_and(|m| inside(self.vol, m)) && e.wheel() != 0 {
-                        v.push(Action::Louder(e.wheel().signum()));
+                    if let Some(k) = self.mouse.and_then(|m| self.knob_under(m))
+                        && e.wheel() != 0
+                    {
+                        v.push((KNOBS[k].by)(e.wheel().signum()));
                     }
                 }
                 sdl::SDL_TEXTINPUT => {
@@ -316,10 +373,10 @@ impl Gui {
                         let l = self.slider_length(x);
                         self.drag = Some(l);
                         v.push(Action::SetLength(l));
-                    } else if left && inside(self.vol, (x, y)) {
-                        let vol = self.vol_at(x);
-                        self.vol_drag = Some(vol);
-                        v.push(Action::SetVolume(vol));
+                    } else if let Some(k) = self.knob_under((x, y)).filter(|_| left) {
+                        let to = self.knob_at(k, x);
+                        self.knob_drag = Some((k, to));
+                        v.push((KNOBS[k].set)(to));
                     } else if left && inside(self.field, (x, y)) {
                         if self.edit_song {
                             self.edit = None;
@@ -364,6 +421,10 @@ impl Gui {
                             Ok(']') => Some(Action::Longer(1)),
                             Ok('-') => Some(Action::Louder(-1)),
                             Ok('=' | '+') => Some(Action::Louder(1)),
+                            Ok('7') => Some(Action::Wetter(-1)),
+                            Ok('8') => Some(Action::Wetter(1)),
+                            Ok('9') => Some(Action::MoreEcho(-1)),
+                            Ok('0') => Some(Action::MoreEcho(1)),
                             Ok(c @ ('t' | 'd')) => {
                                 self.edit = Some(String::new());
                                 self.edit_song = c == 'd';
@@ -660,7 +721,7 @@ impl Gui {
         }
         y += rows(ng) * (bh + gap) + 4;
 
-        // the window's own buttons, and the volume
+        // the window's own buttons, and the volume, reverb and echo
         let mut x = m;
         let keys: [(&str, Action, &str, &str); 4] = [
             ("FULLSCREEN", Action::Fullscreen, "Fill the screen, or go back to a window.", "F F11"),
@@ -679,7 +740,7 @@ impl Gui {
             self.tip(Some((x, y, x + bw, y + bh)), help, key);
             x += bw + 6;
         }
-        self.volume(st.volume, x + 8, w - m, y, bh);
+        self.knobs(st, x + 8, w - m, y, bh);
 
         // the equalizer, then over it all the keys, or what the mouse rests on
         if bottom - top > 24 {
@@ -721,7 +782,7 @@ impl Gui {
                 Instant::now()
             }
         };
-        let held = self.drag.is_some() || self.vol_drag.is_some() || self.scrub.is_some();
+        let held = self.drag.is_some() || self.knob_drag.is_some() || self.scrub.is_some();
         if held || self.quiet == Some(r) || since.elapsed() < TIP_DELAY {
             return;
         }
@@ -875,38 +936,51 @@ impl Gui {
         y
     }
 
-    /// The volume, at the right between x0 and x1: its name, its slider (a
-    /// tick each 10 per cent, lit up to its handle), and how much.
-    fn volume(&mut self, volume: u32, x0: i32, x1: i32, y: i32, h: i32) {
-        let shown = format!("{volume}%");
-        let pw = font::width("100%", 1);
-        let label = font::width("VOLUME", 1) + 8;
-        let sw = (x1 - x0 - label - pw - 8).min(200);
+    /// The sliders at the right between x0 and x1: the reverb and the echo
+    /// (when there is room for them), then the volume.
+    fn knobs(&mut self, st: &State, x0: i32, x1: i32, y: i32, h: i32) {
+        self.knob = [None; 3];
+        let each = (x1 - x0) / 3;
+        let fits = each - 12 >= font::width("REVERB", 1) + 6 + 40 + font::width("200%", 1) + 6;
+        let values = [st.volume, st.effects.reverb, st.effects.echo];
+        if fits {
+            for (i, k) in [1, 2, 0].into_iter().enumerate() {
+                let i = i as i32;
+                self.knob_one(k, values[k], x0 + i * each + if i > 0 { 12 } else { 0 }, x0 + (i + 1) * each, y, h);
+            }
+        } else {
+            self.knob_one(0, values[0], x0, x1, y, h);
+        }
+    }
+
+    /// The slider `k` between x0 and x1: its name, its slider (a tick each
+    /// tenth, the middle's taller, lit up to its handle), and how much.
+    fn knob_one(&mut self, k: usize, v: u32, x0: i32, x1: i32, y: i32, h: i32) {
+        let Knob { name, most, help, keys, .. } = KNOBS[k];
+        let shown = format!("{v}%");
+        let pw = font::width(&format!("{most}%"), 1);
+        let label = font::width(name, 1) + 6;
+        let sw = (x1 - x0 - label - pw - 6).min(200);
         if sw < 40 {
-            self.vol = None;
             return;
         }
-        let sx1 = x1 - pw - 8;
+        let sx1 = x1 - pw - 6;
         let sx0 = sx1 - sw;
-        self.text(sx0 - label, y + 3, "VOLUME", DIM, 1);
-        self.vol = Some((sx0, y, sx1, y + h));
-        self.tip(
-            Some((sx0 - label, y, x1, y + h)),
-            "The volume. It changes what you hear, not the equalizer or exports. The mouse wheel turns it too.",
-            "- +",
-        );
+        self.text(sx0 - label, y + 3, name, DIM, 1);
+        self.knob[k] = Some((sx0, y, sx1, y + h));
+        self.tip(Some((sx0 - label, y, x1, y + h)), help, keys);
         let mid = y + h / 2;
         self.rect(sx0, mid - 1, sw, 3, LED_OFF);
         for tick in 1..10 {
-            let tx = self.vol_x(tick * 10);
+            let tx = self.knob_x(k, tick * most / 10);
             let tall = if tick == 5 { 4 } else { 2 };
             self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, EDGE);
         }
-        let hx = self.vol_x(volume);
+        let hx = self.knob_x(k, v);
         self.rect(sx0, mid - 1, hx - sx0, 3, ACCENT);
-        let over = self.vol_drag.is_some() || self.mouse.is_some_and(|m| inside(self.vol, m));
+        let over = self.knob_drag.is_some_and(|d| d.0 == k) || self.mouse.is_some_and(|m| inside(self.knob[k], m));
         self.rect(hx - 2, y + 1, 5, h - 2, if over { PEAK } else { TEXT });
-        let color = if volume == 0 { AMBER } else { ACCENT };
+        let color = if v == 0 { AMBER } else { ACCENT };
         self.text(x1 - font::width(&shown, 1), y + 3, &shown, color, 1);
     }
 
