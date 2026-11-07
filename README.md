@@ -8,7 +8,7 @@ Music made up as it plays, without end, in 28 genres and any pair of them. It pl
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
-[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id, the equalizer, the transport, the song's bar, the volume, the length, saving, the reverb and echo, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
+[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id with COPY, PASTE, the favorite's star and FAVORITES, the equalizer, the transport, the song's bar, the volume, the length, saving, the six effects, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
 
 As it comes, no AI model makes any of the sound or the music, and no song is sampled. The music comes from a composer that is ordinary code: for each genre, rules for its scales, chords, rhythms, song forms and who plays what, and a random number generator choosing among them. It is generated at random and without end by software that an AI wrote. A genre and a seed always give the same music.
 
@@ -26,6 +26,7 @@ target/release/musicbox lo-fi --eq         # with an equalizer in the terminal
 target/release/musicbox ska --length 3:00  # each song three minutes long
 target/release/musicbox techno --volume 60 # quieter (0 to 100)
 target/release/musicbox rock --reverb 160 --echo 140   # a bigger room, and an echo on the tunes
+target/release/musicbox lo-fi --bass 200 --width 300   # twice the bass, wider than the speakers
 target/release/musicbox --export celtic reel.mp3 --seed 7 --song 2   # one song, to an MP3
 target/release/musicbox ska.2817.1.2       # a song by its id, and on from it
 target/release/musicbox --export ska.2817.1.2 ska.mp3                # a song by its id, to an MP3
@@ -43,13 +44,14 @@ The terminal shows what is playing and the keys, redrawn in place:
   song 2 · 4/4 reel · 131 bpm · C ionian · main, bar 3 of 8 · 0:07 / 3:00
   ‹ polka tavern ska mariachi gamelan starconflict celtic western classical orchestra rock 60s 70s 80s
   ←/→ genre  ↑/↓ drums  space next song  b back  , . 10 s back and on
-  s stop  r replay  x export mp3  d type a song's id  q quit
+  s stop  r replay  x export mp3  c copy its id  d v type or paste one  k keep it  q quit
   [ ] length 3:00  - + volume 100%  t type a length  e equalizer  g window
-  7 8 reverb 100%  9 0 echo 100%  (100%: the genre's own)
+  7 8 reverb 100%  9 0 echo 100%  ; ' chorus 100%  (100%: as the genre has it)
+  5 6 width 100%  1 2 bass 100%  3 4 treble 100%
   o tuning as written  m tunes rules  i instruments recorded
 ```
 
-The top line ends with the song's id ([below](#song-ids)). The third line is the genre selector: the genre writing the music is lit, and the drummer is underlined. A terminal too narrow for all 28 shows a window of them about the genre playing, ‹ marking that some come before. The song line gives the piece's number, meter and form, tempo, key and mode, its section and bar, how long it has played, and the length asked of it. The last line is how the music is made ([below](#how-it-is-made)), with a note where a choice does nothing for the genre playing (celtic alone has network tunes, for one).
+The top line ends with the song's id ([below](#song-ids)), a ★ before it when the song is one of your [favorites](#copy-paste-and-favorites). The third line is the genre selector: the genre writing the music is lit, and the drummer is underlined. A terminal too narrow for all 28 shows a window of them about the genre playing, ‹ marking that some come before. The song line gives the piece's number, meter and form, tempo, key and mode, its section and bar, how long it has played, and the length asked of it. The last line is how the music is made ([below](#how-it-is-made)), with a note where a choice does nothing for the genre playing (celtic alone has network tunes, for one).
 
 | key | |
 | --- | --- |
@@ -62,10 +64,14 @@ The top line ends with the song's id ([below](#song-ids)). The third line is the
 | R | replay: the song playing, from its start again |
 | [ / ] | each song 15 s shorter or longer (from auto: about the song's own length; below 0:30, auto again) |
 | - / + (also =) | the volume down or up, 5% a step ([below](#volume)) |
-| 7 / 8 | less or more reverb, 10% a step ([below](#reverb-and-echo)) |
-| 9 / 0 | less or more echo, 10% a step |
+| 7 / 8, 9 / 0, ; / ' | less or more reverb, echo and chorus, 10% a step ([below](#effects)) |
+| 5 / 6, 1 / 2, 3 / 4 | less or more stereo width, bass and treble, 10% a step |
+| A | the window's effects, shown or put away |
 | T | type a length: 3:30, 3.5m, 210s, or auto; Enter sets it, Esc cancels |
-| D | type a song's id: Enter plays it, Esc cancels |
+| C (also Ctrl-C in the window) | copy the song's id ([below](#copy-paste-and-favorites)) |
+| V (also Ctrl-V in the window) | play the song whose id is copied (in the terminal: type or paste it, as D) |
+| D | type a song's id (or paste it): Enter plays it, Esc cancels |
+| K | keep the song among the favorites, or let it go |
 | X | export the song playing, from its start to its end, to an MP3 in ~/Music/musicbox |
 | O | tuning: as written, or optimised |
 | M | tunes: by the rules, or by the network |
@@ -79,16 +85,18 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 
 ## The window
 
-![The window: mariachi drummed by techno, on network instruments; the equalizer, the transport, the three settings, the genre selector, and the reverb, echo and volume](docs/window.png)
+![The window: mariachi drummed by techno, on network instruments; the song's id with COPY, PASTE, the favorite's star and FAVORITES, the equalizer, the transport, the three settings, the genre selector, EFFECTS and the volume](docs/window.png)
 
 `--gui` or G opens it. It has six parts:
 
-- **What is playing:** the genres and the song's id (click it to type one to play), then the terminal's song line, less the time, which the bar below shows. A genre or drummer just chosen shows at the right until the next bar brings it in.
+- **What is playing:** the genres and the song's id (click it to copy it), with COPY, PASTE, a star (lit when the song is a favorite: click to keep it or let it go) and FAVORITES at the name's right ([below](#copy-paste-and-favorites)), then the terminal's song line, less the time, which the bar below shows. A genre or drummer just chosen shows at the line's right until the next bar brings it in.
 - **Where in the song:** a bar to click, or drag and let go, to go to a point in the song, between buttons 10 s back and on, and the time played of the song's length.
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
 - **The transport and the length:** BACK, STOP / START, NEXT SONG and EXPORT MP3 (R replays the song, as BACK does after its first seconds), then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
 - **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
-- **The genre selector:** all 28 genres in one grid: click one to write the music, or right-click it to put it on drums (it is underlined there). DRUMS BY, at the right of the grid's heading, steps the drummer with its arrows, as Up and Down do; it says ITS OWN when the genre writing the music plays its own drums, and a click on the drummer's name goes back to them. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q) and KEYS (? or F1), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
+- **The genre selector:** all 28 genres in one grid: click one to write the music, or right-click it to put it on drums (it is underlined there). DRUMS BY, at the right of the grid's heading, steps the drummer with its arrows, as Up and Down do; it says ITS OWN when the genre writing the music plays its own drums, and a click on the drummer's name goes back to them. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q), KEYS (? or F1) and EFFECTS (A: underlined when one is turned), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
+
+EFFECTS opens the six [effects](#effects) over the top of the equalizer, a slider each with ALL 100% to put them back; FAVORITES opens the list of favorites in its place, a click on one playing it and its X letting it go. Esc puts either away.
 
 The keys work in the window too. The buttons leave them out: rest the mouse on anything and it says what it does and its keys, and ? lists them all. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
 
@@ -106,9 +114,22 @@ Stop fades out in 30 ms and holds the music where it is; start goes on from ther
 
 `-` and `+` (or `=`) turn it down and up, 5% a step, from 0 to 100%; the window and the page have a slider for it, and `--volume 60` starts at 60%. The scale is cubic, as PulseAudio's volumes are, so each step sounds about as much louder: 50% is an eighth of the full level (−18 dB). A change eases in over the next buffer (85 ms), with no click. It is how loud it plays and nothing more: the equalizer shows the music at its full level, and an export is at full level whatever the volume. The page remembers its volume in the browser; the desktop app starts at 100% (or `--volume`) each time.
 
-## Reverb and echo
+## Effects
 
-Each genre has a reverb and many an echo of their own, and REVERB and ECHO (sliders in the window and on the page, `7` `8` and `9` `0`, `--reverb` and `--echo`) turn them from 0 to 200% of what the genre has. 100% is the genre as it comes, the music to the bit as it was without them; 0 is none. Past 100% the reverb is wetter, four times at 200%, and its tail longer (the genres' own reverbs are quiet: 25 to 35 dB under the music in rock, ska and celtic, which is drier than most records); the echo adds one of its own, three steps behind (a dotted eighth, in time with the song), repeating the lead, keys, arpeggio and bells, its repeats longer the more of it. They change the room, not the music: a song's id stays the same, and an export (X, SAVE, `--export`) is made with them, its tag giving the flags that make it again. The page remembers them in the browser; the desktop app starts at 100% (or the flags) each time.
+Six effects turn what you hear from 0 to 500%, each 10% a step: sliders in the window (EFFECTS, or A) and on the page, the keys below, and flags. 100% is the genre as it comes, the music to the bit as it was without them; 0 is none.
+
+| effect | keys | flag | 0% | past 100% |
+| --- | --- | --- | --- | --- |
+| reverb | `7` `8` | `--reverb` | none | wetter, four times at 200%, its tail longer; at 500% a cathedral's |
+| echo | `9` `0` | `--echo` | none | an echo of its own, three steps behind (a dotted eighth, in time with the song), repeating the lead, keys, arpeggio and bells, its repeats longer the more of it |
+| chorus | `;` `'` | `--chorus` | none | the genre's own (an 80s polysynth's, a pad's) and copies of the keys, pads, guitars, tunes and a little of the bass, swung a little out of tune, wider the more of it |
+| width | `5` `6` | `--width` | mono | the sides louder than the middle: wider than the speakers |
+| bass | `1` `2` | `--bass` | none below about 150 Hz | twice as loud at 200%, five times at 500% |
+| treble | `3` `4` | `--treble` | none above about 3.5 kHz (dull) | twice as loud at 200%, five times at 500% |
+
+The genres' own reverbs are quiet (25 to 35 dB under the music in rock, ska and celtic, drier than most records), and some genres have far more than others, so past 200% the reverb is held to 6 dB over the music and the whole kept as loud as it was at 200%: ambient at 500% is a wash, and rock a hall. The width, bass and treble change the balance, not the loudness: the whole is kept as loud as it came in. The reverb and echo add a little; with all six at 500%, the four genres measured came out 1.4 to 1.9 times as loud as at 100%.
+
+They change the room, not the music: a song's id stays the same, and an export (X, SAVE, `--export`) is made with them, its tag giving the flags that make it again. The page remembers them in the browser; the desktop app starts at 100% (or the flags) each time.
 
 ## Song ids
 
@@ -117,6 +138,8 @@ Every song has an id, shown at the top of the terminal, the window and the page:
 **How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, the page's SAVE) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
 
 **Back and forward.** The songs played are kept in order, the last twelve as each began. B plays the song playing from its start, or, in its first 3 seconds, the one before it; after going back, the next song is the one that came next (as it played, with its length and settings), until another genre or song is chosen. These come back as they played, at once.
+
+**Copy, paste and favorites.** COPY (C, or a click on the id) puts the song's id on the clipboard; PASTE (V) plays the song whose id is there. What is pasted can be the id, a link to the page playing it (COPY LINK makes one), or a command with it in (`musicbox ska.2817.1.2`). On the page Ctrl-V anywhere but a field plays it too, and Ctrl-C with nothing chosen copies the id; in the window Ctrl-C and Ctrl-V do, and Ctrl-V pastes into the field D opens. The terminal copies by asking the terminal (OSC 52, which most allow); to paste there, press D or V and paste. The star (K) keeps the song among the favorites, or lets it go; FAVORITES lists them, a click playing one. The desktop app keeps them in `~/.local/share/musicbox/favorites.txt`, an id a line with the genre after it (edit it as you like: the first word of a line is its id, and the rest is kept); the page keeps its own in the browser, and its COPY ALL copies them, a line each, to paste into that file.
 
 **A point in a song.** The window's and the page's bar, and , and . (10 s back and on), go to a point in the song playing: the bars before it are composed again from the song's start, not played, so the music goes on at once from the start of the bar then, with a short crossfade.
 
@@ -133,7 +156,7 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.5 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the reverb and echo, the three settings, song ids and the keys as the window has them. The genres are one grid, as in the window, with the drummer chosen from a list beside its heading (or by right-clicking a genre). The song's id is in a field beside its name: paste or type one there and press Enter to play it, or COPY LINK for a link that plays it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.5 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the six effects, the three settings, song ids, favorites and the keys as the window has them. The genres are one grid, as in the window, with the drummer chosen from a list beside its heading (or by right-clicking a genre). The song's id is in a field beside its name, with COPY, PASTE, the star, FAVORITES and COPY LINK (a link that plays it); type an id into the field and press Enter, or press Ctrl-V anywhere, to play it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
 
 It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 35 MB a genre, and 68 MB for all 28, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
@@ -264,7 +287,8 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 | `src/spectrum.rs` | the equalizer's FFT and bars |
 | `src/term.rs` | the command line's display and keys |
 | `src/gui.rs`, `src/font.rs` | the window, and its 5x7 font (from FRAKTAL256) |
-| `src/sdl.rs` | the SDL2 calls: the sound device and the window |
+| `src/sdl.rs` | the SDL2 calls: the sound device, the window and the clipboard |
+| `src/favorites.rs` | the favorites, and finding a song's id in what was pasted |
 | `src/mp3.rs` | MP3s, by LAME's library, loaded when wanted |
 | `src/net.rs` | the network instruments: the networks, and the oscillators and noise that play them |
 | `src/tunes.rs` | the tunes network: the GRU and how it writes a part |
@@ -274,6 +298,7 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
 | `tools/stamp-page.sh` | puts a hash of the page's files on the addresses it loads them from |
+| `tools/install.sh`, `tools/musicbox.svg` | installs it for the user, with a launcher and its icon |
 | `docs/samples/` | what it made: the page's recordings, with their sources and licences |
 | `tools/neural/` | the networks' training: `tunes.py` and `TUNES.md` (its sources and credits), `voices.py` |
 | `tools/tune/` | the optimiser |
