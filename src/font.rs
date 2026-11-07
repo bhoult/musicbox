@@ -1,11 +1,11 @@
 //! A 5x7 bitmap font (FRAKTAL256's, as fleece's HUD has it, with `#`, `<`,
-//! `>`, `_`, `~`, `'`, `?`, `=` and `;` added) drawn into an ARGB picture at
+//! `>`, `_`, `~`, `'`, `?`, `=`, `;` and `*` (a star) added) drawn into an ARGB picture at
 //! any whole scale: 0-9, A-Z (lower case drawn as upper) and the symbols of
 //! `SYMBOLS`.
 
 /// Glyphs for 0-9, A-Z, then the symbols of `SYMBOLS`; bit 4 is the leftmost
 /// column.
-static FONT: [[u8; 7]; 58] = [
+static FONT: [[u8; 7]; 59] = [
     [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
     [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
     [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
@@ -64,9 +64,10 @@ static FONT: [[u8; 7]; 58] = [
     [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0, 0b00100],
     [0, 0, 0b11111, 0, 0b11111, 0, 0],
     [0, 0b01100, 0b01100, 0, 0b01100, 0b00100, 0b01000],
+    [0b00100, 0b00100, 0b11111, 0b01110, 0b01110, 0b11011, 0b10001],
 ];
 
-const SYMBOLS: &[u8] = b" -.:/!+()[],%#<>_~'?=;";
+const SYMBOLS: &[u8] = b" -.:/!+()[],%#<>_~'?=;*";
 
 fn glyph(c: u8) -> Option<usize> {
     let c = c.to_ascii_uppercase();

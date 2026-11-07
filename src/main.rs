@@ -2,6 +2,7 @@
 //! pair of them, shown on the command line, with a window (a live equalizer
 //! and a genre selector) to open alongside.
 
+mod favorites;
 mod font;
 mod gui;
 mod mp3;
@@ -56,12 +57,19 @@ pub enum Action {
     /// how loud it plays: set (per cent), or a step louder or quieter
     SetVolume(u32),
     Louder(i32),
-    /// the listener's reverb and echo: either set (per cent), or a step
-    /// more or less of it
-    SetReverb(u32),
-    SetEcho(u32),
-    Wetter(i32),
-    MoreEcho(i32),
+    /// the listener's effects (`music::FX_NAMES`): one set (per cent), or a
+    /// step more or less of it; all as the genre has them
+    SetEffect(usize, u32),
+    MoreEffect(usize, i32),
+    ResetEffects,
+    /// the song playing's id onto the clipboard; a song's id on the
+    /// clipboard played; the song playing kept among the favorites, or no
+    /// longer
+    Copy,
+    Paste,
+    Keep,
+    /// a song no longer among the favorites
+    Forget(music::SongId),
     /// the piece playing saved as an MP3
     Export,
     /// how the music is made: the optimiser's settings on or off, the
@@ -71,11 +79,14 @@ pub enum Action {
     Voices,
     SetOpts(music::Opts),
     /// the terminal's equalizer on or off, the window open or closed,
-    /// fullscreen, the window's list of the keys shown or hidden
+    /// fullscreen, the window's list of the keys, its effects and its
+    /// favorites shown or hidden
     Eq,
     Window,
     Fullscreen,
     Keys,
+    EffectsPanel,
+    FavoritesPanel,
     Quit,
 }
 
@@ -94,8 +105,10 @@ pub struct State {
     pub length: f64,
     /// how loud it plays (per cent)
     pub volume: u32,
-    /// the listener's reverb and echo
+    /// the listener's effects
     pub effects: music::Effects,
+    /// the songs kept to play again
+    pub favorites: favorites::Favorites,
     /// a message for a few seconds (a window that would not open), and a
     /// word on an export
     pub msg: Option<(String, Instant)>,
@@ -170,6 +183,25 @@ fn more(effect: u32, by: i32) -> u32 {
     (effect as i32 + by * music::EFFECT_STEP as i32).clamp(0, music::EFFECT_MAX as i32) as u32
 }
 
+/// Each effect's keys (less, more), and what it does, as `music::FX_NAMES`
+/// orders them.
+pub const FX_KEYS: [(char, char); music::NFX] =
+    [('7', '8'), ('9', '0'), (';', '\''), ('5', '6'), ('1', '2'), ('3', '4')];
+pub const FX_HELP: [&str; music::NFX] = [
+    "The reverb: 100% is the genre's own, 0 none; past 100 it is wetter and its tail longer, at 500 a cathedral's.",
+    "The echo: 100% is the genre's own (many have none), 0 none; past 100 an echo in time repeats the tunes, longer the more of it.",
+    "The chorus: 100% is the genre's own (most have none), 0 none; past 100 copies of the keys, pads, guitars and tunes, swung a little out of tune, thicken them.",
+    "The stereo width: 100% as it was mixed, 0 mono; past 100 the sides louder than the middle, wider than the speakers at 500.",
+    "The bass, below about 150 Hz: 100% as it was mixed, 0 none, 200 twice as loud, 500 five times.",
+    "The treble, above about 3.5 kHz: 100% as it was mixed, 0 none (dull), 200 twice as loud, 500 five times.",
+];
+
+/// A key's step to an effect, if it is one of `FX_KEYS`.
+pub fn fx_key(c: char) -> Option<Action> {
+    let k = FX_KEYS.iter().position(|&(lo, hi)| c == lo || c == hi)?;
+    Some(Action::MoreEffect(k, if c == FX_KEYS[k].0 { -1 } else { 1 }))
+}
+
 /// An effect's per cent as given (0 to `EFFECT_MAX`, a % sign or not).
 fn parse_effect(s: &str) -> Option<u32> {
     s.trim_end_matches('%').parse().ok().filter(|&v| v <= music::EFFECT_MAX)
@@ -211,7 +243,7 @@ fn help(code: i32) -> ! {
     eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
     eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
     eprintln!(
-        "  ROOM: [--reverb R] [--echo E], 0 to 200 per cent of the genre's own (100, the default: as it has them)"
+        "  ROOM: [--reverb R] [--echo E] [--chorus C] [--width W] [--bass B] [--treble T], 0 to 500 per cent (100, the default: as the genre has them)"
     );
     eprintln!();
     eprintln!("  GENRE: {} (or its number, 0-{})", music::cli_names(), music::GENRES.len() - 1);
@@ -222,8 +254,10 @@ fn help(code: i32) -> ! {
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
     eprintln!("  --length L: how long each song is (3:00, 2.5m, 150s; auto, the default: as long as it was written)");
     eprintln!("  --volume V: how loud it plays, 0 to 100 (100 by default); - and + turn it down and up");
-    eprintln!("  --reverb R, --echo E: more or less of the genre's reverb and echo, 0 (none) to 200 per cent;");
-    eprintln!("         past 100 the reverb is longer and an echo repeats the tunes; 7 8 and 9 0 turn them");
+    eprintln!("  --reverb, --echo, --chorus: more or less of the genre's own, 0 (none) to 500 per cent; past 100");
+    eprintln!("         the reverb is longer, an echo repeats the tunes, copies thicken the keys and tunes");
+    eprintln!("  --width, --bass, --treble: the stereo width (0 mono), the bass and the treble, 0 to 500 per cent");
+    eprintln!("         of the mix's; keys 7 8 reverb, 9 0 echo, ; ' chorus, 5 6 width, 1 2 bass, 3 4 treble");
     eprintln!("  --samples DIR: the recorded instruments (tools/get-samples.sh fetches them; default");
     eprintln!("         ~/.local/share/musicbox/samples); --no-samples: the synthesiser alone");
     eprintln!("  --export: the Kth song (1 by default) of the music and seed on its own, start to end, to an MP3");
@@ -236,8 +270,8 @@ fn help(code: i32) -> ! {
     eprintln!("         network's instruments where it has one, else the recording (I)");
     eprintln!();
     eprintln!("  keys: left/right genre, up/down drums, space next song, B back, , and . 10 s back and on,");
-    eprintln!("        S stop/start, R replay, [ ] length, T type a length, D type a song's id, - + volume,");
-    eprintln!("        7 8 reverb, 9 0 echo,");
+    eprintln!("        S stop/start, R replay, [ ] length, T type a length, D or V type (or paste) a song's id,");
+    eprintln!("        C copy its id, K keep it among the favorites, - + volume, the effects' keys,");
     eprintln!("        X export the song, O tuned, M network tunes, I instruments, E equalizer, G window, Q quit");
     std::process::exit(code);
 }
@@ -302,13 +336,10 @@ fn main() {
                 i += 1;
                 volume = value(i).trim_end_matches('%').parse().ok().filter(|&v| v <= 100).unwrap_or_else(|| usage());
             }
-            "--reverb" => {
+            a if a.strip_prefix("--").is_some_and(|n| music::FX_NAMES.contains(&n)) => {
+                let k = music::FX_NAMES.iter().position(|&n| a[2..] == *n).unwrap_or(0);
                 i += 1;
-                effects.reverb = parse_effect(&value(i)).unwrap_or_else(|| usage());
-            }
-            "--echo" => {
-                i += 1;
-                effects.echo = parse_effect(&value(i)).unwrap_or_else(|| usage());
+                effects.0[k] = parse_effect(&value(i)).unwrap_or_else(|| usage());
             }
             "--tuned" => opts.tuned = true,
             "--net-tunes" => opts.net_tunes = true,
@@ -391,7 +422,7 @@ fn main() {
 }
 
 /// How playing starts: the length asked of each piece, the volume, the
-/// reverb and echo, how the music is made, and a song to begin on.
+/// effects, how the music is made, and a song to begin on.
 struct Start {
     length: f64,
     volume: u32,
@@ -442,7 +473,9 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
     player.set_effects(effects);
     let tap = player.tap();
     let (primary, drums) = music::parts(id);
-    let mut st = State { primary, drums, seed, sampled, opts, eq, length, volume, effects, msg: None, note: None };
+    let favorites = favorites::Favorites::load();
+    let mut st =
+        State { primary, drums, seed, sampled, opts, eq, length, volume, effects, favorites, msg: None, note: None };
     let mut term = term::Term::start();
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {
@@ -509,16 +542,47 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
                     st.volume = louder(st.volume, by);
                     player.set_volume(st.volume);
                 }
-                Action::SetReverb(_) | Action::SetEcho(_) | Action::Wetter(_) | Action::MoreEcho(_) => {
+                Action::SetEffect(..) | Action::MoreEffect(..) | Action::ResetEffects => {
                     match a {
-                        Action::SetReverb(v) => st.effects.reverb = v.min(music::EFFECT_MAX),
-                        Action::SetEcho(v) => st.effects.echo = v.min(music::EFFECT_MAX),
-                        Action::Wetter(by) => st.effects.reverb = more(st.effects.reverb, by),
-                        Action::MoreEcho(by) => st.effects.echo = more(st.effects.echo, by),
+                        Action::SetEffect(k, v) if k < music::NFX => st.effects.0[k] = v.min(music::EFFECT_MAX),
+                        Action::MoreEffect(k, by) if k < music::NFX => st.effects.0[k] = more(st.effects.0[k], by),
+                        Action::ResetEffects => st.effects = music::Effects::default(),
                         _ => {}
                     }
                     player.set_effects(st.effects);
                 }
+                Action::Copy => match now.sid {
+                    Some(id) => {
+                        let text = id.to_string();
+                        let copied = match (win.as_ref(), term.as_mut()) {
+                            (Some(g), _) => g.copy(&text),
+                            (None, Some(t)) => t.copy(&text),
+                            (None, None) => false,
+                        };
+                        if copied {
+                            st.note = Some((format!("copied {text}"), Instant::now()));
+                        } else {
+                            st.msg = Some(("the clipboard would not take it".into(), Instant::now()));
+                        }
+                    }
+                    None => st.msg = Some(("the song has not begun".into(), Instant::now())),
+                },
+                Action::Paste => {
+                    if let Some(g) = win.as_ref() {
+                        match favorites::song_in(&g.pasted()) {
+                            Some(id) => go_to(&player, &mut st, id),
+                            None => st.msg = Some(("no song's id on the clipboard".into(), Instant::now())),
+                        }
+                    }
+                }
+                Action::Keep => match now.sid {
+                    Some(id) => match st.favorites.toggle(&id) {
+                        Ok(true) => st.note = Some((format!("{id} kept among the favorites"), Instant::now())),
+                        Ok(false) => st.note = Some((format!("{id} no longer a favorite"), Instant::now())),
+                        Err(e) => st.msg = Some((format!("not kept: {e}"), Instant::now())),
+                    },
+                    None => st.msg = Some(("the song has not begun".into(), Instant::now())),
+                },
                 Action::Export => player.export(export_dir()),
                 Action::Tuned | Action::NetTunes | Action::Voices | Action::SetOpts(_) => {
                     match a {
@@ -546,9 +610,16 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
                         g.fullscreen();
                     }
                 }
-                Action::Keys => {
+                Action::Forget(id) => {
+                    if st.favorites.has(&id)
+                        && let Err(e) = st.favorites.toggle(&id)
+                    {
+                        st.msg = Some((format!("not let go: {e}"), Instant::now()));
+                    }
+                }
+                Action::Keys | Action::EffectsPanel | Action::FavoritesPanel => {
                     if let Some(g) = win.as_mut() {
-                        g.toggle_keys();
+                        g.toggle(a);
                     }
                 }
                 a => {

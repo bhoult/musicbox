@@ -1346,12 +1346,14 @@ struct Reverb {
     /// comb feedback (0.7 .. 0.98: the length of the tail) and damping (0 .. 1: its darkness)
     fb: f32,
     damp: f32,
-    /// the listener's longer tail (0: as the genre has it; 1: the feedback at `LONG_FB`)
+    /// the listener's longer tail (0: as the genre has it; 1: the feedback
+    /// at `LONG_FB`; 4: at `LONGEST_FB`)
     longer: f32,
 }
 
-/// The comb feedback the listener's reverb past 100 % goes toward.
+/// The comb feedback the listener's reverb past 100 % goes toward, and past 200 %.
 const LONG_FB: f32 = 0.93;
+const LONGEST_FB: f32 = 0.97;
 
 impl Reverb {
     fn new(size: f32) -> Reverb {
@@ -1376,7 +1378,13 @@ impl Reverb {
     fn tick(&mut self, x: f32) -> (f32, f32) {
         // a whisper of DC keeps the loops out of denormals
         let x = x * 0.015 + 1e-18;
-        let (fb, damp) = (self.fb + (LONG_FB - self.fb).max(0.0) * self.longer, self.damp);
+        let fb = if self.longer <= 1.0 {
+            self.fb + (LONG_FB - self.fb).max(0.0) * self.longer
+        } else {
+            let at = self.fb.max(LONG_FB);
+            at + (LONGEST_FB - at).max(0.0) * (self.longer - 1.0) / 3.0
+        };
+        let damp = self.damp;
         let comb = |c: &mut Comb| {
             let y = c.b[c.i];
             c.z = y * (1.0 - damp) + c.z * damp;
@@ -1558,11 +1566,26 @@ struct Master {
     hi_z: [f32; 2],
     /// the optimiser's on the tilt (dB, added to the genre's)
     tilt_add: (f32, f32),
+    /// the listener's stereo width, bass and treble (1: as they are; the
+    /// last two linear gains on shelves below 150 Hz and above 3.5 kHz),
+    /// each as asked and as it glides there, and the shelves' state
+    lis: [f32; 3],
+    lis_s: [f32; 3],
+    lis_z: [[f32; 2]; 2],
+    /// the loudness going into those and coming out (mean squares, over a
+    /// couple of seconds), and the gain that makes them the same (gliding to
+    /// what the last block asked): they change the balance, not the loudness
+    lis_ms: [f32; 2],
+    lis_g: f32,
+    lis_want: f32,
 }
 
 /// The tilt's shelves' corners' one-pole coefficients (250 Hz, 2.5 kHz).
 const TILT_LO: f32 = 1.0 - 0.96780;
 const TILT_HI: f32 = 1.0 - 0.72093;
+/// The listener's bass and treble shelves' (150 Hz, 3.5 kHz).
+const LIS_LO: f32 = 1.0 - 0.98056;
+const LIS_HI: f32 = 1.0 - 0.63245;
 
 impl Master {
     fn new() -> Master {
@@ -1590,7 +1613,18 @@ impl Master {
             lo_z: [0.0; 2],
             hi_z: [0.0; 2],
             tilt_add: (0.0, 0.0),
+            lis: [1.0; 3],
+            lis_s: [1.0; 3],
+            lis_z: [[0.0; 2]; 2],
+            lis_ms: [0.0; 2],
+            lis_g: 1.0,
+            lis_want: 1.0,
         }
+    }
+
+    /// The listener's stereo width, bass and treble (1: as they are).
+    fn listen(&mut self, width: f32, bass: f32, treble: f32) {
+        self.lis = [width, bass, treble];
     }
 
     /// The tilt: the lows (below 250 Hz) and highs (above 2.5 kHz) up or
@@ -1622,6 +1656,43 @@ impl Master {
             };
             l = shelf(l, 0);
             r = shelf(r, 1);
+        }
+        if self.lis_s != self.lis {
+            // gliding (a turn would click), then there
+            for (s, &to) in self.lis_s.iter_mut().zip(&self.lis) {
+                *s += (to - *s) * 0.002;
+                if (to - *s).abs() < 1e-4 {
+                    *s = to;
+                }
+            }
+        }
+        let [width, bass, treble] = self.lis_s;
+        let turned = self.lis_s != [1.0; 3];
+        if turned || self.lis_g != 1.0 {
+            let before = 0.5 * (l * l + r * r);
+            if bass != 1.0 || treble != 1.0 {
+                let z = &mut self.lis_z;
+                let mut shelf = |x: f32, k: usize| {
+                    z[0][k] += (x - z[0][k]) * LIS_LO;
+                    z[1][k] += (x - z[1][k]) * LIS_HI;
+                    x + (bass - 1.0) * z[0][k] + (treble - 1.0) * (x - z[1][k])
+                };
+                l = shelf(l, 0);
+                r = shelf(r, 1);
+            }
+            if width != 1.0 {
+                let (m, s) = (0.5 * (l + r), 0.5 * (l - r) * width);
+                (l, r) = (m + s, m - s);
+            }
+            let k = 1.0 / (2.0 * SR);
+            self.lis_ms[0] += (before - self.lis_ms[0]) * k;
+            self.lis_ms[1] += (0.5 * (l * l + r * r) - self.lis_ms[1]) * k;
+            self.lis_g += (if turned { self.lis_want } else { 1.0 } - self.lis_g) * 1e-4;
+            if !turned && (self.lis_g - 1.0).abs() < 1e-4 {
+                self.lis_g = 1.0;
+            }
+            l *= self.lis_g;
+            r *= self.lis_g;
         }
         if self.wow_to > 0.0 || self.wow > 0.0 {
             self.wow += (self.wow_to - self.wow) * 2e-5;
@@ -1655,8 +1726,10 @@ impl Master {
         (l.clamp(-0.944, 0.944), r.clamp(-0.944, 0.944))
     }
 
-    /// The leveller, once a block.
+    /// The leveller, and the gain the listener's width, bass and treble ask, once a block.
     fn block(&mut self, n: usize) {
+        let [into, out] = self.lis_ms;
+        self.lis_want = if out > 1e-12 && into > 1e-12 { (into / out).sqrt().clamp(0.25, 4.0) } else { 1.0 };
         if self.still {
             return;
         }
@@ -2023,7 +2096,8 @@ impl Channel {
     }
 
     /// The channel filter, then into the buses.
-    /// (`dly`, `more`: its sends to the delay and to the listener's echo, `es`.)
+    /// (`dly`, `more`: its sends to the delay and to the listener's echo,
+    /// `es`; `chorus`: its chorus's level and swing, as the listener has them.)
     #[allow(clippy::too_many_arguments)]
     fn mix(
         &mut self,
@@ -2034,6 +2108,7 @@ impl Channel {
         ds: &mut [f32],
         r2s: &mut [f32],
         (dly, more): (f32, f32),
+        (chorus, swing): (f32, f32),
         es: &mut [f32],
     ) {
         self.lp_s += (self.lp - self.lp_s) * 0.03;
@@ -2062,18 +2137,19 @@ impl Channel {
                 *o = [m + d, m - d];
             }
         }
-        if self.chorus > 0.0 {
+        if chorus > 0.0 {
             if self.cline.is_empty() {
                 self.cline = vec![0.0; CHORUS_LEN];
             }
             // the dry a little down, so it is no louder for the copies
-            let dry = 1.0 / (1.0 + 0.5 * self.chorus);
+            let dry = 1.0 / (1.0 + 0.5 * chorus);
+            let depth = CHORUS_DEPTH * swing;
             for o in self.buf[..n].iter_mut() {
                 self.cline[self.cw] = 0.5 * (o[0] + o[1]);
                 self.cph = wrap(self.cph + CHORUS_RATE / SR);
-                let l = tap(&self.cline, self.cw, CHORUS_DELAY + CHORUS_DEPTH * sin01(self.cph));
-                let r = tap(&self.cline, self.cw, CHORUS_DELAY + CHORUS_DEPTH * sin01(self.cph + 0.5));
-                *o = [(o[0] + self.chorus * l) * dry, (o[1] + self.chorus * r) * dry];
+                let l = tap(&self.cline, self.cw, CHORUS_DELAY + depth * sin01(self.cph));
+                let r = tap(&self.cline, self.cw, CHORUS_DELAY + depth * sin01(self.cph + 0.5));
+                *o = [(o[0] + chorus * l) * dry, (o[1] + chorus * r) * dry];
                 self.cw = (self.cw + 1) % CHORUS_LEN;
             }
         }
@@ -2118,46 +2194,61 @@ impl Channel {
     }
 }
 
-/// The listener's reverb and echo, per cent of the genre's own (100: as it
-/// has them, the music byte for byte as it was; 0: none). Past 100 the
-/// reverb is wetter with a longer tail, and an echo of its own, three steps
-/// late, repeats the tunes.
+/// The listener's effects, per cent (100: as the genre has it, the music
+/// byte for byte as it was; 0: none; up to `EFFECT_MAX`), by `FX_NAMES`: the
+/// reverb (past 100 wetter, its tail longer), the echo (past 100 one of its
+/// own, three steps late, repeats the tunes), the chorus (past 100 the
+/// synthesisers', keys', guitars' and pads' copies, swung wider), the stereo
+/// width (0 mono), the bass (below about 150 Hz) and the treble (above about
+/// 3.5 kHz), the last two as gains (200: twice as loud).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Effects {
-    pub reverb: u32,
-    pub echo: u32,
-}
+pub struct Effects(pub [u32; NFX]);
+
+pub const NFX: usize = 6;
+pub const FX_REVERB: usize = 0;
+pub const FX_ECHO: usize = 1;
+pub const FX_CHORUS: usize = 2;
+pub const FX_WIDTH: usize = 3;
+pub const FX_BASS: usize = 4;
+pub const FX_TREBLE: usize = 5;
+/// Each effect's name, as its flag has it (--reverb).
+pub const FX_NAMES: [&str; NFX] = ["reverb", "echo", "chorus", "width", "bass", "treble"];
 
 impl Default for Effects {
     fn default() -> Effects {
-        Effects { reverb: 100, echo: 100 }
+        Effects([100; NFX])
     }
 }
 
 /// The most each effect goes to, and the step a key moves it.
-pub const EFFECT_MAX: u32 = 200;
+pub const EFFECT_MAX: u32 = 500;
 pub const EFFECT_STEP: u32 = 10;
 
 impl Effects {
-    /// As one number (for an atomic, and the browser), and back.
-    pub fn code(self) -> u32 {
-        self.reverb.min(EFFECT_MAX) | self.echo.min(EFFECT_MAX) << 16
+    /// As two numbers of three effects each, ten bits an effect (for the
+    /// browser, whose numbers are 32 bits), and back.
+    pub fn halves(self) -> (u32, u32) {
+        let half = |v: &[u32]| v.iter().enumerate().fold(0, |c, (k, &x)| c | x.min(EFFECT_MAX) << (10 * k));
+        (half(&self.0[..3]), half(&self.0[3..]))
     }
 
-    pub fn from_code(c: u32) -> Effects {
-        Effects { reverb: (c & 0xFFFF).min(EFFECT_MAX), echo: (c >> 16).min(EFFECT_MAX) }
+    pub fn from_halves(lo: u32, hi: u32) -> Effects {
+        Effects(std::array::from_fn(|k| ((if k < 3 { lo } else { hi }) >> (10 * (k % 3)) & 0x3FF).min(EFFECT_MAX)))
+    }
+
+    /// As one number (for an atomic), and back.
+    pub fn code(self) -> u64 {
+        let (lo, hi) = self.halves();
+        lo as u64 | (hi as u64) << 32
+    }
+
+    pub fn from_code(c: u64) -> Effects {
+        Effects::from_halves(c as u32, (c >> 32) as u32)
     }
 
     /// The flags that ask for these (none at 100 %).
     pub fn flags(self) -> String {
-        let mut f = String::new();
-        if self.reverb != 100 {
-            f += &format!(" --reverb {}", self.reverb);
-        }
-        if self.echo != 100 {
-            f += &format!(" --echo {}", self.echo);
-        }
-        f
+        (0..NFX).filter(|&k| self.0[k] != 100).map(|k| format!(" --{} {}", FX_NAMES[k], self.0[k])).collect()
     }
 }
 
@@ -2167,6 +2258,20 @@ impl Effects {
 const ECHO_SEND: [f32; NCH] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.35, 0.45, 0.35, 0.3, 0.0, 0.0];
 const ECHO_FB: (f32, f32) = (0.3, 0.5);
 const ECHO_REV: f32 = 0.2;
+/// Past 200 % of the reverb: how far its wet may stand over the music (2:
+/// 6 dB), and its wet at 200 % (`room` there).
+const WET_MOST: f32 = 2.0;
+const ROOM_200: f32 = 4.0;
+
+/// Past 200 % of the echo: the sends' growth (half as fast as up to 200) and the feedback at 500 %.
+const ECHO_MORE: f32 = 0.5;
+const ECHO_FB_MOST: f32 = 0.75;
+
+/// The listener's chorus past 100 %, per channel: the level it adds at
+/// 500 % (the tunes, keys, pads and drones; a little on the bass; none on
+/// the drums), and how much wider the copies swing there.
+const CHORUS_ADD: [f32; NCH] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.8, 0.6, 0.6, 0.5, 0.6, 0.5, 0.0];
+const CHORUS_SWING: f32 = 1.0;
 
 /// What the second reverb does: nothing, gate (synthwave's snare), rumble (techno's kick).
 const R2_OFF: u8 = 0;
@@ -2184,15 +2289,24 @@ struct Synth {
     dly: Delay,
     dly_out: f32,
     dly_rev: f32,
-    /// the listener's reverb and echo as asked; the reverb's wet and the
-    /// echo as they come of it (1: as the genre has them); the echo's own
-    /// line (made when first wanted), and a step's length (samples, as the
-    /// bar playing has it) for its time
+    /// the listener's effects as asked; the reverb's wet, the echo and the
+    /// chorus as they come of them (1: as the genre has them); the echo's
+    /// own line (made when first wanted), and a step's length (samples, as
+    /// the bar playing has it) for its time
     heard: Effects,
     room: f32,
     echo: f32,
+    chorus: f32,
     more: Option<Box<Delay>>,
     step: f32,
+    /// past 200 % of the reverb: the music's and the reverb's levels
+    /// (mean squares, over a couple of seconds), and what they ask (gliding):
+    /// the reverb held to `WET_MOST` over the music, and all of it as loud as
+    /// at 200 % (1, 1: as they come)
+    ms_dry: f32,
+    ms_wet: f32,
+    wet_cap: f32,
+    room_gain: f32,
     rev2: Reverb,
     r2mode: u8,
     r2gain: f32,
@@ -2259,9 +2373,9 @@ impl Synth {
         }
     }
 
-    /// The listener's reverb and echo, and back. Past 100 % the reverb's
-    /// wet goes as the square (four times at 200 %: the genre's own is often
-    /// 30 dB under the music).
+    /// The listener's effects, and back. Past 100 % the reverb's wet goes
+    /// as the square (four times at 200 %, 25 at 500: the genre's own is
+    /// often 30 dB under the music).
     fn effects(&self) -> Effects {
         self.heard
     }
@@ -2271,13 +2385,16 @@ impl Synth {
             return;
         }
         self.heard = e;
-        let r = e.reverb as f32 / 100.0;
+        let pc = |k: usize| e.0[k] as f32 / 100.0;
+        let r = pc(FX_REVERB);
         self.room = if r > 1.0 { r * r } else { r };
-        self.echo = e.echo as f32 / 100.0;
-        self.rev.longer = (r - 1.0).clamp(0.0, 1.0);
+        self.echo = pc(FX_ECHO);
+        self.rev.longer = (r - 1.0).clamp(0.0, 4.0);
         if self.echo > 1.0 && self.more.is_none() {
             self.more = Some(Box::new(Delay::new()));
         }
+        self.chorus = pc(FX_CHORUS);
+        self.m.listen(pc(FX_WIDTH), pc(FX_BASS), pc(FX_TREBLE));
     }
 
     fn new(genre: usize) -> Synth {
@@ -2319,7 +2436,12 @@ impl Synth {
             heard: Effects::default(),
             room: 1.0,
             echo: 1.0,
+            chorus: 1.0,
             more: None,
+            ms_dry: 0.0,
+            ms_wet: 0.0,
+            wet_cap: 1.0,
+            room_gain: 1.0,
             step: 6000.0,
             rev2: Reverb::new(if techno { 1.3 } else { 0.7 }),
             r2mode: R2_OFF,
@@ -2419,6 +2541,9 @@ impl Synth {
             self.es[..n].fill(0.0);
         }
         let as_written = self.echo.min(1.0);
+        // (the sends past 200 % grow half as fast)
+        let send = if more > 1.0 { 1.0 + (more - 1.0) * ECHO_MORE } else { more };
+        let ck = self.chorus;
         let Synth { ch, fx, dry, rs, ds, r2s, es, scb, solo, .. } = self;
         let bank = samples::bank();
         for (ci, c) in ch.iter_mut().enumerate() {
@@ -2427,8 +2552,26 @@ impl Synth {
                 any |= fx.render(&mut c.buf[..n]);
             }
             if any && (*solo == 0 || *solo >> ci & 1 == 1) {
-                let sends = (c.dly * as_written, ECHO_SEND[ci] * more);
-                c.mix(n, &scb[..n], &mut dry[..n], &mut rs[..n], &mut ds[..n], &mut r2s[..n], sends, &mut es[..n]);
+                let sends = (c.dly * as_written, ECHO_SEND[ci] * send);
+                // the listener's chorus: the genre's own down to none, or
+                // past 100 % more of it, and on more of the parts
+                let chorus = if ck > 1.0 {
+                    let x = (ck - 1.0) / 4.0;
+                    (c.chorus + CHORUS_ADD[ci] * x, 1.0 + CHORUS_SWING * x)
+                } else {
+                    (c.chorus * ck, 1.0)
+                };
+                c.mix(
+                    n,
+                    &scb[..n],
+                    &mut dry[..n],
+                    &mut rs[..n],
+                    &mut ds[..n],
+                    &mut r2s[..n],
+                    sends,
+                    chorus,
+                    &mut es[..n],
+                );
             }
         }
         self.rev_s += (self.rev_wet * self.rev_k * self.room - self.rev_s) * 0.01;
@@ -2439,10 +2582,32 @@ impl Synth {
             && let Some(d) = self.more.as_deref_mut()
         {
             d.target = (3.0 * self.step).min(SR);
-            d.fb = ECHO_FB.0 + (ECHO_FB.1 - ECHO_FB.0) * more.min(1.0);
+            d.fb = if more > 1.0 {
+                ECHO_FB.1 + (ECHO_FB_MOST - ECHO_FB.1) * (more - 1.0) / 3.0
+            } else {
+                ECHO_FB.0 + (ECHO_FB.1 - ECHO_FB.0) * more
+            };
             d.lpk = 0.3;
             echoed = Some(d);
         }
+        // past 200 % of the reverb, its levels measured; what they ask, from
+        // the last block's (and back to as they come, once under 200 again)
+        let big = self.room > ROOM_200;
+        if big || self.wet_cap != 1.0 || self.room_gain != 1.0 {
+            let (mut cap, mut gain) = (1.0, 1.0);
+            if big && self.ms_dry > 1e-9 && self.ms_wet > 1e-12 {
+                cap = (WET_MOST * (self.ms_dry / self.ms_wet).sqrt()).min(1.0);
+                let at_200 = self.ms_dry + self.ms_wet * (ROOM_200 / self.room).powi(2);
+                gain = (at_200 / (self.ms_dry + self.ms_wet * cap * cap)).sqrt().min(1.0);
+            }
+            self.wet_cap += (cap - self.wet_cap) * 0.05;
+            self.room_gain += (gain - self.room_gain) * 0.05;
+            if !big && (self.wet_cap - 1.0).abs() < 1e-4 && (self.room_gain - 1.0).abs() < 1e-4 {
+                (self.wet_cap, self.room_gain) = (1.0, 1.0);
+            }
+        }
+        let held = self.wet_cap != 1.0 || self.room_gain != 1.0;
+        let ms_k = 1.0 / (2.0 * SR);
         for i in 0..n {
             let (mut dl, mut dr) = self.dly.tick(self.ds[i]);
             let mut send = self.rs[i] + (dl + dr) * self.dly_rev;
@@ -2455,6 +2620,16 @@ impl Synth {
             let (rl, rr) = self.rev.tick(send);
             let mut l = self.dry[i][0] + dl + rl * self.rev_s;
             let mut r = self.dry[i][1] + dr + rr * self.rev_s;
+            if big {
+                let (ml, mr) = (self.dry[i][0] + dl, self.dry[i][1] + dr);
+                let (wl, wr) = (rl * self.rev_s, rr * self.rev_s);
+                self.ms_dry += (0.5 * (ml * ml + mr * mr) - self.ms_dry) * ms_k;
+                self.ms_wet += (0.5 * (wl * wl + wr * wr) - self.ms_wet) * ms_k;
+            }
+            if held {
+                l = (self.dry[i][0] + dl + rl * self.rev_s * self.wet_cap) * self.room_gain;
+                r = (self.dry[i][1] + dr + rr * self.rev_s * self.wet_cap) * self.room_gain;
+            }
             if self.r2mode != R2_OFF {
                 let (a, b) = self.rev2.tick(self.r2s[i]);
                 if self.r2mode == R2_GATE {
@@ -16527,8 +16702,8 @@ struct Controls {
     go: Mutex<Option<Go>>,
     /// how loud it plays (per cent: `gain`)
     volume: AtomicU32,
-    /// the listener's reverb and echo (`Effects::code`)
-    effects: AtomicU32,
+    /// the listener's effects (`Effects::code`)
+    effects: AtomicU64,
 }
 
 impl Controls {
@@ -16538,7 +16713,7 @@ impl Controls {
             want: AtomicUsize::new(genre),
             opts: AtomicU32::new(opts.code()),
             volume: AtomicU32::new(volume),
-            effects: AtomicU32::new(Effects::default().code()),
+            effects: AtomicU64::new(Effects::default().code()),
             ..Default::default()
         };
         if let Some(id) = from {
@@ -17942,12 +18117,14 @@ mod tests {
     }
 
     #[test]
-    fn the_listeners_reverb_and_echo_change_the_room_not_the_music() {
-        assert_eq!(Effects::from_code(Effects { reverb: 170, echo: 30 }.code()), Effects { reverb: 170, echo: 30 });
-        assert_eq!(Effects::from_code(u32::MAX), Effects { reverb: EFFECT_MAX, echo: EFFECT_MAX });
+    fn the_listeners_effects_change_the_room_not_the_music() {
+        let all = Effects([170, 30, 500, 0, 250, 90]);
+        assert_eq!(Effects::from_code(all.code()), all);
+        assert_eq!(Effects::from_halves(all.halves().0, all.halves().1), all);
+        assert_eq!(Effects::from_code(u64::MAX), Effects([EFFECT_MAX; NFX]));
         assert_eq!(
-            (Effects::default().flags(), Effects { reverb: 0, echo: 150 }.flags()),
-            (String::new(), " --reverb 0 --echo 150".into())
+            (Effects::default().flags(), Effects([0, 150, 100, 300, 100, 100]).flags()),
+            (String::new(), " --reverb 0 --echo 150 --width 300".into())
         );
         let heard = |turned: Option<Effects>, then: Effects| {
             let mut e = Engine::new(SKA, 11);
@@ -17961,17 +18138,29 @@ mod tests {
         };
         let plain = heard(None, Effects::default());
         // turned up and back: as it was, to the bit
-        assert_eq!(plain, heard(Some(Effects { reverb: 200, echo: 200 }), Effects::default()));
-        // either turned: another sound, the same loudness about
+        assert_eq!(plain, heard(Some(Effects([EFFECT_MAX; NFX])), Effects::default()));
+        // each turned off and to its most, and all at their most: another
+        // sound, under the ceiling, about as loud (the width, bass and treble
+        // as loud as they come, once their gain settles in the first
+        // seconds; the reverb, echo and chorus add)
         let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
-        for fx in
-            [Effects { reverb: 0, echo: 0 }, Effects { reverb: 200, echo: 100 }, Effects { reverb: 100, echo: 200 }]
-        {
+        let one = |k: usize, v: u32| {
+            let mut fx = Effects::default();
+            fx.0[k] = v;
+            fx
+        };
+        let turned = (0..NFX).flat_map(|k| [one(k, 0), one(k, EFFECT_MAX)]).chain([Effects([EFFECT_MAX; NFX])]);
+        for fx in turned {
             let o = heard(None, fx);
-            assert_ne!(o, plain, "{fx:?}");
-            assert!(o.iter().all(|v| v.is_finite()));
+            // (ska has no chorus of its own to take away)
+            if fx == one(FX_CHORUS, 0) {
+                assert!(o == plain);
+                continue;
+            }
+            assert!(o != plain, "{fx:?}");
+            assert!(o.iter().all(|v| v.is_finite() && v.abs() <= 0.944), "{fx:?}");
             let r = rms(&o) / rms(&plain);
-            assert!((0.7..1.4).contains(&r), "{fx:?}: {r}");
+            assert!((0.5..2.2).contains(&r), "{fx:?}: {r}");
         }
     }
 

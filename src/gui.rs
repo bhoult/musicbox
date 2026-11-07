@@ -18,50 +18,50 @@ use crate::spectrum::{self, Spectrum};
 use crate::tap::{Now, Tap};
 use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, VOLUME_STEP, clock, music, parse_length, show_length};
 
-/// A slider at the bottom right: its name, its most, the step a click
-/// lands on, what it says and its keys, and the actions that set it and
-/// turn it a step.
-#[derive(Clone, Copy)]
-struct Knob {
-    name: &'static str,
-    most: u32,
-    step: u32,
-    help: &'static str,
-    keys: &'static str,
-    set: fn(u32) -> Action,
-    by: fn(i32) -> Action,
+/// The sliders: the volume (0), then the effects (1 + their index in
+/// `music::FX_NAMES`), with their names and the keys that turn them
+/// (`crate::FX_KEYS`, as the help names them).
+const NKNOBS: usize = 1 + music::NFX;
+const FX_LABELS: [&str; music::NFX] = ["REVERB", "ECHO", "CHORUS", "WIDTH", "BASS", "TREBLE"];
+const FX_KEY_NAMES: [&str; music::NFX] = ["7 8", "9 0", "; '", "5 6", "1 2", "3 4"];
+
+/// A slider's name, its most, the step a click lands on, the value its
+/// taller tick marks (the volume's middle, the effects' 100 %), and its keys.
+fn knob(k: usize) -> (&'static str, u32, u32, u32, &'static str) {
+    match k {
+        0 => ("VOLUME", 100, VOLUME_STEP, 50, "- +"),
+        k => (FX_LABELS[k - 1], music::EFFECT_MAX, music::EFFECT_STEP, 100, FX_KEY_NAMES[k - 1]),
+    }
 }
 
-/// The volume, the reverb, the echo.
-const KNOBS: [Knob; 3] = [
-    Knob {
-        name: "VOLUME",
-        most: 100,
-        step: VOLUME_STEP,
-        help: "The volume. It changes what you hear, not the equalizer or exports. The mouse wheel turns it too.",
-        keys: "- +",
-        set: Action::SetVolume,
-        by: Action::Louder,
-    },
-    Knob {
-        name: "REVERB",
-        most: music::EFFECT_MAX,
-        step: music::EFFECT_STEP,
-        help: "The reverb: 100% is the genre's own, 0 none, and past 100 it is wetter and its tail longer. Exports have it too. The mouse wheel turns it.",
-        keys: "7 8",
-        set: Action::SetReverb,
-        by: Action::Wetter,
-    },
-    Knob {
-        name: "ECHO",
-        most: music::EFFECT_MAX,
-        step: music::EFFECT_STEP,
-        help: "The echo: 100% is the genre's own (many have none), 0 none, and past 100 an echo in time repeats the tunes. Exports have it too. The mouse wheel turns it.",
-        keys: "9 0",
-        set: Action::SetEcho,
-        by: Action::MoreEcho,
-    },
-];
+/// What a slider does.
+fn knob_help(k: usize) -> String {
+    match k {
+        0 => "The volume. It changes what you hear, not the equalizer or exports. The mouse wheel turns it too.".into(),
+        k => format!("{} Exports have it too. The mouse wheel turns it.", crate::FX_HELP[k - 1]),
+    }
+}
+
+/// A slider set, and turned a step.
+fn knob_set(k: usize, v: u32) -> Action {
+    if k == 0 { Action::SetVolume(v) } else { Action::SetEffect(k - 1, v) }
+}
+
+fn knob_by(k: usize, by: i32) -> Action {
+    if k == 0 { Action::Louder(by) } else { Action::MoreEffect(k - 1, by) }
+}
+
+/// What the window shows in its equalizer's place: the effects' sliders, or
+/// the favorites.
+#[derive(Clone, Copy, PartialEq)]
+enum Panel {
+    Effects,
+    Favorites,
+}
+
+/// How tall each panel needs to be (in the equalizer's place, else over the middle).
+const EFFECTS_H: i32 = 84;
+const FAVORITES_H: i32 = 104;
 
 const BG: u32 = 0x0E1116;
 const PANEL: u32 = 0x141A21;
@@ -115,16 +115,16 @@ pub struct Gui {
     field: Option<Rect>,
     /// the slider held, and the length it last set
     drag: Option<f64>,
-    /// the sliders (`KNOBS`: the volume, the reverb, the echo), as last
-    /// drawn, and (held) which and what it last set
-    knob: [Option<Rect>; 3],
+    /// the sliders (the volume, the effects), as last drawn, and (held)
+    /// which and what it last set
+    knob: [Option<Rect>; NKNOBS],
     knob_drag: Option<(usize, u32)>,
     /// the song's bar, as last drawn, the seconds it spans, and the point
     /// in the song it is held at (gone to when let go)
     bar: Option<Rect>,
     span: f64,
     scrub: Option<f64>,
-    /// the song's id, as last drawn (a click on it types one to play)
+    /// the song's id, as last drawn (a click on it copies it)
     sid: Option<Rect>,
     /// a length being typed into the field (T, or a click on it), or a
     /// song's id (D); the key's own text still to come; and a word about the
@@ -140,6 +140,11 @@ pub struct Gui {
     quiet: Option<Rect>,
     /// all the keys shown
     keys: bool,
+    /// the panel shown in the equalizer's place, where it was last drawn,
+    /// and the first favorite its list shows
+    panel: Option<Panel>,
+    panel_rect: Option<Rect>,
+    fav_top: usize,
 }
 
 /// An option of a choice of how the music is made: its label, the settings
@@ -166,7 +171,7 @@ fn wrap(s: &str, cols: usize) -> Vec<String> {
 }
 
 /// The keys, as the list of them shows them.
-const KEYS: [(&str, &str); 21] = [
+const KEYS: [(&str, &str); 29] = [
     ("LEFT RIGHT", "GENRE"),
     ("UP DOWN", "DRUMS"),
     ("SPACE", "NEXT SONG"),
@@ -175,11 +180,19 @@ const KEYS: [(&str, &str); 21] = [
     ("S", "STOP / START"),
     (", .", "10 S BACK / ON"),
     ("- +", "VOLUME"),
+    ("A", "THE EFFECTS"),
     ("7 8", "REVERB"),
     ("9 0", "ECHO"),
+    ("; '", "CHORUS"),
+    ("5 6", "WIDTH"),
+    ("1 2", "BASS"),
+    ("3 4", "TREBLE"),
     ("[ ]", "LENGTH"),
     ("T", "TYPE A LENGTH"),
+    ("C", "COPY THE SONG'S ID"),
+    ("V", "PLAY THE ID COPIED"),
     ("D", "TYPE A SONG'S ID"),
+    ("K", "KEEP AS A FAVORITE"),
     ("X", "EXPORT AN MP3"),
     ("O", "TUNING"),
     ("M", "TUNES"),
@@ -205,7 +218,7 @@ impl Gui {
             slider: None,
             field: None,
             drag: None,
-            knob: [None; 3],
+            knob: [None; NKNOBS],
             knob_drag: None,
             bar: None,
             span: 0.0,
@@ -219,6 +232,9 @@ impl Gui {
             hover: None,
             quiet: None,
             keys: false,
+            panel: None,
+            panel_rect: None,
+            fav_top: 0,
         })
     }
 
@@ -226,8 +242,28 @@ impl Gui {
         self.win.toggle_fullscreen();
     }
 
-    pub fn toggle_keys(&mut self) {
-        self.keys = !self.keys;
+    /// The list of the keys (`Keys`), the effects (`EffectsPanel`) or the
+    /// favorites (`FavoritesPanel`) shown, or put away.
+    pub fn toggle(&mut self, a: Action) {
+        let want = match a {
+            Action::EffectsPanel => Panel::Effects,
+            Action::FavoritesPanel => Panel::Favorites,
+            _ => {
+                self.keys = !self.keys;
+                return;
+            }
+        };
+        self.panel = if self.panel == Some(want) { None } else { Some(want) };
+        self.fav_top = 0;
+    }
+
+    /// `text` onto the clipboard (whether it took it); what the clipboard holds.
+    pub fn copy(&self, text: &str) -> bool {
+        self.win.set_clipboard(text)
+    }
+
+    pub fn pasted(&self) -> String {
+        self.win.clipboard()
     }
 
     /// The length at `x` on the slider: 0:30 to 10:00, in steps of 15 s.
@@ -247,7 +283,7 @@ impl Gui {
     /// The value at `x` on the slider `k`: 0 to its most, in its steps.
     fn knob_at(&self, k: usize, x: i32) -> u32 {
         let Some((x0, _, x1, _)) = self.knob[k] else { return 0 };
-        let Knob { most, step, .. } = KNOBS[k];
+        let (_, most, step, _, _) = knob(k);
         let f = ((x - x0) as f64 / (x1 - x0 - 1).max(1) as f64).clamp(0.0, 1.0);
         ((f * most as f64 / step as f64).round() as u32 * step).min(most)
     }
@@ -255,13 +291,13 @@ impl Gui {
     /// Where a value sits on the slider `k`.
     fn knob_x(&self, k: usize, v: u32) -> i32 {
         let Some((x0, _, x1, _)) = self.knob[k] else { return 0 };
-        let most = KNOBS[k].most;
+        let most = knob(k).1;
         x0 + (v.min(most) as f64 / most as f64 * (x1 - x0 - 1) as f64).round() as i32
     }
 
-    /// The slider under the mouse at `at`.
+    /// The slider under the mouse at `at` (an effect's, over the volume's).
     fn knob_under(&self, at: (i32, i32)) -> Option<usize> {
-        (0..KNOBS.len()).find(|&k| inside(self.knob[k], at))
+        (0..NKNOBS).rev().find(|&k| inside(self.knob[k], at))
     }
 
     /// The point in the song at `x` on its bar (seconds).
@@ -271,17 +307,23 @@ impl Gui {
     }
 
     /// A key while a length or a song's id is typed: Enter sets it (plays
-    /// the song), Esc forgets it.
-    fn edit_key(&mut self, k: i32, v: &mut Vec<Action>) {
+    /// the song), Esc forgets it, Ctrl-V pastes.
+    fn edit_key(&mut self, k: i32, ctrl: bool, v: &mut Vec<Action>) {
+        let most = if self.edit_song { 48 } else { 12 };
+        let pasted = if ctrl && k == 'v' as i32 { self.win.clipboard() } else { String::new() };
         let Some(text) = &mut self.edit else { return };
         match k {
+            _ if !pasted.is_empty() => {
+                text.extend(pasted.trim().chars().filter(|c| c.is_ascii_graphic()));
+                text.truncate(if self.edit_song { 256 } else { most });
+            }
             sdl::K_BACKSPACE => {
                 text.pop();
             }
             sdl::K_RETURN | sdl::K_KP_ENTER => {
                 let now = Instant::now();
                 if self.edit_song {
-                    match music::SongId::parse(text) {
+                    match crate::favorites::song_in(text) {
                         Some(id) => v.push(Action::Go(id)),
                         None => self.note = Some((format!("NOT A SONG ID: {text}"), now)),
                     }
@@ -323,7 +365,7 @@ impl Gui {
                         let to = self.knob_at(k, x);
                         if to != was {
                             self.knob_drag = Some((k, to));
-                            v.push((KNOBS[k].set)(to));
+                            v.push(knob_set(k, to));
                         }
                     }
                 }
@@ -340,7 +382,11 @@ impl Gui {
                     if let Some(k) = self.mouse.and_then(|m| self.knob_under(m))
                         && e.wheel() != 0
                     {
-                        v.push((KNOBS[k].by)(e.wheel().signum()));
+                        v.push(knob_by(k, e.wheel().signum()));
+                    } else if self.panel == Some(Panel::Favorites)
+                        && self.mouse.is_some_and(|m| inside(self.panel_rect, m))
+                    {
+                        self.fav_top = (self.fav_top as i32 - e.wheel()).max(0) as usize;
                     }
                 }
                 sdl::SDL_TEXTINPUT => {
@@ -363,11 +409,22 @@ impl Gui {
                     self.mouse = Some((x, y));
                     self.quiet = self.hover.map(|h| h.0);
                     let left = e.button() == sdl::SDL_BUTTON_LEFT;
-                    // a click anywhere else forgets a length half typed
-                    if !inside(self.field, (x, y)) {
+                    // a click anywhere else forgets a length half typed; one
+                    // on a panel is the panel's
+                    let on_panel = inside(self.panel_rect, (x, y));
+                    if !inside(self.field, (x, y)) || on_panel {
                         self.edit = None;
                     }
-                    if left && inside(self.bar, (x, y)) {
+                    let button = self.buttons.iter().rev().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1);
+                    if on_panel {
+                        if let Some(k) = self.knob_under((x, y)).filter(|_| left) {
+                            let to = self.knob_at(k, x);
+                            self.knob_drag = Some((k, to));
+                            v.push(knob_set(k, to));
+                        } else if let Some(b) = button.filter(|_| left) {
+                            v.push(b.left);
+                        }
+                    } else if left && inside(self.bar, (x, y)) {
                         self.scrub = Some(self.bar_secs(x));
                     } else if left && inside(self.slider, (x, y)) {
                         let l = self.slider_length(x);
@@ -376,7 +433,7 @@ impl Gui {
                     } else if let Some(k) = self.knob_under((x, y)).filter(|_| left) {
                         let to = self.knob_at(k, x);
                         self.knob_drag = Some((k, to));
-                        v.push((KNOBS[k].set)(to));
+                        v.push(knob_set(k, to));
                     } else if left && inside(self.field, (x, y)) {
                         if self.edit_song {
                             self.edit = None;
@@ -384,10 +441,8 @@ impl Gui {
                         self.edit_song = false;
                         self.edit.get_or_insert_with(String::new);
                     } else if left && inside(self.sid, (x, y)) {
-                        self.edit = Some(String::new());
-                        self.edit_song = true;
-                    } else if let Some(b) = self.buttons.iter().find(|b| x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1)
-                    {
+                        v.push(Action::Copy);
+                    } else if let Some(b) = button {
                         match e.button() {
                             sdl::SDL_BUTTON_LEFT => v.push(b.left),
                             sdl::SDL_BUTTON_RIGHT => v.extend(b.right),
@@ -395,7 +450,7 @@ impl Gui {
                         }
                     }
                 }
-                sdl::SDL_KEYDOWN if self.edit.is_some() => self.edit_key(e.key(), &mut v),
+                sdl::SDL_KEYDOWN if self.edit.is_some() => self.edit_key(e.key(), e.ctrl(), &mut v),
                 // the keys listed: a key puts them away (? and F1 too)
                 sdl::SDL_KEYDOWN if self.keys => self.keys = false,
                 sdl::SDL_KEYDOWN => {
@@ -404,6 +459,11 @@ impl Gui {
                         sdl::K_LEFT => Some(Action::Genre(-1)),
                         sdl::K_UP => Some(Action::Drums(1)),
                         sdl::K_DOWN => Some(Action::Drums(-1)),
+                        // (a panel first)
+                        sdl::K_ESCAPE if self.panel.is_some() => {
+                            self.panel = None;
+                            None
+                        }
                         sdl::K_ESCAPE => Some(Action::Window),
                         sdl::K_F1 => Some(Action::Keys),
                         sdl::K_F11 => Some(Action::Fullscreen),
@@ -421,10 +481,11 @@ impl Gui {
                             Ok(']') => Some(Action::Longer(1)),
                             Ok('-') => Some(Action::Louder(-1)),
                             Ok('=' | '+') => Some(Action::Louder(1)),
-                            Ok('7') => Some(Action::Wetter(-1)),
-                            Ok('8') => Some(Action::Wetter(1)),
-                            Ok('9') => Some(Action::MoreEcho(-1)),
-                            Ok('0') => Some(Action::MoreEcho(1)),
+                            // (Ctrl-C and Ctrl-V as well)
+                            Ok('c') => Some(Action::Copy),
+                            Ok('v') => Some(Action::Paste),
+                            Ok('k') => Some(Action::Keep),
+                            Ok('a') => Some(Action::EffectsPanel),
                             Ok(c @ ('t' | 'd')) => {
                                 self.edit = Some(String::new());
                                 self.edit_song = c == 'd';
@@ -443,6 +504,7 @@ impl Gui {
                             Ok('q') => Some(Action::Quit),
                             // (? is shifted /)
                             Ok('/' | '?') => Some(Action::Keys),
+                            Ok(c) => crate::fx_key(c),
                             _ => None,
                         },
                     };
@@ -468,9 +530,10 @@ impl Gui {
         self.px.fill(0xFF00_0000 | BG);
         self.buttons.clear();
         self.tips.clear();
+        self.knob = [None; NKNOBS];
         let m = 8;
 
-        // what is playing, and its id
+        // what is playing, and its id (a click on it copies it)
         self.text(m, m, "MUSICBOX", ACCENT, 2);
         let mut right = now.sid.map_or_else(|| format!("SEED {}", st.seed), |id| format!("SONG {id}"));
         if !st.sampled {
@@ -486,13 +549,52 @@ impl Gui {
         self.sid = Some((w - m - rw - 2, m + 1, w - m + 2, m + 14));
         self.tip(
             self.sid,
-            "This song's id: it plays the same song again, here (musicbox ID) or in the browser. Click it to type one to play.",
-            "D",
+            "This song's id: it plays the same song again, here (PASTE, or musicbox ID) or in the browser. Click it to copy it.",
+            "C",
         );
         let playing = if now.bpm > 0.0 { now.id } else { st.id() };
         let (p, d) = music::parts(playing);
         let mut y = m + 22;
-        let big = if font::width(&music::name(playing), 2) + 160 < w - 2 * m { 2 } else { 1 };
+        // at the name's right, the id's buttons: copy it, play one pasted,
+        // keep it, the favorites
+        let kept = now.sid.is_some_and(|id| st.favorites.has(&id));
+        let n = st.favorites.ids().len();
+        let ids: [(&str, Action, String, &'static str, bool); 4] = [
+            (
+                "COPY",
+                Action::Copy,
+                "Copy this song's id, to play it again later: here (PASTE, or musicbox ID) or in the browser.".into(),
+                "C",
+                false,
+            ),
+            (
+                "PASTE",
+                Action::Paste,
+                "Play the song whose id is copied (or a link to it, as the browser's COPY LINK makes).".into(),
+                "V",
+                false,
+            ),
+            (
+                "*",
+                Action::Keep,
+                if kept {
+                    "One of your favorites. Click to let it go.".into()
+                } else {
+                    "Keep this song among your favorites.".into()
+                },
+                "K",
+                kept,
+            ),
+            (
+                "FAVORITES",
+                Action::FavoritesPanel,
+                format!("Your favorites ({n}), to play again: click one."),
+                "",
+                self.panel == Some(Panel::Favorites),
+            ),
+        ];
+        let iw = ids.iter().map(|b| font::width(b.0, 1) + 10).sum::<i32>() - 2;
+        let big = if font::width(&music::name(playing), 2) + iw + 24 <= w - 2 * m { 2 } else { 1 };
         let mut x = m;
         x += self.text(x, y, music::GENRES[p], TEXT, big);
         if let Some(d) = d {
@@ -500,14 +602,17 @@ impl Gui {
             x += self.text(x, y, music::GENRES[d], AMBER, big);
             x += self.text(x, y, " DRUMS", DIM, big);
         }
-        // the music asked for, from the next bar: at the right of the name,
-        // else of the song's line below it
+        let mut bx = (w - m - iw).max(x + 12);
+        let by = y + (7 * big - 13) / 2;
+        for (label, a, help, key, lit) in ids {
+            let bw = font::width(label, 1) + 8;
+            self.button(bx, by, bw, 13, label, if lit { LIT } else { PLAIN }, None, a, None);
+            self.tip(Some((bx, by, bx + bw, by + 13)), help, key);
+            bx += bw + 2;
+        }
+        // the music asked for, from the next bar: at the right of the song's line
         let next = (playing != st.id()).then(|| format!("NEXT: {}", music::name(st.id())));
         let nw = next.as_ref().map_or(0, |n| font::width(n, 1));
-        if let Some(n) = next.as_ref().filter(|_| x + 24 + nw <= w - m) {
-            self.text(w - m - nw, y + (7 * big - 7) / 2, n, ACCENT, 1);
-        }
-        let next = next.filter(|_| x + 24 + nw > w - m);
         y += 7 * big + 6;
         if self.note.as_ref().is_some_and(|n| n.1.elapsed().as_secs() >= 4) {
             self.note = None;
@@ -517,7 +622,7 @@ impl Gui {
         let line = match msg {
             _ if typing.is_some() => {
                 format!(
-                    "SONG ID: {}_   AS SHOWN AT THE TOP, SKA.2817.0.3: ENTER PLAYS IT, ESC CANCELS",
+                    "SONG ID: {}_   AS SHOWN AT THE TOP, SKA.2817.0.3, OR CTRL-V: ENTER PLAYS IT, ESC CANCELS",
                     typing.expect("typed").to_uppercase()
                 )
             }
@@ -721,9 +826,9 @@ impl Gui {
         }
         y += rows(ng) * (bh + gap) + 4;
 
-        // the window's own buttons, and the volume, reverb and echo
+        // the window's own buttons, the effects', and the volume
         let mut x = m;
-        let keys: [(&str, Action, &str, &str); 4] = [
+        let keys: [(&str, Action, &str, &str); 5] = [
             ("FULLSCREEN", Action::Fullscreen, "Fill the screen, or go back to a window.", "F F11"),
             (
                 "CLOSE",
@@ -733,18 +838,57 @@ impl Gui {
             ),
             ("QUIT", Action::Quit, "Stop the music and quit.", "Q"),
             ("KEYS", Action::Keys, "Every key, in one list.", "? F1"),
+            (
+                "EFFECTS",
+                Action::EffectsPanel,
+                "Reverb, echo, chorus, stereo width, bass and treble, 0 to 500% (100: as the genre has them). They change what you hear and export, not the music. Underlined when one is turned.",
+                "A",
+            ),
         ];
-        for (label, a, help, key) in keys {
+        for (i, (label, a, help, key)) in keys.into_iter().enumerate() {
             let bw = font::width(label, 1) + 8;
-            self.button(x, y, bw, bh, label, PLAIN, None, a, None);
+            let (fill, mark) = if i == 4 {
+                let turned = st.effects != music::Effects::default();
+                (if self.panel == Some(Panel::Effects) { LIT } else { PLAIN }, turned.then_some(ACCENT))
+            } else {
+                (PLAIN, None)
+            };
+            if i == 4 {
+                x += 8;
+            }
+            self.button(x, y, bw, bh, label, fill, mark, a, None);
             self.tip(Some((x, y, x + bw, y + bh)), help, key);
             x += bw + 6;
         }
-        self.knobs(st, x + 8, w - m, y, bh);
+        self.knob_one(0, st.volume, x + 8, w - m, y, bh, 0);
 
-        // the equalizer, then over it all the keys, or what the mouse rests on
-        if bottom - top > 24 {
-            self.equalizer(tap, m, top, w - m, bottom);
+        // the equalizer, or a panel in its place (over the middle when the
+        // place is too small for it); then over it all the keys, or what the
+        // mouse rests on
+        self.panel_rect = None;
+        match self.panel {
+            Some(p) => {
+                let need = if p == Panel::Effects { EFFECTS_H } else { FAVORITES_H };
+                // (the effects over the top of the equalizer's place, the
+                // equalizer still playing under them where there is room)
+                let r = if p == Panel::Effects && bottom - top >= need + 40 {
+                    self.equalizer(tap, m, top + need + 4, w - m, bottom);
+                    (m, top, w - m, top + need)
+                } else if bottom - top >= need {
+                    (m, top, w - m, bottom)
+                } else {
+                    let y0 = ((h - need) / 2).max(2);
+                    (m, y0, w - m, (y0 + need).min(h - 2))
+                };
+                self.panel_rect = Some(r);
+                if p == Panel::Effects {
+                    self.effects_panel(st, r);
+                } else {
+                    self.favorites_panel(st, now, r);
+                }
+            }
+            None if bottom - top > 24 => self.equalizer(tap, m, top, w - m, bottom),
+            None => {}
         }
         if self.keys {
             self.key_list();
@@ -936,31 +1080,103 @@ impl Gui {
         y
     }
 
-    /// The sliders at the right between x0 and x1: the reverb and the echo
-    /// (when there is room for them), then the volume.
-    fn knobs(&mut self, st: &State, x0: i32, x1: i32, y: i32, h: i32) {
-        self.knob = [None; 3];
-        let each = (x1 - x0) / 3;
-        let fits = each - 12 >= font::width("REVERB", 1) + 6 + 40 + font::width("200%", 1) + 6;
-        let values = [st.volume, st.effects.reverb, st.effects.echo];
-        if fits {
-            for (i, k) in [1, 2, 0].into_iter().enumerate() {
-                let i = i as i32;
-                self.knob_one(k, values[k], x0 + i * each + if i > 0 { 12 } else { 0 }, x0 + (i + 1) * each, y, h);
-            }
-        } else {
-            self.knob_one(0, values[0], x0, x1, y, h);
+    /// The effects, in a box in `r`: their sliders in two columns, and
+    /// buttons to set them all as the genre has them and to put them away.
+    fn effects_panel(&mut self, st: &State, r: Rect) {
+        let (x0, y0, x1, y1) = r;
+        self.rect(x0, y0, x1 - x0, y1 - y0, EDGE);
+        self.rect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2, PANEL);
+        self.tip(
+            Some(r),
+            "The effects change what you hear and export, not the music: 100% is each as the genre has it.",
+            "A",
+        );
+        let (ix0, ix1) = (x0 + 8, x1 - 8);
+        let y = y0 + 7;
+        let tw = self.text(ix0, y + 3, "EFFECTS", ACCENT, 1);
+        let cw = font::width("CLOSE", 1) + 8;
+        let aw = font::width("ALL 100%", 1) + 8;
+        let say = "100% IS AS THE GENRE HAS IT";
+        if ix0 + tw + 12 + font::width(say, 1) + 12 <= ix1 - cw - aw - 6 {
+            self.text(ix0 + tw + 12, y + 3, say, FAINT, 1);
+        }
+        self.button(ix1 - cw, y, cw, 13, "CLOSE", PLAIN, None, Action::EffectsPanel, None);
+        self.tip(Some((ix1 - cw, y, ix1, y + 13)), "Put the effects away (they stay as they are).", "A ESC");
+        let rx = ix1 - cw - 4 - aw;
+        let fill = if st.effects == music::Effects::default() { PLAIN } else { LIT };
+        self.button(rx, y, aw, 13, "ALL 100%", fill, None, Action::ResetEffects, None);
+        self.tip(Some((rx, y, rx + aw, y + 13)), "Every effect back to 100%: as the genre has it.", "");
+        let y = y + 13 + 8;
+        let gap = 24;
+        let cw = (ix1 - ix0 - gap) / 2;
+        let lw = FX_LABELS.iter().map(|l| font::width(l, 1)).max().unwrap_or(0) + 8;
+        for k in 0..music::NFX {
+            let (col, row) = (k as i32 / 3, k as i32 % 3);
+            let cx = ix0 + col * (cw + gap);
+            self.knob_one(1 + k, st.effects.0[k], cx, cx + cw, y + row * 17, 13, lw);
         }
     }
 
+    /// The favorites, in a box in `r`: each a row to click to play it (the
+    /// one playing lit) with an X to let it go, as many as fit from
+    /// `fav_top` (the wheel scrolls), and where they are kept.
+    fn favorites_panel(&mut self, st: &State, now: &Now, r: Rect) {
+        let (x0, y0, x1, y1) = r;
+        self.rect(x0, y0, x1 - x0, y1 - y0, EDGE);
+        self.rect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2, PANEL);
+        self.tip(Some(r), "Your favorites: click one to play it. The mouse wheel scrolls them.", "");
+        let ids = st.favorites.ids();
+        let (ix0, ix1) = (x0 + 8, x1 - 8);
+        let mut y = y0 + 7;
+        let tw = self.text(ix0, y + 3, "FAVORITES", ACCENT, 1);
+        self.text(ix0 + tw + 8, y + 3, &ids.len().to_string(), DIM, 1);
+        let cw = font::width("CLOSE", 1) + 8;
+        self.button(ix1 - cw, y, cw, 13, "CLOSE", PLAIN, None, Action::FavoritesPanel, None);
+        self.tip(Some((ix1 - cw, y, ix1, y + 13)), "Put the favorites away.", "ESC");
+        y += 13 + 6;
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = st.favorites.path().display().to_string();
+        let path = if home.is_empty() { path } else { path.replacen(&home, "~", 1) };
+        let foot = y1 - 13;
+        let fit = ((foot - 4 - y) / 15).max(1) as usize;
+        self.fav_top = self.fav_top.min(ids.len().saturating_sub(fit));
+        if ids.is_empty() {
+            self.text(ix0, y + 3, "NONE YET: THE * BESIDE THE SONG'S NAME (OR K) KEEPS THE SONG PLAYING", DIM, 1);
+        }
+        let playing = now.sid.map(|s| s.to_string());
+        let xw = font::width("X", 1) + 8;
+        for (i, id) in ids.iter().enumerate().skip(self.fav_top).take(fit) {
+            let ry = y + (i - self.fav_top) as i32 * 15;
+            let text = id.to_string();
+            let lit = playing.as_ref() == Some(&text);
+            let rw = ix1 - ix0 - xw - 2;
+            self.button(ix0, ry, rw, 13, "", if lit { LIT } else { PLAIN }, None, Action::Go(*id), None);
+            self.text(ix0 + 4, ry + 3, &text.to_uppercase(), TEXT, 1);
+            let help = if lit { "Playing now.".to_string() } else { format!("Play {text}.") };
+            self.tip(Some((ix0, ry, ix0 + rw, ry + 13)), help, "");
+            self.button(ix1 - xw, ry, xw, 13, "X", PLAIN, None, Action::Forget(*id), None);
+            self.tip(Some((ix1 - xw, ry, ix1, ry + 13)), "Let it go from your favorites.", "");
+        }
+        let more = ids.len().saturating_sub(self.fav_top + fit);
+        let mut foot_text = format!("KEPT IN {}", path.to_uppercase());
+        if self.fav_top > 0 || more > 0 {
+            foot_text = format!("{} ABOVE, {more} BELOW: THE WHEEL SCROLLS   {foot_text}", self.fav_top);
+        }
+        self.text(ix0, foot + 2, &foot_text, FAINT, 1);
+    }
+
     /// The slider `k` between x0 and x1: its name, its slider (a tick each
-    /// tenth, the middle's taller, lit up to its handle), and how much.
-    fn knob_one(&mut self, k: usize, v: u32, x0: i32, x1: i32, y: i32, h: i32) {
-        let Knob { name, most, help, keys, .. } = KNOBS[k];
+    /// tenth, the one at its home value taller, lit up to its handle), and
+    /// how much. With `aligned` (a width for the name), the name at x0 and
+    /// the slider from there to the value, else the slider at the right (at
+    /// most 240 wide) with its name before it.
+    #[allow(clippy::too_many_arguments)]
+    fn knob_one(&mut self, k: usize, v: u32, x0: i32, x1: i32, y: i32, h: i32, aligned: i32) {
+        let (name, most, _, home, keys) = knob(k);
         let shown = format!("{v}%");
         let pw = font::width(&format!("{most}%"), 1);
-        let label = font::width(name, 1) + 6;
-        let sw = (x1 - x0 - label - pw - 6).min(200);
+        let label = aligned.max(font::width(name, 1) + 6);
+        let sw = (x1 - x0 - label - pw - 6).min(if aligned > 0 { i32::MAX } else { 240 });
         if sw < 40 {
             return;
         }
@@ -968,19 +1184,25 @@ impl Gui {
         let sx0 = sx1 - sw;
         self.text(sx0 - label, y + 3, name, DIM, 1);
         self.knob[k] = Some((sx0, y, sx1, y + h));
-        self.tip(Some((sx0 - label, y, x1, y + h)), help, keys);
+        self.tip(Some((sx0 - label, y, x1, y + h)), knob_help(k), keys);
         let mid = y + h / 2;
         self.rect(sx0, mid - 1, sw, 3, LED_OFF);
         for tick in 1..10 {
             let tx = self.knob_x(k, tick * most / 10);
-            let tall = if tick == 5 { 4 } else { 2 };
+            let tall = if tick * most / 10 == home { 4 } else { 2 };
             self.rect(tx, mid - 1 - tall, 1, 2 * tall + 3, EDGE);
         }
         let hx = self.knob_x(k, v);
         self.rect(sx0, mid - 1, hx - sx0, 3, ACCENT);
         let over = self.knob_drag.is_some_and(|d| d.0 == k) || self.mouse.is_some_and(|m| inside(self.knob[k], m));
         self.rect(hx - 2, y + 1, 5, h - 2, if over { PEAK } else { TEXT });
-        let color = if v == 0 { AMBER } else { ACCENT };
+        let color = if v == 0 {
+            AMBER
+        } else if k > 0 && v != 100 {
+            TEXT
+        } else {
+            ACCENT
+        };
         self.text(x1 - font::width(&shown, 1), y + 3, &shown, color, 1);
     }
 
@@ -1122,6 +1344,15 @@ mod tests {
         assert_eq!(wrap("one  two", 40), ["one two"]);
         // a word longer than the line has a line of its own
         assert_eq!(wrap("a ~/music/musicbox b", 6), ["a", "~/music/musicbox", "b"]);
+    }
+
+    #[test]
+    fn the_sliders_name_the_effects_keys() {
+        for (k, &(lo, hi)) in crate::FX_KEYS.iter().enumerate() {
+            assert_eq!(FX_KEY_NAMES[k], format!("{lo} {hi}"));
+            assert_eq!(FX_LABELS[k], music::FX_NAMES[k].to_uppercase());
+            assert!(KEYS.contains(&(FX_KEY_NAMES[k], FX_LABELS[k])), "{}", FX_LABELS[k]);
+        }
     }
 
     #[test]

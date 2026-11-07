@@ -62,6 +62,10 @@ impl Event {
     pub fn key(&self) -> i32 {
         self.i32_at(20)
     }
+    /// SDL_KEYDOWN: a Ctrl key held with it (keysym.mod's KMOD_CTRL)
+    pub fn ctrl(&self) -> bool {
+        u16::from_le_bytes([self.raw[24 - 4], self.raw[25 - 4]]) & 0x00C0 != 0
+    }
     /// SDL_WINDOWEVENT: the event id
     pub fn window_event(&self) -> u8 {
         self.raw[12 - 4]
@@ -117,6 +121,9 @@ unsafe extern "C" {
     fn SDL_RenderCopy(r: *mut c_void, t: *mut c_void, src: *const c_void, dst: *const c_void) -> c_int;
     fn SDL_RenderPresent(r: *mut c_void);
     fn SDL_PollEvent(ev: *mut Event) -> c_int;
+    fn SDL_SetClipboardText(text: *const c_char) -> c_int;
+    fn SDL_GetClipboardText() -> *mut c_char;
+    fn SDL_free(p: *mut c_void);
 }
 
 /// SDL's audio callback: fill `len` bytes at `stream`.
@@ -326,6 +333,24 @@ impl Window {
         let fx = self.w as f32 / ww.max(1) as f32;
         let fy = self.h as f32 / wh.max(1) as f32;
         ((x as f32 * fx) as i32, (y as f32 * fy) as i32)
+    }
+
+    /// The clipboard's text (empty when it holds none), and the clipboard set
+    /// to `text` (whether it took it): the desktop's, while the window is open.
+    pub fn clipboard(&self) -> String {
+        unsafe {
+            let p = SDL_GetClipboardText();
+            if p.is_null() {
+                return String::new();
+            }
+            let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+            SDL_free(p.cast());
+            s
+        }
+    }
+
+    pub fn set_clipboard(&self, text: &str) -> bool {
+        CString::new(text).is_ok_and(|c| unsafe { SDL_SetClipboardText(c.as_ptr()) } == 0)
     }
 
     pub fn set_title(&self, title: &str) {

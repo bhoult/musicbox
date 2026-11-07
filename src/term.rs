@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::spectrum::Spectrum;
 use crate::tap::{Now, Tap};
-use crate::{Action, State, clock, music, parse_length, show_length};
+use crate::{Action, FX_KEYS, State, clock, fx_key, music, parse_length, show_length};
 
 /// glibc's struct termios on Linux.
 #[repr(C)]
@@ -61,7 +61,7 @@ fn restore() {
     }
 }
 
-/// What is being typed: a length (T), or a song's id (D).
+/// What is being typed: a length (T), or a song's id (D, or V to paste one).
 #[derive(Clone, Copy, PartialEq)]
 enum Typing {
     Length,
@@ -115,8 +115,8 @@ impl Term {
         Some(Term { keys, edit: None, note: None, drawn: 0, spec: Spectrum::new(48000), last: None })
     }
 
-    /// The keys pressed since last time, as actions; T or D, and what
-    /// follows up to Enter (or Esc), a length or a song's id typed.
+    /// The keys pressed since last time, as actions; T, or D or V, and what
+    /// follows up to Enter (or Esc), a length or a song's id typed (or pasted).
     pub fn keys(&mut self) -> Vec<Action> {
         let b: Vec<u8> = self.keys.try_iter().flatten().collect();
         let mut v = Vec::new();
@@ -126,7 +126,7 @@ impl Term {
                 if matches!(b[i], b't' | b'T') {
                     self.edit = Some((Typing::Length, String::new()));
                     i += 1;
-                } else if matches!(b[i], b'd' | b'D') {
+                } else if matches!(b[i], b'd' | b'D' | b'v' | b'V') {
                     self.edit = Some((Typing::Song, String::new()));
                     i += 1;
                 } else {
@@ -143,7 +143,7 @@ impl Term {
                             Some(x) => v.push(Action::SetLength(x)),
                             None => self.note = Some((format!("not a length: {text}"), Instant::now())),
                         },
-                        Typing::Song => match music::SongId::parse(text) {
+                        Typing::Song => match crate::favorites::song_in(text) {
                             Some(id) => v.push(Action::Go(id)),
                             None => self.note = Some((format!("not a song's id: {text}"), Instant::now())),
                         },
@@ -197,7 +197,10 @@ impl Term {
             l.push(&music::name(st.id()).to_lowercase(), "36");
             l.push(" at the next bar", "2");
         }
-        let right = now.sid.map_or_else(|| format!("seed {}", st.seed), |id| format!("song {id}"));
+        let kept = now.sid.is_some_and(|id| st.favorites.has(&id));
+        let right = now
+            .sid
+            .map_or_else(|| format!("seed {}", st.seed), |id| format!("{}song {id}", if kept { "★ " } else { "" }));
         l.right(&right, "2");
         lines.push(l);
 
@@ -210,7 +213,9 @@ impl Term {
             (Some((typing, text)), _, _) => {
                 let (what, hint) = match typing {
                     Typing::Length => ("length: ", "   3:30, 3.5m, 210s or auto · enter sets it, esc cancels"),
-                    Typing::Song => ("song's id: ", "   as shown, ska.2817.0.3 · enter plays it, esc cancels"),
+                    Typing::Song => {
+                        ("song's id: ", "   as shown, ska.2817.0.3, or pasted · enter plays it, esc cancels")
+                    }
                 };
                 l.push(what, "1");
                 l.push(text, "1;36");
@@ -290,7 +295,7 @@ impl Term {
         lines.push(l);
         let mut l = Line::new(cols);
         l.push(if !now.stopped { "  s stop  " } else { "  s start  " }, "2");
-        l.push("r replay  x export mp3  d type a song's id  q quit", "2");
+        l.push("r replay  x export mp3  c copy its id  d v type or paste one  k keep it  q quit", "2");
         lines.push(l);
         let mut l = Line::new(cols);
         l.push("  [ ] length ", "2");
@@ -300,9 +305,7 @@ impl Term {
         l.push("  t type a length  e equalizer  ", "2");
         l.push(if window { "g close window" } else { "g window" }, "2");
         lines.push(l);
-        // the room: each lit when it is not the genre's own
-        let mut l = Line::new(cols);
-        let fx = st.effects;
+        // the effects, three a line: each lit when it is not the genre's own
         let shade = |v: u32| {
             if v == 0 {
                 "1;33"
@@ -312,12 +315,18 @@ impl Term {
                 "36"
             }
         };
-        l.push("  7 8 reverb ", "2");
-        l.push(&format!("{}%", fx.reverb), shade(fx.reverb));
-        l.push("  9 0 echo ", "2");
-        l.push(&format!("{}%", fx.echo), shade(fx.echo));
-        l.push("  (100%: the genre's own)", "2");
-        lines.push(l);
+        for row in [0..3, 3..music::NFX] {
+            let mut l = Line::new(cols);
+            for k in row.clone() {
+                let v = st.effects.0[k];
+                l.push(&format!("  {} {} {} ", FX_KEYS[k].0, FX_KEYS[k].1, music::FX_NAMES[k]), "2");
+                l.push(&format!("{v}%"), shade(v));
+            }
+            if row.start == 0 {
+                l.push("  (100%: as the genre has it)", "2");
+            }
+            lines.push(l);
+        }
         // how it is made: each choice lit when it is not the music as written
         let mut l = Line::new(cols);
         let o = st.opts;
@@ -376,6 +385,28 @@ impl Term {
         self.drawn = lines.len();
         self.last = Some((text, Instant::now()));
     }
+}
+
+impl Term {
+    /// `text` onto the clipboard, by asking the terminal (OSC 52: most allow
+    /// it, some only when told to); whether it was asked.
+    pub fn copy(&mut self, text: &str) -> bool {
+        let mut so = std::io::stdout();
+        so.write_all(format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).as_bytes()).is_ok() && so.flush().is_ok()
+    }
+}
+
+/// `b` in base64 (padded).
+fn base64(b: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::new();
+    for c in b.chunks(3) {
+        let n = c.iter().enumerate().fold(0u32, |n, (i, &x)| n | (x as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            s.push(if i <= c.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    s
 }
 
 impl Drop for Term {
@@ -461,16 +492,14 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b']' => Some(Action::Longer(1)),
         b'-' | b'_' => Some(Action::Louder(-1)),
         b'+' | b'=' => Some(Action::Louder(1)),
-        b'7' => Some(Action::Wetter(-1)),
-        b'8' => Some(Action::Wetter(1)),
-        b'9' => Some(Action::MoreEcho(-1)),
-        b'0' => Some(Action::MoreEcho(1)),
+        b'c' | b'C' => Some(Action::Copy),
+        b'k' | b'K' => Some(Action::Keep),
         b'e' | b'E' => Some(Action::Eq),
         b'o' | b'O' => Some(Action::Tuned),
         b'm' | b'M' => Some(Action::NetTunes),
         b'i' | b'I' => Some(Action::Voices),
         b'g' | b'G' => Some(Action::Window),
-        _ => None,
+        c => fx_key(c as char),
     };
     (a, 1)
 }
@@ -525,6 +554,23 @@ mod tests {
         assert_eq!(parse_keys(b"omi"), vec![Action::Tuned, Action::NetTunes, Action::Voices]);
         assert_eq!(parse_keys(b"b,."), vec![Action::Back, Action::Seek(-SEEK_SECS), Action::Seek(SEEK_SECS)]);
         assert_eq!(parse_keys(b"-+="), vec![Action::Louder(-1), Action::Louder(1), Action::Louder(1)]);
+        assert_eq!(parse_keys(b"ck"), vec![Action::Copy, Action::Keep]);
+        assert_eq!(
+            parse_keys(b"78;'2"),
+            vec![
+                Action::MoreEffect(music::FX_REVERB, -1),
+                Action::MoreEffect(music::FX_REVERB, 1),
+                Action::MoreEffect(music::FX_CHORUS, -1),
+                Action::MoreEffect(music::FX_CHORUS, 1),
+                Action::MoreEffect(music::FX_BASS, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_clipboard_is_asked_in_base64() {
+        assert_eq!(base64(b"ska.2817.0.3"), "c2thLjI4MTcuMC4z");
+        assert_eq!((base64(b"a"), base64(b"ab"), base64(b"abc")), ("YQ==".into(), "YWI=".into(), "YWJj".into()));
     }
 
     #[test]
