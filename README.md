@@ -139,9 +139,11 @@ Every song has an id, shown at the top of the terminal, the window and the page:
 
 **Back and forward.** The songs played are kept in order, the last twelve as each began. B plays the song playing from its start, or, in its first 3 seconds, the one before it; after going back, the next song is the one that came next (as it played, with its length and settings), until another genre or song is chosen. These come back as they played, at once.
 
-**Copy, paste and favorites.** COPY (C, or a click on the id) puts the song's id on the clipboard; PASTE (V) plays the song whose id is there. What is pasted can be the id, a link to the page playing it (COPY LINK makes one), or a command with it in (`musicbox ska.2817.1.2`). On the page Ctrl-V anywhere but a field plays it too, and Ctrl-C with nothing chosen copies the id; in the window Ctrl-C and Ctrl-V do, and Ctrl-V pastes into the field D opens. The terminal copies by asking the terminal (OSC 52, which most allow); to paste there, press D or V and paste. The star (K) keeps the song among the favorites, or lets it go; FAVORITES lists them, a click playing one. The desktop app keeps them in `~/.local/share/musicbox/favorites.txt`, an id a line with the genre after it (edit it as you like: the first word of a line is its id, and the rest is kept); the page keeps its own in the browser, and its COPY ALL copies them, a line each, to paste into that file.
-
 **A point in a song.** The window's and the page's bar, and , and . (10 s back and on), go to a point in the song playing: the bars before it are composed again from the song's start, not played, so the music goes on at once from the start of the bar then, with a short crossfade.
+
+### Copy, paste and favorites
+
+COPY (C, or a click on the id) puts the song's id on the clipboard; PASTE (V) plays the song whose id is there. What is pasted can be the id, a link to the page playing it (COPY LINK makes one), or a command with it in (`musicbox ska.2817.1.2`). On the page Ctrl-V anywhere but a field plays it too, and Ctrl-C with nothing chosen copies the id; in the window Ctrl-C and Ctrl-V do, and Ctrl-V pastes into the field D opens. The terminal copies by asking the terminal (OSC 52, which most allow); to paste there, press D or V and paste. The star (K) keeps the song among the favorites, or lets it go; FAVORITES lists them, a click playing one. The desktop app keeps them in `~/.local/share/musicbox/favorites.txt`, an id a line with the genre after it (edit it as you like: the first word of a line is its id, and the rest is kept); the page keeps its own in the browser, and its COPY ALL copies them, a line each, to paste into that file.
 
 ## Saving a song
 
