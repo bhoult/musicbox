@@ -67,6 +67,14 @@ What it found:
 
 Balancing made the band genres read more chip, not less: the kick had covered the bass and the tune, and now they are heard (rock 0.027 to 0.056, 2000s 0.031 to 0.125). The old twelve genres moved only with the short loops (their style shares and similarity held; celtic's rose, 0.18 to 0.22 and 0.634 to 0.660). Left out again, the bass and the lead are what still read as chip: the SoundFont's electric bass, and the synthesiser's own basses and leads in the electronic styles. The next step is better recordings of an electric bass (and a drum kit) than the SoundFont's, or a better bass on the synthesiser.
 
+### Recorded drums and basses (2026-11-06)
+
+The SoundFont's acoustic kits (Standard, Room, Power, Jazz) and its fingered and picked basses gave way to recordings: Karoryfer Samples' Big Rusty Drums and Black And Blue Basses, both CC0. Each hit of the kit is its microphones mixed as the kit's own program mixes them; each piece and each velocity layer is copied at the level of what it stands in for, so a genre keeps the balance it was set at (alone, every drum part within about 1 dB of before), and the band styles' balance was measured again (the basses came out 1.5-2 dB lower). Synthwave keeps the SoundFont's kick and snare: on the recorded kit it read more as chiptune (0.076 to 0.104), its gated 80s drums having been set on them.
+
+Alone, rock's bass reads as Chiptune 0.039 (0.243 on the SoundFont's) and ska's 0.072 (0.113). 70s funk's muted bass stays at 0.17 either way, and without its low-pass reads more so (0.38): its octaves in sixteenths are what the tagger hears. The 80s bass is the synthesiser's (0.22), untouched.
+
+Whole songs (eight a genre, the median), Chiptune before and after: 2000s 0.125 to 0.040, rock 0.056 to 0.017, 2010s 0.066 to 0.040, elevator 0.020 to 0.005, ska 0.014 to 0.008, 70s 0.036 to 0.028; 80s 0.100 to 0.115 and worship 0.022 to 0.025 a little up. "Video game music" rose in some of the band genres (2000s 0.039 to 0.063, 70s 0.036 to 0.061, ska 0.011 to 0.028): a live kit is heard more as a soundtrack's. Both are still far above the records' (0.0006 and 0.0004). Recorded strings were tried and left out: a section's soft layer swells 5-12 dB after its first half second, which the levelling (`loudness`, the loudest 0.12 s of the first 0.45 s) misses, and a held pad came out 8 dB loud.
+
 ## What it can't tell
 
 The taggers are trained on records, so they hear production as much as music: the 78s' surface noise, a vocal (most mariachi, ska and lo-fi on record has one; musicbox has none), a mastering engineer's loudness. A song can move toward a genre's records in these numbers and sound no more like the genre, or the reverse. The numbers found where to listen (polka's kick, gamelan's brightness); whether each change is better is for ears. Eight songs a genre is few: a change of a song or two in "nearest own" is noise.

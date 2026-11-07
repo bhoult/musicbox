@@ -59,6 +59,9 @@ They come from:
   (\`licenses/VSCO-2-CE/\`).
 - **Versilian Community Sample Library** by Versilian Studios,
   https://github.com/sgossner/VCSL: CC0 1.0 (\`licenses/VCSL/\`).
+- **Big Rusty Drums** and **Black And Blue Basses** by Karoryfer Samples,
+  https://github.com/sfzinstruments: CC0 1.0 (\`licenses/Big-Rusty-Drums/\`,
+  \`licenses/Black-And-Blue-Basses/\`).
 
 \`SOURCES.md\` lists every file taken from each into the sample bank these were cut from.
 EOF
