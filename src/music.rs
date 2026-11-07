@@ -11983,6 +11983,11 @@ fn rec_kit_db(v: Vec<DrumPatch>, ids: &[(Option<u16>, f32)]) -> Vec<DrumPatch> {
 
 /// A CC0 multi's articulation when it is installed, else the SoundFont's
 /// preset `gm`.
+/// The SoundFont kit's own piece (where a recorded kit stands in for the kit).
+fn sf_drum(kit: &str, key: u8) -> Option<u16> {
+    samples::drum(&format!("{kit} (SoundFont)"), key).or_else(|| samples::drum(kit, key))
+}
+
 fn multi_or(instrument: &str, articulation: &str, gm: &str) -> Option<u16> {
     samples::multi(instrument, articulation).or_else(|| samples::gm(gm))
 }
@@ -13936,7 +13941,8 @@ fn sounds_synthwave(r: &mut Rng, s: &mut Synth) {
     // trimmed as techno's are (kick +5.2, snares +5.2, hats +1.8,
     // percussion +1.5, crash +7.1 dB)
     let kick_ = vec![kick(r, (170.0, 220.0), (50.0, 58.0), (0.45, 0.6), 0.2, 0.5)];
-    ch[CH_KICK].drums = kit_trim(rec_kit(kick_, &[samples::drum("Power", 36)]), 5.2);
+    // (the SoundFont's own kick and snare: synthwave's sound, gated, was set on them)
+    ch[CH_KICK].drums = kit_trim(rec_kit(kick_, &[sf_drum("Power", 36)]), 5.2);
     let snare = DrumPatch {
         tone: 0.6,
         f0: 240.0,
@@ -13954,7 +13960,7 @@ fn sounds_synthwave(r: &mut Rng, s: &mut Synth) {
         ..DRUM
     };
     let d808 = |k: u8| samples::drum("TR-808", k);
-    let snares = [samples::drum("Room", 38), samples::drum("Room", 40)];
+    let snares = [sf_drum("Room", 38), sf_drum("Room", 40)];
     ch[CH_SNARE].drums = kit_trim(rec_kit(vec![snare, DrumPatch { ndec: 0.15, ..snare }], &snares), 5.2);
     let hats_ = [samples::drum("Electronic", 42), samples::drum("Electronic", 46)];
     ch[CH_HAT].drums = kit_trim(rec_kit(hats(r, 8500.0, 0.04, 0.3, 0.25, 0.75), &hats_), 1.8);

@@ -555,6 +555,11 @@ impl Bank {
         }
         for &kit in KITS_RECORDED {
             let Some(k) = self.kits.iter().position(|x| x.0 == kit) else { continue };
+            // the SoundFont's own kept, for a genre whose sound is built on it
+            if self.multis.iter().any(|m| m.0 == "kit") {
+                let own = (format!("{kit} (SoundFont)"), self.kits[k].1);
+                self.kits.push(own);
+            }
             for &(key, art) in KIT_KEYS {
                 let (Some(rec), was) = (self.multi("kit", art), self.kits[k].1[key as usize]) else { continue };
                 if was == 0 {
@@ -1793,6 +1798,8 @@ const GM_RECORDED: &[(&str, &str, &str, f32, f32)] =
 
 /// The SoundFont kits a recorded kit (the manifest's instrument "kit", a
 /// piece an articulation) plays in, and the piece for each General MIDI key.
+/// Each SoundFont kit is kept as "KIT (SoundFont)" as well (synthwave's
+/// 80s kick and gated snare).
 const KITS_RECORDED: &[&str] = &["Standard", "Room", "Power", "Jazz"];
 const KIT_KEYS: &[(u8, &str)] = &[
     (35, "kick"),
