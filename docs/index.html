@@ -88,7 +88,23 @@
   #typed { width: 74px; text-transform: uppercase; }
   #pos { min-width: 120px; }
   .time { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .songid { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
+  .songid { display: flex; align-items: center; gap: 4px 6px; color: var(--dim); font-size: 13px; flex-wrap: wrap; }
+  .songid label { margin-right: 2px; }
+  .songid button:not(.link) { font-size: 12px; padding: 4px 8px; }
+  .songid .link { margin-left: 6px; }
+  #keep { min-width: 2.6em; justify-content: center; font-size: 16px; padding-top: 1px; padding-bottom: 1px; }
+  /* the effects, and all of them back as they come */
+  #effects { gap: 8px 22px; }
+  #effects > .label { margin-right: 0; }
+  #fxall { font-size: 12px; padding: 4px 8px; }
+  /* the favorites */
+  #favs ol { list-style: none; margin: 0 0 6px; padding: 0; max-height: min(60vh, 520px); overflow: auto; min-width: min(460px, calc(100vw - 80px)); }
+  #favs li { display: flex; gap: 4px; margin: 0 0 4px; }
+  #favs li .play { flex: 1; justify-content: flex-start; text-transform: none; letter-spacing: 0; }
+  #favs li .play.lit { background: var(--lit); }
+  #favs .none { color: var(--dim); margin: 0 0 10px; }
+  #favs .where { color: var(--faint); font-size: 12px; margin: 8px 0 0; }
+  #favs .buttons { display: flex; gap: 6px; margin-top: 12px; }
   #sid { width: 32ch; max-width: 60vw; font-size: 13px; color: var(--dim); }
   h2 { font-size: 13px; font-weight: normal; color: var(--dim); margin: 16px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 4px; }
@@ -164,6 +180,10 @@
       <label for="sid">song</label>
       <input type="text" id="sid" spellcheck="false" autocomplete="off" placeholder="its id comes as it starts" aria-label="This song's id"
         data-help="This song's id: it plays the same song again, here or in the desktop app. Paste or type one and press Enter to play it." data-key="D">
+      <button id="copyid" data-help="Copy this song's id, to play it again later: paste it here (ctrl-V anywhere on the page, or the paste button) or in the desktop app." data-key="C">copy</button>
+      <button id="paste" data-help="Play the song whose id is copied (or a link to it). Ctrl-V anywhere on the page does it too." data-key="V">paste</button>
+      <button id="keep" data-help="Keep this song among your favorites (in this browser)." data-key="K" aria-label="Favorite">☆</button>
+      <button id="favs-open" data-help="Your favorites, to play again.">favorites <span id="favn"></span></button>
       <button id="copy" class="link" data-help="Copy a link that plays this song.">copy link</button>
     </div>
   </div>
@@ -199,16 +219,40 @@
       <button id="export" data-help="Save the whole song playing as an MP3 (192 kb/s), named by its id, its tag naming the genre, tempo and key." data-key="X">mp3</button>
       <button id="wav" data-help="Save the whole song playing as a WAV: uncompressed, about 11 MB a minute." data-key="shift-X">wav</button>
     </span>
-    <span class="group effect" data-help="The reverb: 100% is the genre's own, 0 none, and past 100 it is wetter and its tail longer. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="7 8">
+  </div>
+  <div class="row" id="effects">
+    <span class="label" data-help="Effects change what you hear and save, not the music: 0 to 500%, and 100% is each as the genre has it.">effects</span>
+    <span class="group effect" data-help="The reverb: 100% is the genre's own, 0 none; past 100 it is wetter and its tail longer, at 500 a cathedral's. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="7 8">
       <span class="label">reverb</span>
-      <input type="range" id="reverb" min="0" max="200" step="10" value="100" aria-label="Reverb, per cent of the genre's own">
+      <input type="range" id="reverb" min="0" max="500" step="10" value="100" aria-label="Reverb, per cent (100: as the genre has it)">
       <span id="reverbv" class="time">100%</span>
     </span>
-    <span class="group effect" data-help="The echo: 100% is the genre's own (many have none), 0 none, and past 100 an echo in time repeats the tunes. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="9 0">
+    <span class="group effect" data-help="The echo: 100% is the genre's own (many have none), 0 none; past 100 an echo in time repeats the tunes, longer the more of it. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="9 0">
       <span class="label">echo</span>
-      <input type="range" id="echo" min="0" max="200" step="10" value="100" aria-label="Echo, per cent of the genre's own">
+      <input type="range" id="echo" min="0" max="500" step="10" value="100" aria-label="Echo, per cent (100: as the genre has it)">
       <span id="echov" class="time">100%</span>
     </span>
+    <span class="group effect" data-help="The chorus: 100% is the genre's own (most have none), 0 none; past 100 copies of the keys, pads, guitars and tunes, swung a little out of tune, thicken them. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="; '">
+      <span class="label">chorus</span>
+      <input type="range" id="chorus" min="0" max="500" step="10" value="100" aria-label="Chorus, per cent (100: as the genre has it)">
+      <span id="chorusv" class="time">100%</span>
+    </span>
+    <span class="group effect" data-help="The stereo width: 100% as it was mixed, 0 mono; past 100 the sides louder than the middle, wider than the speakers at 500. What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="5 6">
+      <span class="label">width</span>
+      <input type="range" id="width" min="0" max="500" step="10" value="100" aria-label="Width, per cent (100: as the genre has it)">
+      <span id="widthv" class="time">100%</span>
+    </span>
+    <span class="group effect" data-help="The bass, below about 150 Hz: 100% as it was mixed, 0 none, 200 twice as loud, 500 five times (the whole as loud as before). What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="1 2">
+      <span class="label">bass</span>
+      <input type="range" id="bass" min="0" max="500" step="10" value="100" aria-label="Bass, per cent (100: as the genre has it)">
+      <span id="bassv" class="time">100%</span>
+    </span>
+    <span class="group effect" data-help="The treble, above about 3.5 kHz: 100% as it was mixed, 0 none (dull), 200 twice as loud, 500 five times (the whole as loud as before). What you save has it too, and this browser remembers it. The mouse wheel turns it." data-key="3 4">
+      <span class="label">treble</span>
+      <input type="range" id="treble" min="0" max="500" step="10" value="100" aria-label="Treble, per cent (100: as the genre has it)">
+      <span id="treblev" class="time">100%</span>
+    </span>
+    <button id="fxall" data-help="Every effect back to 100%: as the genre has it.">all 100%</button>
   </div>
   <div class="row" id="made">
     <span class="group">
@@ -247,9 +291,16 @@
     <dt><kbd>-</kbd><kbd>+</kbd></dt><dd>volume</dd>
     <dt><kbd>7</kbd><kbd>8</kbd></dt><dd>reverb</dd>
     <dt><kbd>9</kbd><kbd>0</kbd></dt><dd>echo</dd>
+    <dt><kbd>;</kbd><kbd>'</kbd></dt><dd>chorus</dd>
+    <dt><kbd>5</kbd><kbd>6</kbd></dt><dd>width</dd>
+    <dt><kbd>1</kbd><kbd>2</kbd></dt><dd>bass</dd>
+    <dt><kbd>3</kbd><kbd>4</kbd></dt><dd>treble</dd>
     <dt><kbd>[</kbd><kbd>]</kbd></dt><dd>length</dd>
     <dt><kbd>T</kbd></dt><dd>type a length</dd>
+    <dt><kbd>C</kbd></dt><dd>copy the song's id</dd>
+    <dt><kbd>V</kbd></dt><dd>play the id copied (<kbd>ctrl V</kbd> too)</dd>
     <dt><kbd>D</kbd></dt><dd>type a song's id</dd>
+    <dt><kbd>K</kbd></dt><dd>keep as a favorite</dd>
     <dt><kbd>X</kbd></dt><dd>save an MP3 (<kbd>shift X</kbd> a WAV)</dd>
     <dt><kbd>O</kbd></dt><dd>tuning</dd>
     <dt><kbd>M</kbd></dt><dd>tunes</dd>
@@ -257,6 +308,16 @@
     <dt><kbd>?</kbd></dt><dd>these keys</dd>
   </dl>
   <form method="dialog"><button class="close">close</button></form>
+</dialog>
+<dialog id="favs" aria-labelledby="favs-title">
+  <h2 id="favs-title">favorites</h2>
+  <p class="none" id="favs-none">None yet: ☆ beside the song's id (or K) keeps the song playing.</p>
+  <ol id="favlist"></ol>
+  <p class="where">Kept in this browser. Copy them all to keep them elsewhere, or to paste into the desktop app's favorites.txt.</p>
+  <div class="buttons">
+    <button id="favs-copy">copy all</button>
+    <form method="dialog"><button>close</button></form>
+  </div>
 </dialog>
 <div id="tip" role="tooltip" hidden></div>
 <div id="start">
@@ -268,6 +329,6 @@
     <button id="go">▶ play</button>
   </div>
 </div>
-<script src="app/app.js?v=e288cbace1&r=fb82d75bbb"></script>
+<script src="app/app.js?v=7e92317457&r=fb82d75bbb"></script>
 </body>
 </html>

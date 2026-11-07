@@ -20,9 +20,8 @@ const st = {
   // the desktop)
   opts: { tuned: false, netTunes: false, voices: 'recorded' },
   volume: 100,
-  // the reverb and the echo, per cent of the genre's own (as the engine's
-  // Effects)
-  effects: { reverb: 100, echo: 100 },
+  // the effects, per cent (100: as the genre has it; as the engine's Effects)
+  effects: { reverb: 100, echo: 100, chorus: 100, width: 100, bass: 100, treble: 100 },
 };
 // the hover help: the control under the mouse, the one whose help shows,
 // one clicked (quiet until the mouse moves on), the help's timer, and when
@@ -30,7 +29,11 @@ const st = {
 const tip = { over: null, shown: null, quiet: null, timer: 0, warm: -1e9 };
 const VOICES = ['synth', 'recorded', 'network'];
 const optsCode = (o) => (o.tuned ? 1 : 0) | (o.netTunes ? 2 : 0) | (VOICES.indexOf(o.voices) << 2);
-const effectsCode = (f) => f.reverb | (f.echo << 16);
+// the effects in the engine's order (Effects::halves: three to a number,
+// ten bits each), and the keys that turn each down and up
+const FX = ['reverb', 'echo', 'chorus', 'width', 'bass', 'treble'];
+const FX_KEYS = { reverb: '78', echo: '90', chorus: ";'", width: '56', bass: '12', treble: '34' };
+const effectsHalves = (f) => [0, 3].map((at) => FX.slice(at, at + 3).reduce((c, k, i) => c | (f[k] << (10 * i)), 0));
 let worker = null;
 let exporter = null;
 let module = null;
@@ -175,11 +178,11 @@ function savedVolume() {
   }
 }
 
-// ---- the reverb and the echo: per cent of the genre's own, 0 to 200 (and
+// ---- the effects: per cent, 0 to 500, 100 as the genre has each (and
 // remembered in this browser); what is saved has them too
 
 const EFFECT_STEP = 10;
-const EFFECT_MAX = 200;
+const EFFECT_MAX = 500;
 
 function setEffect(k, v) {
   const to = Math.min(EFFECT_MAX, Math.max(0, Math.round(v / EFFECT_STEP) * EFFECT_STEP));
@@ -187,7 +190,8 @@ function setEffect(k, v) {
   $(k).value = st.effects[k];
   $(`${k}v`).textContent = `${st.effects[k]}%`;
   $(`${k}v`).classList.toggle('off', st.effects[k] === 0);
-  worker?.postMessage({ type: 'effects', code: effectsCode(st.effects) });
+  $('fxall').classList.toggle('lit', FX.some((f) => st.effects[f] !== 100));
+  worker?.postMessage({ type: 'effects', fx: effectsHalves(st.effects) });
   try {
     localStorage.setItem(`musicbox.${k}`, String(st.effects[k]));
   } catch {}
@@ -446,7 +450,7 @@ async function exportSong(wav = false) {
     for (const { genre, bytes } of rec.tunes) exporter.postMessage({ type: 'tunes', genre, bytes: bytes.slice(0) });
     exporter.tunes = true;
   }
-  exporter.postMessage({ type: 'export', sid: n.sid, wav, year: new Date().getFullYear(), effects: effectsCode(st.effects) });
+  exporter.postMessage({ type: 'export', sid: n.sid, wav, year: new Date().getFullYear(), effects: effectsHalves(st.effects) });
 }
 
 function makeExporter() {
@@ -545,6 +549,7 @@ function drawWhere(n) {
     st.sid = n.sid;
     if (document.activeElement !== $('sid')) $('sid').value = n.sid;
     history.replaceState(null, '', `#${n.sid}`);
+    drawKeep();
   }
   const span = Math.max(1, n.length > 0 ? n.length : n.planned);
   const pos = $('pos');
@@ -678,7 +683,7 @@ async function start() {
   st.waiting = !!asked;
   const init = { type: 'init', module, genre: null, seed: st.seed, opts: optsCode({ ...st.opts, voices: 'synth' }), paused: true };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
-  worker.postMessage({ type: 'effects', code: effectsCode(st.effects) });
+  worker.postMessage({ type: 'effects', fx: effectsHalves(st.effects) });
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
   await ctx.resume();
   if (asked) goTo(asked);
@@ -742,6 +747,133 @@ $('sid').onkeydown = (e) => {
 $('sid').onblur = (e) => {
   e.target.value = st.sid ?? '';
 };
+// ---- a song's id copied, pasted (here, or ctrl-V anywhere on the page:
+// an id, or a link to one) and kept among the favorites (in this browser)
+
+// the first song's id in some text: the id, a link to it, a command with it
+function songIn(text) {
+  return (text ?? '').split(/[\s#/?&="'<>,;]+/).find((w) => /^[a-z0-9-]+(\+[a-z0-9-]+)?\.\d+\.\d+\.\d+(\.[0-9a-z]+)*~?$/i.test(w));
+}
+
+function playPasted(text) {
+  const id = songIn(text);
+  if (!id) return say(`no song's id in what was pasted`, 'error');
+  if (id !== st.sid) goTo(id);
+}
+
+async function copyId() {
+  if (!st.sid) return say('the song has not begun');
+  try {
+    await navigator.clipboard.writeText(st.sid);
+    say(`copied ${st.sid}`);
+  } catch {
+    $('sid').focus();
+    say('copy it from its field (ctrl-C)');
+  }
+}
+
+async function pasteId() {
+  try {
+    playPasted(await navigator.clipboard.readText());
+  } catch {
+    say('this browser keeps its clipboard to itself: press ctrl-V');
+  }
+}
+
+function favorites() {
+  try {
+    const v = JSON.parse(localStorage.getItem('musicbox.favorites') ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function setFavorites(list) {
+  try {
+    localStorage.setItem('musicbox.favorites', JSON.stringify(list));
+  } catch {
+    say('this browser would not keep it', 'error');
+  }
+  drawKeep();
+  if ($('favs').open) drawFavorites();
+}
+
+function keep() {
+  if (!st.sid) return say('the song has not begun');
+  const list = favorites();
+  const kept = list.includes(st.sid);
+  setFavorites(kept ? list.filter((x) => x !== st.sid) : [...list, st.sid]);
+  say(kept ? `${st.sid} no longer a favorite` : `${st.sid} kept among the favorites`);
+}
+
+function drawKeep() {
+  const list = favorites();
+  const kept = !!st.sid && list.includes(st.sid);
+  const b = $('keep');
+  b.textContent = kept ? '★' : '☆';
+  b.classList.toggle('lit', kept);
+  setHelp(b, kept ? 'One of your favorites (in this browser): click to let it go.' : 'Keep this song among your favorites (in this browser).');
+  $('favn').textContent = list.length ? String(list.length) : '';
+  refreshTip();
+}
+
+function drawFavorites() {
+  const list = favorites();
+  $('favs-none').hidden = list.length > 0;
+  $('favlist').replaceChildren(
+    ...list.map((id) => {
+      const li = document.createElement('li');
+      const play = Object.assign(document.createElement('button'), { className: `play${id === st.sid ? ' lit' : ''}`, textContent: id });
+      play.onclick = () => {
+        $('favs').close();
+        if (id !== st.sid) goTo(id);
+      };
+      const copy = Object.assign(document.createElement('button'), { textContent: 'copy' });
+      copy.onclick = () => navigator.clipboard.writeText(id).then(() => say(`copied ${id}`), () => say('copy would not', 'error'));
+      const drop = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Let it go' });
+      drop.setAttribute('aria-label', `Let ${id} go`);
+      drop.onclick = () => setFavorites(favorites().filter((x) => x !== id));
+      li.append(play, copy, drop);
+      return li;
+    }),
+  );
+}
+
+$('copyid').onclick = copyId;
+$('paste').onclick = pasteId;
+$('keep').onclick = keep;
+$('favs-open').onclick = () => {
+  hideTip();
+  drawFavorites();
+  $('favs').showModal();
+};
+$('favs-copy').onclick = () => {
+  const list = favorites();
+  if (!list.length) return;
+  navigator.clipboard.writeText(`${list.join('\n')}\n`).then(
+    () => say(`${list.length} favorites copied`),
+    () => say('copy would not', 'error'),
+  );
+};
+$('fxall').onclick = () => {
+  for (const k of FX) setEffect(k, 100);
+};
+// ctrl-V anywhere but a field plays the id pasted; ctrl-C with nothing
+// chosen copies the song's
+document.addEventListener('paste', (e) => {
+  if (e.target.closest?.('input, textarea') || !worker) return;
+  e.preventDefault();
+  playPasted(e.clipboardData?.getData('text/plain'));
+});
+document.addEventListener('copy', (e) => {
+  if (e.target.closest?.('input, textarea') || !st.sid || !document.getSelection()?.isCollapsed) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', st.sid);
+  say(`copied ${st.sid}`);
+});
+drawKeep();
+
 $('copy').onclick = async () => {
   if (!st.sid) return say('the song has not begun');
   try {
@@ -785,7 +917,7 @@ $('volume').onwheel = (e) => {
   setVolume(st.volume + (e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP));
 };
 setVolume(savedVolume());
-for (const k of ['reverb', 'echo']) {
+for (const k of FX) {
   $(k).oninput = (e) => setEffect(k, +e.target.value);
   $(k).onwheel = (e) => {
     e.preventDefault();
@@ -822,10 +954,15 @@ document.addEventListener('keydown', (e) => {
     '-': () => setVolume(st.volume - VOLUME_STEP),
     '=': () => setVolume(st.volume + VOLUME_STEP),
     '+': () => setVolume(st.volume + VOLUME_STEP),
-    7: () => setEffect('reverb', st.effects.reverb - EFFECT_STEP),
-    8: () => setEffect('reverb', st.effects.reverb + EFFECT_STEP),
-    9: () => setEffect('echo', st.effects.echo - EFFECT_STEP),
-    0: () => setEffect('echo', st.effects.echo + EFFECT_STEP),
+    c: copyId,
+    v: pasteId,
+    k: keep,
+    ...Object.fromEntries(
+      FX.flatMap((f) => [
+        [FX_KEYS[f][0], () => setEffect(f, st.effects[f] - EFFECT_STEP)],
+        [FX_KEYS[f][1], () => setEffect(f, st.effects[f] + EFFECT_STEP)],
+      ]),
+    ),
     t: () => {
       $('typed').value = '';
       $('typed').focus();

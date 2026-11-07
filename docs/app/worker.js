@@ -5,6 +5,8 @@
 // (the tables, then each group a genre plays).
 
 const CHUNK = 2048;
+// the effects as they come (100% each), as the engine's Effects::halves has them
+const FX_AS_THEY_COME = [100 | (100 << 10) | (100 << 20), 100 | (100 << 10) | (100 << 20)];
 let x = null;
 let w = 0;
 let port = null;
@@ -116,7 +118,7 @@ async function handle(m) {
       x.mb_set_opts(w, m.code);
       break;
     case 'effects':
-      x.mb_set_effects(w, m.code);
+      x.mb_set_effects(w, m.fx[0], m.fx[1]);
       break;
     // a song's id read (for the page to fetch what it needs), then played
     case 'parse': {
@@ -133,7 +135,7 @@ async function handle(m) {
     // a song by its id, alone: an MP3, or a WAV when asked (or when the
     // encoder will not load)
     case 'export': {
-      const p = put(new TextEncoder().encode(m.sid), (q, n) => x.mb_song_wav(w, q, n, m.year, m.effects ?? (100 | (100 << 16))));
+      const p = put(new TextEncoder().encode(m.sid), (q, n) => x.mb_song_wav(w, q, n, m.year, ...(m.effects ?? FX_AS_THEY_COME)));
       if (!p) {
         postMessage({ type: 'error', error: `no song ${m.sid}` });
         break;
