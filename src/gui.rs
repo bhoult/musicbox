@@ -10,12 +10,13 @@
 //! its keys; ? lists them all.
 //! Drawn on the CPU into a small picture that SDL scales up by a whole number.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::font::{self, ADVANCE};
 use crate::sdl::{self, Window};
 use crate::spectrum::{self, Spectrum};
 use crate::tap::{Now, Tap};
+use crate::time::Instant;
 use crate::{Action, MIN_LENGTH, SLIDER_LENGTH, State, VOLUME_STEP, clock, music, parse_length, show_length};
 
 /// The sliders: the volume (0), then the effects (1 + their index in
@@ -202,6 +203,15 @@ const KEYS: [(&str, &str); 29] = [
     ("Q", "QUIT"),
     ("?  F1", "THESE KEYS"),
 ];
+
+/// In the browser the window is the page: no window to close, nor a program
+/// to quit.
+const WEB: bool = cfg!(target_arch = "wasm32");
+
+/// The keys as this window lists them.
+fn keys_listed() -> Vec<(&'static str, &'static str)> {
+    KEYS.iter().copied().filter(|k| !WEB || !matches!(k.0, "ESC  G" | "Q")).collect()
+}
 
 impl Gui {
     pub fn open() -> Result<Gui, String> {
@@ -474,8 +484,8 @@ impl Gui {
                             Ok('s') => Some(Action::Play),
                             Ok('r') => Some(Action::Replay),
                             Ok('b') => Some(Action::Back),
-                            Ok(',') => Some(Action::Seek(-crate::term::SEEK_SECS)),
-                            Ok('.') => Some(Action::Seek(crate::term::SEEK_SECS)),
+                            Ok(',') => Some(Action::Seek(-crate::SEEK_SECS)),
+                            Ok('.') => Some(Action::Seek(crate::SEEK_SECS)),
                             Ok('x') => Some(Action::Export),
                             Ok('[') => Some(Action::Longer(-1)),
                             Ok(']') => Some(Action::Longer(1)),
@@ -549,7 +559,11 @@ impl Gui {
         self.sid = Some((w - m - rw - 2, m + 1, w - m + 2, m + 14));
         self.tip(
             self.sid,
-            "This song's id: it plays the same song again, here (PASTE, or musicbox ID) or in the browser. Click it to copy it.",
+            if WEB {
+                "This song's id: it plays the same song again, here (PASTE) or in the desktop app (musicbox ID). Click it to copy it."
+            } else {
+                "This song's id: it plays the same song again, here (PASTE, or musicbox ID) or in the browser. Click it to copy it."
+            },
             "C",
         );
         let playing = if now.bpm > 0.0 { now.id } else { st.id() };
@@ -563,14 +577,19 @@ impl Gui {
             (
                 "COPY",
                 Action::Copy,
-                "Copy this song's id, to play it again later: here (PASTE, or musicbox ID) or in the browser.".into(),
+                if WEB {
+                    "Copy this song's id, to play it again later: here (PASTE) or in the desktop app (musicbox ID)."
+                } else {
+                    "Copy this song's id, to play it again later: here (PASTE, or musicbox ID) or in the browser."
+                }
+                .into(),
                 "C",
                 false,
             ),
             (
                 "PASTE",
                 Action::Paste,
-                "Play the song whose id is copied (or a link to it, as the browser's COPY LINK makes).".into(),
+                "Play the song whose id is copied (or a link to the page playing it).".into(),
                 "V",
                 false,
             ),
@@ -664,7 +683,7 @@ impl Gui {
         // where in the song it is: a bar to click or drag to a point in it,
         // between buttons 10 s back and on
         let bh = 13;
-        let seek = crate::term::SEEK_SECS;
+        let seek = crate::SEEK_SECS;
         let lw = font::width("<< 10 S", 1) + 8;
         self.button(m, y, lw, bh, "<< 10 S", PLAIN, None, Action::Seek(-seek), None);
         self.tip(Some((m, y, m + lw, y + bh)), "10 seconds back.", ",");
@@ -828,7 +847,7 @@ impl Gui {
 
         // the window's own buttons, the effects', and the volume
         let mut x = m;
-        let keys: [(&str, Action, &str, &str); 5] = [
+        let keys = [
             ("FULLSCREEN", Action::Fullscreen, "Fill the screen, or go back to a window.", "F F11"),
             (
                 "CLOSE",
@@ -845,15 +864,17 @@ impl Gui {
                 "A",
             ),
         ];
-        for (i, (label, a, help, key)) in keys.into_iter().enumerate() {
+        let shown = keys.into_iter().filter(|k| !WEB || !matches!(k.1, Action::Window | Action::Quit));
+        for (label, a, help, key) in shown {
             let bw = font::width(label, 1) + 8;
-            let (fill, mark) = if i == 4 {
+            let fx = a == Action::EffectsPanel;
+            let (fill, mark) = if fx {
                 let turned = st.effects != music::Effects::default();
                 (if self.panel == Some(Panel::Effects) { LIT } else { PLAIN }, turned.then_some(ACCENT))
             } else {
                 (PLAIN, None)
             };
-            if i == 4 {
+            if fx {
                 x += 8;
             }
             self.button(x, y, bw, bh, label, fill, mark, a, None);
@@ -956,17 +977,18 @@ impl Gui {
     /// All the keys, in a box in the middle: two columns where they fit.
     fn key_list(&mut self) {
         let (w, h) = (self.w, self.h);
-        let kw = KEYS.iter().map(|k| font::width(k.0, 1)).max().unwrap_or(0) + 10;
-        let dw = KEYS.iter().map(|k| font::width(k.1, 1)).max().unwrap_or(0);
+        let listed = keys_listed();
+        let kw = listed.iter().map(|k| font::width(k.0, 1)).max().unwrap_or(0) + 10;
+        let dw = listed.iter().map(|k| font::width(k.1, 1)).max().unwrap_or(0);
         let two = 2 * (kw + dw) + 24 + 24 <= w;
-        let per = if two { KEYS.len().div_ceil(2) } else { KEYS.len() };
+        let per = if two { listed.len().div_ceil(2) } else { listed.len() };
         let bw = if two { 2 * (kw + dw) + 24 } else { kw + dw } + 24;
         let bh = per as i32 * 10 + 44;
         let (x, y) = ((w - bw) / 2, ((h - bh) / 2).max(2));
         self.rect(x, y, bw, bh, EDGE);
         self.rect(x + 1, y + 1, bw - 2, bh - 2, TIP);
         self.text(x + 12, y + 10, "KEYS", ACCENT, 1);
-        for (i, (key, what)) in KEYS.iter().enumerate() {
+        for (i, (key, what)) in listed.iter().enumerate() {
             let (col, row) = (i / per, i % per);
             let cx = x + 12 + col as i32 * (kw + dw + 24);
             let cy = y + 26 + row as i32 * 10;

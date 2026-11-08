@@ -475,9 +475,18 @@ pub fn rel(k: u16) -> f32 {
     get(k).map_or(0.2, |n| n.rel)
 }
 
-/// How many networks are loaded.
+/// How many networks are loaded (in the browser's window, where none are:
+/// how many the page has to fetch when they are chosen).
 pub fn count() -> usize {
-    nets().map_or(0, |n| n.len())
+    nets().map_or(0, |n| n.len()).max(LISTED.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// The networks the page lists (models/index.tsv), fetched when chosen.
+static LISTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(target_arch = "wasm32")]
+pub fn listed(n: usize) {
+    LISTED.store(n, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! tilted up 3 dB an octave (music's highs sit far below its bass), each
 //! bar falling slowly after a rise and a peak marker held above it.
 
-use std::time::Instant;
+use crate::time::Instant;
 
 use crate::tap::Tap;
 

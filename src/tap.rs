@@ -4,7 +4,8 @@
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::Instant;
+
+use crate::time::Instant;
 
 /// Frames kept (1.4 s at 48 kHz), a power of two.
 const RING: usize = 1 << 16;

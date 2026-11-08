@@ -2,11 +2,13 @@
 // on a thread of its own, handing the audio worklet chunks as it asks for
 // them, each with what is playing as it starts. A second one renders a song
 // on its own for a download. The recordings come from the page, decoded
-// (the tables, then each group a genre plays).
+// (the tables, then each group a genre plays, in stereo).
 
 const CHUNK = 2048;
 // the effects as they come (100% each), as the engine's Effects::halves has them
 const FX_AS_THEY_COME = [100 | (100 << 10) | (100 << 20), 100 | (100 << 10) | (100 << 20)];
+// the module's one import: the page's clock (the window's; the engine reads none)
+const IMPORTS = { env: { now_ms: () => performance.now() } };
 let x = null;
 let w = 0;
 let port = null;
@@ -86,7 +88,7 @@ onmessage = (e) => {
 async function handle(m) {
   switch (m.type) {
     case 'init': {
-      x = (await WebAssembly.instantiate(m.module, {})).exports;
+      x = (await WebAssembly.instantiate(m.module, IMPORTS)).exports;
       const [lo, hi] = seedParts(m.seed);
       // (no genre: the seed's, among them all, as the desktop picks one)
       const genre = m.genre ?? m.seed % x.mb_genre_count();
@@ -120,12 +122,6 @@ async function handle(m) {
     case 'effects':
       x.mb_set_effects(w, m.fx[0], m.fx[1]);
       break;
-    // a song's id read (for the page to fetch what it needs), then played
-    case 'parse': {
-      const id = put(new TextEncoder().encode(m.text), (p, n) => JSON.parse(text(x.mb_song_id(w, p, n))));
-      postMessage({ type: 'id', id, text: m.text });
-      break;
-    }
     case 'go':
       put(new TextEncoder().encode(m.text), (p, n) => x.mb_go(w, p, n));
       break;

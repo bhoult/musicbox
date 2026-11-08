@@ -1,7 +1,9 @@
 //! The favorites: songs kept to play again, a song's id a line in
 //! ~/.local/share/musicbox/favorites.txt (the genre's name after it, to read
 //! by). The first word of a line is its id; whatever else the file holds
-//! (notes after an id, lines without one) is kept as it is.
+//! (notes after an id, lines without one) is kept as it is. In the browser
+//! the same lines are in the page's storage: handed in (`hand_in`) before
+//! they load, and taken (`to_store`) to keep each time they change.
 
 use std::path::PathBuf;
 
@@ -20,6 +22,7 @@ fn id_of(line: &str) -> Option<SongId> {
 impl Favorites {
     /// The favorites file (`MUSICBOX_FAVORITES`, else in musicbox's own
     /// directory), read; none yet if it is not there.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load() -> Favorites {
         let path = std::env::var_os("MUSICBOX_FAVORITES").map_or_else(
             || {
@@ -30,6 +33,13 @@ impl Favorites {
         );
         let lines = std::fs::read_to_string(&path).map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default();
         Favorites { path, lines }
+    }
+
+    /// The favorites the page handed in.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load() -> Favorites {
+        let lines = web::KEPT.with(|k| k.borrow().lines().map(str::to_string).collect());
+        Favorites { path: PathBuf::from("this browser"), lines }
     }
 
     /// The songs kept, oldest first.
@@ -56,6 +66,15 @@ impl Favorites {
         self.save().map(|_| kept)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn save(&self) -> Result<(), String> {
+        let mut text = self.lines.join("\n");
+        text.push('\n');
+        web::TO_STORE.with(|t| *t.borrow_mut() = Some(text));
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn save(&self) -> Result<(), String> {
         let err = |e: std::io::Error| format!("{}: {e}", self.path.display());
         if let Some(d) = self.path.parent() {
@@ -71,6 +90,30 @@ impl Favorites {
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// the lines as the page's storage holds them, and as they are to be
+        /// stored there (once they change)
+        pub static KEPT: RefCell<String> = const { RefCell::new(String::new()) };
+        pub static TO_STORE: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+}
+
+/// The favorites as the page's storage holds them, before they load.
+#[cfg(target_arch = "wasm32")]
+pub fn hand_in(text: String) {
+    web::KEPT.with(|k| *k.borrow_mut() = text);
+}
+
+/// The favorites to store, if they changed since last asked.
+#[cfg(target_arch = "wasm32")]
+pub fn to_store() -> Option<String> {
+    web::TO_STORE.with(|t| t.borrow_mut().take())
 }
 
 /// The first song's id in `text`: a bare id, a link to the page playing one

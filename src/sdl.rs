@@ -1,8 +1,12 @@
 //! The few SDL2 calls used: the sound device the music plays through, and
 //! for the window a 2D renderer drawing one streaming texture (the picture
-//! is made on the CPU, pixel by pixel), with its keys and mouse.
+//! is made on the CPU, pixel by pixel), with its keys and mouse. In the
+//! browser the window is the page's canvas (`page`): the page hands in its
+//! keys and mouse as SDL's events and its size, and takes the picture.
 
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+#[cfg(not(target_arch = "wasm32"))]
+use std::ffi::CString;
+use std::ffi::{CStr, c_char, c_int, c_void};
 
 const SDL_INIT_AUDIO: u32 = 0x10;
 const SDL_INIT_VIDEO: u32 = 0x20;
@@ -42,6 +46,19 @@ pub const K_F1: i32 = 0x4000_003A;
 pub const K_F11: i32 = 0x4000_0044;
 
 const SDL_WINDOW_FULLSCREEN_DESKTOP: u32 = 0x1001;
+
+/// The window's least (its picture's, at a scale of 1): what all the
+/// genres' buttons, the settings and the transport fit.
+const MIN_W: i32 = 480;
+const MIN_H: i32 = 300;
+
+/// The picture for an output `ow` x `oh` pixels: the largest whole scale
+/// that leaves it at least `MIN_W` x `MIN_H`, and its size at that scale.
+fn picture(ow: i32, oh: i32) -> (u32, u32, u32) {
+    let (ow, oh) = (ow.max(1), oh.max(1));
+    let scale = (ow / MIN_W).min(oh / MIN_H).max(1);
+    ((ow / scale) as u32, (oh / scale) as u32, scale as u32)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -220,6 +237,7 @@ pub fn no_signal_handlers() {
 
 /// A window showing one texture of `size()` pixels, scaled up by a whole
 /// number to fill the window (sharp pixels at any size).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Window {
     win: *mut c_void,
     ren: *mut c_void,
@@ -231,6 +249,7 @@ pub struct Window {
     fullscreen: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Window {
     pub fn open(title: &str, w: u32, h: u32) -> Result<Window, String> {
         unsafe {
@@ -255,7 +274,7 @@ impl Window {
                 SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
                 return Err(e);
             }
-            SDL_SetWindowMinimumSize(win, 480, 300);
+            SDL_SetWindowMinimumSize(win, MIN_W as c_int, MIN_H as c_int);
             let mut ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
             if ren.is_null() {
                 // no GPU: SDL's software renderer
@@ -277,14 +296,10 @@ impl Window {
     /// that leaves it at least `MIN_W` x `MIN_H` (the window's least, which
     /// all the genres' buttons, the settings and the transport fit).
     fn fit(&mut self) -> Result<(), String> {
-        const MIN_W: i32 = 480;
-        const MIN_H: i32 = 300;
         let (mut ow, mut oh) = (0, 0);
         unsafe { SDL_GetRendererOutputSize(self.ren, &mut ow, &mut oh) };
-        let (ow, oh) = (ow.max(1), oh.max(1));
-        let scale = (ow / MIN_W).min(oh / MIN_H).max(1);
-        let (w, h) = ((ow / scale) as u32, (oh / scale) as u32);
-        if (w, h, scale as u32) == (self.w, self.h, self.scale) && !self.tex.is_null() {
+        let (w, h, scale) = picture(ow, oh);
+        if (w, h, scale) == (self.w, self.h, self.scale) && !self.tex.is_null() {
             return Ok(());
         }
         unsafe {
@@ -302,7 +317,7 @@ impl Window {
         if self.tex.is_null() {
             return Err(error("SDL_CreateTexture"));
         }
-        (self.w, self.h, self.scale) = (w, h, scale as u32);
+        (self.w, self.h, self.scale) = (w, h, scale);
         Ok(())
     }
 
@@ -371,6 +386,7 @@ impl Window {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Window {
     fn drop(&mut self) {
         unsafe {
@@ -380,6 +396,190 @@ impl Drop for Window {
             SDL_DestroyRenderer(self.ren);
             SDL_DestroyWindow(self.win);
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+        }
+    }
+}
+
+/// The browser's window: the page's canvas.
+#[cfg(target_arch = "wasm32")]
+pub use page::Window;
+
+#[cfg(target_arch = "wasm32")]
+pub mod page {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    /// What the window asks of the page: a title, the clipboard set, to be
+    /// fullscreen or not.
+    pub enum Ask {
+        Title(String),
+        Copy(String),
+        Fullscreen,
+    }
+
+    thread_local! {
+        static EVENTS: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
+        /// the canvas's size: in the screen's pixels, and in the page's
+        static SIZE: Cell<(i32, i32, f32, f32)> = const { Cell::new((1280, 720, 1280.0, 720.0)) };
+        /// what was last pasted, and whether it has not been read since
+        static PASTED: RefCell<(String, bool)> = const { RefCell::new((String::new(), false)) };
+        static ASKS: RefCell<Vec<Ask>> = const { RefCell::new(Vec::new()) };
+        /// the picture as last shown (RGBA, as the canvas takes it), and its size
+        static SHOWN: RefCell<(Vec<u8>, u32, u32)> = const { RefCell::new((Vec::new(), 0, 0)) };
+    }
+
+    fn event(kind: u32, f: impl FnOnce(&mut [u8; 52])) {
+        let mut e = Event::new();
+        e.kind = kind;
+        f(&mut e.raw);
+        EVENTS.with(|v| v.borrow_mut().push_back(e));
+    }
+
+    /// `x` at `at` in SDL's event (where `Event`'s accessors read it)
+    fn put(raw: &mut [u8; 52], at: usize, x: i32) {
+        raw[at - 4..at].copy_from_slice(&x.to_le_bytes());
+    }
+
+    /// A key pressed (SDL's key code, a Ctrl key with it or not).
+    pub fn key(code: i32, ctrl: bool) {
+        event(SDL_KEYDOWN, |r| {
+            put(r, 20, code);
+            if ctrl {
+                r[24 - 4] = 0x40;
+            }
+        });
+    }
+
+    /// Text typed (what SDL's text input gives: the key's character).
+    pub fn text(t: &str) {
+        event(SDL_TEXTINPUT, |r| {
+            let b = t.as_bytes();
+            let n = b.len().min(31);
+            r[8..8 + n].copy_from_slice(&b[..n]);
+        });
+    }
+
+    /// The mouse at (x, y), the page's pixels on the canvas.
+    pub fn motion(x: i32, y: i32) {
+        event(SDL_MOUSEMOTION, |r| {
+            put(r, 20, x);
+            put(r, 24, y);
+        });
+    }
+
+    /// A mouse button down or up at (x, y) (1 left, 3 right).
+    pub fn button(down: bool, x: i32, y: i32, button: u8) {
+        event(if down { SDL_MOUSEBUTTONDOWN } else { SDL_MOUSEBUTTONUP }, |r| {
+            r[16 - 4] = button;
+            put(r, 20, x);
+            put(r, 24, y);
+        });
+    }
+
+    /// The wheel turned (positive away from the user).
+    pub fn wheel(by: i32) {
+        event(SDL_MOUSEWHEEL, |r| put(r, 20, by));
+    }
+
+    /// The mouse gone from the canvas.
+    pub fn leave() {
+        event(SDL_WINDOWEVENT, |r| r[12 - 4] = SDL_WINDOWEVENT_LEAVE);
+    }
+
+    /// The canvas's size, in the screen's pixels and the page's.
+    pub fn resize(ow: i32, oh: i32, css_w: f32, css_h: f32) {
+        SIZE.with(|s| s.set((ow, oh, css_w, css_h)));
+    }
+
+    /// What was pasted (Ctrl-V, or the clipboard read for PASTE): its text,
+    /// unread until the window or a paste takes it.
+    pub fn pasted(t: &str) {
+        PASTED.with(|p| *p.borrow_mut() = (t.to_string(), true));
+    }
+
+    /// Whether something pasted is waiting to be read.
+    pub fn fresh() -> bool {
+        PASTED.with(|p| p.borrow().1)
+    }
+
+    /// What the window asked of the page since last time.
+    pub fn asks() -> Vec<Ask> {
+        ASKS.with(|a| std::mem::take(&mut *a.borrow_mut()))
+    }
+
+    /// The picture last shown (RGBA) and its size, for `f` to put on the canvas.
+    pub fn shown<R>(f: impl FnOnce(&[u8], u32, u32) -> R) -> R {
+        SHOWN.with(|s| {
+            let s = s.borrow();
+            f(&s.0, s.1, s.2)
+        })
+    }
+
+    fn ask(a: Ask) {
+        ASKS.with(|v| v.borrow_mut().push(a));
+    }
+
+    pub struct Window {
+        w: u32,
+        h: u32,
+    }
+
+    impl Window {
+        pub fn open(title: &str, _w: u32, _h: u32) -> Result<Window, String> {
+            ask(Ask::Title(title.to_string()));
+            Ok(Window { w: 0, h: 0 })
+        }
+
+        pub fn size(&mut self) -> (u32, u32) {
+            let (ow, oh, ..) = SIZE.with(|s| s.get());
+            let (w, h, _) = picture(ow, oh);
+            (self.w, self.h) = (w, h);
+            (w, h)
+        }
+
+        /// `px` (0xAARRGGBB) as the canvas takes it (R, G, B, A).
+        pub fn present(&self, px: &[u32]) {
+            SHOWN.with(|s| {
+                let mut s = s.borrow_mut();
+                let n = (self.w * self.h) as usize;
+                s.0.clear();
+                s.0.extend(px.iter().take(n).flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 0xFF]));
+                (s.1, s.2) = (self.w, self.h);
+            });
+        }
+
+        pub fn to_picture(&self, x: i32, y: i32) -> (i32, i32) {
+            let (.., ww, wh) = SIZE.with(|s| s.get());
+            let fx = self.w as f32 / ww.max(1.0);
+            let fy = self.h as f32 / wh.max(1.0);
+            ((x as f32 * fx) as i32, (y as f32 * fy) as i32)
+        }
+
+        pub fn clipboard(&self) -> String {
+            PASTED.with(|p| {
+                let mut p = p.borrow_mut();
+                p.1 = false;
+                p.0.clone()
+            })
+        }
+
+        pub fn set_clipboard(&self, text: &str) -> bool {
+            ask(Ask::Copy(text.to_string()));
+            true
+        }
+
+        pub fn set_title(&self, title: &str) {
+            ask(Ask::Title(title.to_string()));
+        }
+
+        pub fn toggle_fullscreen(&mut self) {
+            ask(Ask::Fullscreen);
+        }
+
+        pub fn poll(&self) -> Option<Event> {
+            EVENTS.with(|v| v.borrow_mut().pop_front())
         }
     }
 }

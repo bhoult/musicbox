@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # The recorded instruments for the browser: musicbox --web-pack writes the
-# bank's tables and each group's recordings (mono, 48 kHz), and this
-# compresses each group to Opus.
+# bank's tables and each group's recordings (48 kHz, stereo: its mono
+# recordings, then those recorded in stereo), and this compresses each group
+# to Opus.
 #
 #   tools/web-samples.sh OUT [KBPS]
 #
 # OUT gets pack.bin (the tables), pack.json (the groups, and those each
 # genre plays), N.opus for each group, and README.md, SOURCES.md and
 # licenses/ (the samples' sources and licences, which go with them).
-# KBPS: Opus's bit rate (48 by default). Needs ffmpeg with libopus, and the
+# KBPS: Opus's bit rate (128 by default: the desktop's recordings, near enough
+# that no one hears the difference). Needs ffmpeg with libopus, and the
 # samples (tools/get-samples.sh).
 set -euo pipefail
 
 out=${1:?usage: tools/web-samples.sh OUT [KBPS]}
-kbps=${2:-48}
+kbps=${2:-128}
 here=$(cd "$(dirname "$0")/.." && pwd)
 bin="$here/target/release/musicbox"
 [ -x "$bin" ] || (cd "$here" && cargo build --release)
@@ -45,7 +47,8 @@ cat > "$out/README.md" <<EOF
 
 The recorded instruments of musicbox's web page (github.com/bhoult/musicbox), made by
 \`tools/web-samples.sh\` from the recordings \`tools/get-samples.sh\` fetches: each group of
-recordings at 48 kHz, mono, compressed to Opus at $kbps kb/s (\`N.opus\`), the sampler's
+recordings at 48 kHz in stereo (those recorded in mono first, both channels the same),
+compressed to Opus at $kbps kb/s (\`N.opus\`), the sampler's
 tables (\`pack.bin\`), and which groups each genre and mix plays (\`pack.json\`).
 
 They come from:
@@ -68,5 +71,5 @@ EOF
 raw=$(du -sb "$out/raw" | cut -f1)
 rm -rf "$out/raw"
 packed=$(du -cb "$out"/*.opus | tail -1 | cut -f1)
-echo "$n groups: $((raw / 1000000)) MB of 16-bit mono made $((packed / 1000000)) MB of Opus at $kbps kb/s;" \
+echo "$n groups: $((raw / 1000000)) MB of 16-bit stereo made $((packed / 1000000)) MB of Opus at $kbps kb/s;" \
   "tables $(($(stat -c %s "$out/pack.bin") / 1000)) kB"

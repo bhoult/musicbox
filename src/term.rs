@@ -6,11 +6,11 @@
 use std::ffi::c_int;
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::Instant;
 
 use crate::spectrum::Spectrum;
 use crate::tap::{Now, Tap};
-use crate::{Action, FX_KEYS, State, clock, fx_key, music, parse_length, show_length};
+use crate::time::Instant;
+use crate::{Action, FX_KEYS, SEEK_SECS, State, clock, fx_key, music, parse_length, show_length};
 
 /// glibc's struct termios on Linux.
 #[repr(C)]
@@ -457,9 +457,6 @@ fn cols() -> usize {
     let ok = unsafe { ioctl(1, TIOCGWINSZ, &mut w as *mut Winsize) } == 0;
     if ok && w.cols > 0 { w.cols as usize } else { 80 }
 }
-
-/// How far , and . go back and on in a song (seconds).
-pub const SEEK_SECS: f64 = 10.0;
 
 /// The key at the start of `b` as it comes from a terminal (arrows as
 /// escape sequences, a lone escape as itself), and the bytes it took.
