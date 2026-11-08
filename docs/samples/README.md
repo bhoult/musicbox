@@ -2,7 +2,9 @@
 
 The recorded instruments of musicbox's web page (github.com/bhoult/musicbox), made by
 `tools/web-samples.sh` from the recordings `tools/get-samples.sh` fetches: each group of
-recordings at 48 kHz, mono, compressed to Opus at 48 kb/s (`N.opus`), the sampler's
+recordings at 48 kHz (those recorded in mono first, then those recorded in stereo, in
+stereo; a group with none in stereo, in mono), compressed to Opus at 128 kb/s
+(`N.opus`), the sampler's
 tables (`pack.bin`), and which groups each genre and mix plays (`pack.json`).
 
 They come from:

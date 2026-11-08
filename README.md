@@ -4,11 +4,11 @@
 
 Made by Claude Opus 5.5, instigated by [Brandon Hoult](https://hoult.co).
 
-Music made up as it plays, without end, in 28 genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser.
+Music made up as it plays, without end, in 28 genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser, the same window in the page.
 
 **[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
-[![The browser version: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id with COPY, PASTE, the favorite's star and FAVORITES, the equalizer, the transport, the song's bar, the volume, the length, saving, the six effects, the three settings and the genre selector](docs/web.png)](https://bhoult.github.io/musicbox/)
+[![The browser version, the desktop's window drawn in the page: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id with COPY, PASTE, the favorite's star and FAVORITES, the song's bar, the equalizer, the transport, the length, the three settings, the genre selector, the effects and the volume](docs/web.png)](https://bhoult.github.io/musicbox/)
 
 As it comes, no AI model makes any of the sound or the music, and no song is sampled. The music comes from a composer that is ordinary code: for each genre, rules for its scales, chords, rhythms, song forms and who plays what, and a random number generator choosing among them. It is generated at random and without end by software that an AI wrote. A genre and a seed always give the same music.
 
@@ -116,7 +116,7 @@ Stop fades out in 30 ms and holds the music where it is; start goes on from ther
 
 ## Effects
 
-Six effects turn what you hear from 0 to 500%, each 10% a step: sliders in the window (EFFECTS, or A) and on the page, the keys below, and flags. 100% is the genre as it comes, the music to the bit as it was without them; 0 is none.
+Six effects turn what you hear from 0 to 500%, each 10% a step: sliders in the window and the page (EFFECTS, or A), the keys below, and flags. 100% is the genre as it comes, the music to the bit as it was without them; 0 is none.
 
 | effect | keys | flag | 0% | past 100% |
 | --- | --- | --- | --- | --- |
@@ -129,13 +129,13 @@ Six effects turn what you hear from 0 to 500%, each 10% a step: sliders in the w
 
 The genres' own reverbs are quiet (25 to 35 dB under the music in rock, ska and celtic, drier than most records), and some genres have far more than others, so past 200% the reverb is held to 6 dB over the music and the whole kept as loud as it was at 200%: ambient at 500% is a wash, and rock a hall. The width, bass and treble change the balance, not the loudness: the whole is kept as loud as it came in. The reverb and echo add a little; with all six at 500%, the four genres measured came out 1.4 to 1.9 times as loud as at 100%.
 
-They change the room, not the music: a song's id stays the same, and an export (X, SAVE, `--export`) is made with them, its tag giving the flags that make it again. The page remembers them in the browser; the desktop app starts at 100% (or the flags) each time.
+They change the room, not the music: a song's id stays the same, and an export (X, EXPORT MP3, `--export`) is made with them, its tag giving the flags that make it again. The page remembers them in the browser; the desktop app starts at 100% (or the flags) each time.
 
 ## Song ids
 
-Every song has an id, shown at the top of the terminal, the window and the page: `ska.2817.1.2` is ska from seed 2817, the run of songs begun by its first skip or genre change (0 is the first run), and that run's second song. A length asked is added in seconds (`.180s`), and the settings that are not as they come in letters: `o` optimised, `t` network tunes, `s` the synthesiser's instruments, `n` the network's (`celtic.5.0.2.180s.tn`). The id plays the song again, later or elsewhere: `musicbox ska.2817.1.2`, D and typing it, the page's field, or the page's address (`bhoult.github.io/musicbox/#ska.2817.1.2`, which follows the song playing). It sets the genre, the length and the settings it gives, and the music goes on from that song as it would have.
+Every song has an id, shown at the top of the terminal, the window and the page: `ska.2817.1.2` is ska from seed 2817, the run of songs begun by its first skip or genre change (0 is the first run), and that run's second song. A length asked is added in seconds (`.180s`), and the settings that are not as they come in letters: `o` optimised, `t` network tunes, `s` the synthesiser's instruments, `n` the network's (`celtic.5.0.2.180s.tn`). The id plays the song again, later or elsewhere: `musicbox ska.2817.1.2`, D and typing it (in the window or the page), or the page's address (`bhoult.github.io/musicbox/#ska.2817.1.2`, which follows the song playing). It sets the genre, the length and the settings it gives, and the music goes on from that song as it would have.
 
-**How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, the page's SAVE) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
+**How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, or the page's EXPORT MP3) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
 
 **Back and forward.** The songs played are kept in order, the last twelve as each began. B plays the song playing from its start, or, in its first 3 seconds, the one before it; after going back, the next song is the one that came next (as it played, with its length and settings), until another genre or song is chosen. These come back as they played, at once.
 
@@ -143,7 +143,7 @@ Every song has an id, shown at the top of the terminal, the window and the page:
 
 ### Copy, paste and favorites
 
-COPY (C, or a click on the id) puts the song's id on the clipboard; PASTE (V) plays the song whose id is there. What is pasted can be the id, a link to the page playing it (COPY LINK makes one), or a command with it in (`musicbox ska.2817.1.2`). On the page Ctrl-V anywhere but a field plays it too, and Ctrl-C with nothing chosen copies the id; in the window Ctrl-C and Ctrl-V do, and Ctrl-V pastes into the field D opens. The terminal copies by asking the terminal (OSC 52, which most allow); to paste there, press D or V and paste. The star (K) keeps the song among the favorites, or lets it go; FAVORITES lists them, a click playing one. The desktop app keeps them in `~/.local/share/musicbox/favorites.txt`, an id a line with the genre after it (edit it as you like: the first word of a line is its id, and the rest is kept); the page keeps its own in the browser, and its COPY ALL copies them, a line each, to paste into that file.
+COPY (C, or a click on the id) puts the song's id on the clipboard; PASTE (V) plays the song whose id is there. What is pasted can be the id, a link to the page playing it (its address), or a command with it in (`musicbox ska.2817.1.2`). Ctrl-C and Ctrl-V do the same, in the window and the page, and Ctrl-V pastes into the field D opens (a browser may ask before PASTE reads the clipboard; Ctrl-V it never does). The terminal copies by asking the terminal (OSC 52, which most allow); to paste there, press D or V and paste. The star (K) keeps the song among the favorites, or lets it go; FAVORITES lists them, a click playing one. The desktop app keeps them in `~/.local/share/musicbox/favorites.txt`, an id a line with the genre after it (edit it as you like: the first word of a line is its id, and the rest is kept); the page keeps its own in the browser, the same lines.
 
 ## Saving a song
 
@@ -158,9 +158,9 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the same composer and synthesiser compiled to WebAssembly (1.5 MB): the genres and mixes, the equalizer, the genre selector, the transport with back and forward, the bar to go to a point in the song, the length, the volume, the six effects, the three settings, song ids, favorites and the keys as the window has them. The genres are one grid, as in the window, with the drummer chosen from a list beside its heading (or by right-clicking a genre). The song's id is in a field beside its name, with COPY, PASTE, the star, FAVORITES and COPY LINK (a link that plays it); type an id into the field and press Enter, or press Ctrl-V anywhere, to play it. Whatever the mouse rests on says what it does and its keys, and ? lists them all. SAVE MP3 (X) saves an MP3 of the song playing, named by its id, with the desktop's tag; WAV (shift-X) saves a WAV. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the desktop app compiled to WebAssembly (1.6 MB): its composer, its synthesiser and its window. The page draws the window with the window's own code (`src/gui.rs`), pixel for pixel as the desktop draws it, at the same whole scale for the page's size, and takes the same keys, clicks, wheel and panels. What the window's actions do is the desktop's code too (`src/app.rs`). The one difference is that a page has no window to close and no program to quit: CLOSE and QUIT are not there, and Esc, G and Q do nothing. A browser plays nothing until asked, so the first key or click starts the music. EXPORT MP3 (X) downloads an MP3 of the song playing, named by its id, with the desktop's tag. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound; the window is a second copy of the module on the page's own thread, handing the worker what its actions ask, and the equalizer is drawn from what the worklet plays.
 
-It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings made mono at 48 kHz and compressed to Opus at 48 kb/s: 4 to 35 MB a genre, and 68 MB for all 28, against the desktop's gigabyte. NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
+It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings at 48 kHz, in stereo where they were recorded in stereo and to the end of each note's ring, compressed to Opus at 128 kb/s, near enough to the desktop's that they are hard to tell apart: 11 to 88 MB a genre, and 174 MB for all 28, against the desktop's 1.2 GB. Decoded, a genre's take up to 600 MB of the browser's memory (ska's, the most). NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 
 ```
 rustup target add wasm32-unknown-unknown
@@ -174,7 +174,7 @@ python3 -m http.server -d docs     # then http://localhost:8000
 
 `tools/stamp-page.sh` writes a hash of the page's files, and one of the recordings, into the address `docs/index.html` loads `app/app.js` from, and the page asks for every file with them. GitHub Pages lets a browser keep a copy of each file for 10 minutes, so without the stamps a new `index.html` could run with the `app.js` from before, and its controls would not work.
 
-`tools/web-samples.sh` runs `musicbox --web-pack`, which plays 60 songs of each genre and 8 of each mix, at their own length, to see which recordings each uses. It writes them out as one stream for each instrument (a recording that two instruments share is stored once). A mix fetches its two genres' recordings and whatever more it was heard to play. Anything a song plays that was never heard plays on the synthesiser in the browser, as a part with no recording does on the desktop. It then compresses each stream to Opus, and copies the samples' sources and licences in with them. `web/lib.rs` builds src/music.rs and what it uses unchanged, and exports plain functions over the module's memory (no crates, no bindings generator); `docs/app/` is the page's JavaScript.
+`tools/web-samples.sh` runs `musicbox --web-pack`, which plays 60 songs of each genre and 8 of each mix, at their own length, to see which recordings each uses. It writes them out as one stereo stream for each instrument: its recordings made in mono first, both channels the same, then those made in stereo, each to where it falls silent (a recording that two instruments share is stored once). A mix fetches its two genres' recordings and whatever more it was heard to play. Anything a song plays that was never heard plays on the synthesiser in the browser, as a part with no recording does on the desktop. It then compresses each stream to Opus, and copies the samples' sources and licences in with them. `web/lib.rs` builds src/music.rs, the window (src/gui.rs) and what they use unchanged, and exports plain functions over the module's memory (no crates, no bindings generator); `docs/app/` is the page's JavaScript.
 
 ## The genres
 
@@ -287,16 +287,18 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 | `src/samples.rs` | the sampler: SoundFont and multisample loading (fleece's) |
 | `src/tap.rs` | what the player hands the displays: the last second of sound and what is playing |
 | `src/spectrum.rs` | the equalizer's FFT and bars |
+| `src/app.rs` | what the actions do, for the terminal, the window and the page alike, and what they show besides the music |
 | `src/term.rs` | the command line's display and keys |
 | `src/gui.rs`, `src/font.rs` | the window, and its 5x7 font (from FRAKTAL256) |
-| `src/sdl.rs` | the SDL2 calls: the sound device, the window and the clipboard |
+| `src/sdl.rs` | the SDL2 calls: the sound device, the window and the clipboard; in the browser, the page's canvas in the window's place |
 | `src/favorites.rs` | the favorites, and finding a song's id in what was pasted |
 | `src/mp3.rs` | MP3s, by LAME's library, loaded when wanted |
 | `src/net.rs` | the network instruments: the networks, and the oscillators and noise that play them |
 | `src/tunes.rs` | the tunes network: the GRU and how it writes a part |
 | `src/music/tuned.rs` | the optimiser's knobs, and each genre's settings |
 | `models/` | the networks (`index.tsv` lists them); `docs/app/models/` is the page's copy |
-| `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build, and the page, its worker and its audio worklet; `docs/app/mp3/`, its MP3 encoder |
+| `src/time.rs` | the clock the displays read: std's, or in the browser the page's |
+| `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build (the engine for the worker, the window for the page), and the page, its worker and its audio worklet; `docs/app/mp3/`, its MP3 encoder |
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
 | `tools/stamp-page.sh` | puts a hash of the page's files on the addresses it loads them from |
