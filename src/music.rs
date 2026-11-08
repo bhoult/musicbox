@@ -16021,7 +16021,7 @@ pub fn has_tuning(id: usize) -> bool {
 
 /// Whether a network writes tunes for the music `id`'s writer.
 pub fn has_net_tunes(id: usize) -> bool {
-    parts(id).0 == CELTIC && crate::tunes::celtic().is_some()
+    parts(id).0 == CELTIC && crate::tunes::has_celtic()
 }
 
 // ---------------------------------------------------------------- the engine

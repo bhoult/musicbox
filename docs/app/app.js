@@ -351,11 +351,13 @@ async function tables() {
   rec.meta = await b.arrayBuffer();
 }
 
-// group `g`'s stream, decoded to 16-bit stereo, the channels interleaved
-// (empty for a group whose recordings are all in groups before it)
+// group `g`'s stream, decoded to 16-bit as the engine keeps it: its mono
+// recordings one channel (both are the same), then its stereo ones both,
+// interleaved (empty for a group whose recordings are all in groups before it)
 async function decodeGroup(g) {
   const info = rec.index.groups[g];
-  const pcm = new Int16Array(2 * info.frames);
+  const mono = info.mono;
+  const pcm = new Int16Array(mono + 2 * (info.frames - mono));
   if (!info.frames) return pcm;
   const r = await fetch(`${SAMPLES}${info.file}${R}`);
   if (!r.ok) throw new Error(`${info.name}: ${r.status}`);
@@ -363,32 +365,42 @@ async function decodeGroup(g) {
   const [l, rt] = [d.getChannelData(0), d.getChannelData(d.numberOfChannels > 1 ? 1 : 0)];
   const n = Math.min(l.length, info.frames);
   const s16 = (x) => Math.max(-32768, Math.min(32767, Math.round(x * 32768)));
-  for (let k = 0; k < n; k++) {
-    pcm[2 * k] = s16(l[k]);
-    pcm[2 * k + 1] = s16(rt[k]);
+  for (let k = 0; k < Math.min(n, mono); k++) pcm[k] = s16(l[k]);
+  for (let k = mono; k < n; k++) {
+    pcm[2 * k - mono] = s16(l[k]);
+    pcm[2 * k - mono + 1] = s16(rt[k]);
   }
   return pcm;
 }
 
-// the groups `todo` (in order) decoded four at a time, handed to `to` in
-// order (a group's recordings may be in one before it)
+// the groups `todo` (in order) decoded four at a time, each handed to `to`
+// once those before it are (a group's recordings may be in one before it),
+// so that no more than a few are held here at once; room for them all made
+// first
 async function sendGroups(todo, to, progress) {
+  const kept = (g) => rec.index.groups[g].mono + 2 * (rec.index.groups[g].frames - rec.index.groups[g].mono);
+  to.postMessage({ type: 'reserve', n: todo.map(kept).reduce((a, b) => a + b, 0) });
   const got = new Map();
   const left = [...todo];
-  let done = 0;
+  let [next, done] = [0, 0];
+  const hand = () => {
+    while (next < todo.length && got.has(todo[next])) {
+      const g = todo[next++];
+      const pcm = got.get(g);
+      got.delete(g);
+      to.postMessage({ type: 'group', g, pcm }, [pcm.buffer]);
+    }
+  };
   await Promise.all(
     [0, 1, 2, 3].map(async () => {
       while (left.length) {
         const g = left.shift();
         got.set(g, await decodeGroup(g));
         progress?.(++done);
+        hand();
       }
     }),
   );
-  for (const g of todo) {
-    const pcm = got.get(g);
-    to.postMessage({ type: 'group', g, pcm }, [pcm.buffer]);
-  }
 }
 
 async function fetchRecordings(primary, drums) {
@@ -507,10 +519,14 @@ async function open() {
   Object.assign(cur, { primary, drums: null, opts: VOICES.indexOf('recorded') << 2 });
   u = withText(savedFavorites(), (p, n) => x.mb_ui_new(primary, -1, seed >>> 0, 0, cur.opts, 0, savedVolume(), lo, hi, p, n));
   resize();
-  // the network instruments there are to fetch (the window underlines NETWORK)
+  // the networks there are to fetch (the window underlines NETWORK where
+  // one plays): the instruments, and celtic's tunes
   fetch(`app/models/index.tsv${V}`)
     .then((r) => (r.ok ? r.text() : ''))
-    .then((t) => x.mb_ui_nets(t.split('\n').filter((l) => /^(multi|gm)\t/.test(l)).length), () => {});
+    .then((t) => {
+      const lines = t.split('\n');
+      x.mb_ui_nets(lines.filter((l) => /^(multi|gm)\t/.test(l)).length, lines.some((l) => /^tunes\tceltic\t/.test(l)) ? 1 : 0);
+    }, () => {});
   // the song the address names
   const asked = decodeURIComponent(location.hash.slice(1));
   if (asked) withText(asked, (p, n) => x.mb_ui_go(u, p, n));

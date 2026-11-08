@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The recorded instruments for the browser: musicbox --web-pack writes the
-# bank's tables and each group's recordings (48 kHz, stereo: its mono
-# recordings, then those recorded in stereo), and this compresses each group
-# to Opus.
+# bank's tables and each group's recordings (48 kHz: its mono recordings,
+# then those recorded in stereo, in stereo; mono when it has none in
+# stereo), and this compresses each group to Opus.
 #
 #   tools/web-samples.sh OUT [KBPS]
 #
@@ -47,8 +47,9 @@ cat > "$out/README.md" <<EOF
 
 The recorded instruments of musicbox's web page (github.com/bhoult/musicbox), made by
 \`tools/web-samples.sh\` from the recordings \`tools/get-samples.sh\` fetches: each group of
-recordings at 48 kHz in stereo (those recorded in mono first, both channels the same),
-compressed to Opus at $kbps kb/s (\`N.opus\`), the sampler's
+recordings at 48 kHz (those recorded in mono first, then those recorded in stereo, in
+stereo; a group with none in stereo, in mono), compressed to Opus at $kbps kb/s
+(\`N.opus\`), the sampler's
 tables (\`pack.bin\`), and which groups each genre and mix plays (\`pack.json\`).
 
 They come from:
@@ -71,5 +72,5 @@ EOF
 raw=$(du -sb "$out/raw" | cut -f1)
 rm -rf "$out/raw"
 packed=$(du -cb "$out"/*.opus | tail -1 | cut -f1)
-echo "$n groups: $((raw / 1000000)) MB of 16-bit stereo made $((packed / 1000000)) MB of Opus at $kbps kb/s;" \
+echo "$n groups: $((raw / 1000000)) MB of 16-bit made $((packed / 1000000)) MB of Opus at $kbps kb/s;" \
   "tables $(($(stat -c %s "$out/pack.bin") / 1000)) kB"

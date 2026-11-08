@@ -168,9 +168,16 @@ async function handle(m) {
       if (!ok) postMessage({ type: 'error', error: `tunes: ${text(x.mb_text(w))}` });
       break;
     }
+    // room for the groups about to come, made at once
+    case 'reserve':
+      x.mb_reserve(w, m.n);
+      break;
+    // a group's recordings, as the engine keeps them, written straight
+    // into the room it makes for them
     case 'group': {
-      const ok = put(m.pcm, (p, n) => x.mb_group(w, m.g, p, n));
-      if (!ok) postMessage({ type: 'error', error: `recordings: ${text(x.mb_text(w))}` });
+      const p = x.mb_group_room(w, m.g, m.pcm.length);
+      if (p) new Int16Array(x.memory.buffer, p, m.pcm.length).set(m.pcm);
+      if (!p || !x.mb_group_in(w, m.g)) postMessage({ type: 'error', error: `recordings: ${text(x.mb_text(w))}` });
       break;
     }
   }

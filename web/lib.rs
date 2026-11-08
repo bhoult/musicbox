@@ -6,7 +6,7 @@
 //!     cargo build --release --target wasm32-unknown-unknown --manifest-path web/Cargo.toml
 //!
 //! The recorded instruments come apart (tools/web-samples.sh): the tables
-//! (`mb_pack`), then each group of recordings a genre plays (`mb_group`),
+//! (`mb_pack`), then each group of recordings a genre plays (`mb_group_room`),
 //! decoded by the page; until a group is in, the synthesiser plays its parts.
 //!
 //! The page's window is the desktop's (src/gui.rs, drawn the same, pixel for
@@ -252,20 +252,51 @@ pub unsafe extern "C" fn mb_pack(w: *mut Web, p: *const u8, n: u32) -> u32 {
     }
 }
 
-/// Group `g`'s recordings (`n` 16-bit samples at `p`: its frames in stereo,
-/// the channels interleaved): its instruments playable from the next song
-/// made. 1, else 0 and why in `mb_text`.
+/// Room for `n` samples of recordings more (the groups about to come, as
+/// the bank keeps them), made at once.
 ///
 /// # Safety
-/// `w` is a handle from `mb_new`; `p` holds `n` samples, aligned.
+/// `w` is a handle from `mb_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mb_group(w: *mut Web, g: u32, p: *const i16, n: u32) -> u32 {
+pub unsafe extern "C" fn mb_reserve(_w: *mut Web, n: u32) {
+    // SAFETY: between calls: nothing holds the bank
+    if let Some(pt) = unsafe { samples::web() } {
+        pt.reserve(n as usize);
+    }
+}
+
+/// Room for group `g`'s recordings as the bank keeps them (`n` 16-bit
+/// samples: its mono recordings' frames one sample each, then its stereo
+/// ones' two, interleaved), for the page to fill before `mb_group_in`; null
+/// and why in `mb_text` when there is none to make.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_group_room(w: *mut Web, g: u32, n: u32) -> *mut i16 {
     let w = unsafe { web(w) };
-    // SAFETY: the caller's
-    let pcm = unsafe { std::slice::from_raw_parts(p, n as usize) };
     // SAFETY: between calls: nothing holds the bank
     let r = match unsafe { samples::web() } {
-        Some(pt) => pt.add(g as usize, pcm),
+        Some(pt) => pt.room(g as usize, n as usize).map(|s| s.as_mut_ptr()),
+        None => Err("no tables yet".into()),
+    };
+    r.unwrap_or_else(|e| {
+        w.text = e;
+        std::ptr::null_mut()
+    })
+}
+
+/// Group `g`'s recordings, in the room `mb_group_room` made: its instruments
+/// playable from the next song made. 1, else 0 and why in `mb_text`.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_group_in(w: *mut Web, g: u32) -> u32 {
+    let w = unsafe { web(w) };
+    // SAFETY: between calls: nothing holds the bank
+    let r = match unsafe { samples::web() } {
+        Some(pt) => pt.settle(g as usize),
         None => Err("no tables yet".into()),
     };
     match r {
@@ -720,10 +751,12 @@ pub extern "C" fn mb_ui_leave() {
     sdl::page::leave();
 }
 
-/// The network instruments the page has to fetch when they are chosen.
+/// The networks the page has to fetch when they are chosen: how many
+/// instruments, and whether celtic's tunes (1) or not (0).
 #[unsafe(no_mangle)]
-pub extern "C" fn mb_ui_nets(n: u32) {
+pub extern "C" fn mb_ui_nets(n: u32, celtic: u32) {
     net::listed(n as usize);
+    tunes::listed(celtic != 0);
 }
 
 /// The canvas's size: in the screen's pixels, and in the page's.

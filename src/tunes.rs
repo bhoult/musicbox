@@ -347,6 +347,19 @@ pub fn celtic() -> Option<&'static TuneNet> {
     get()?.celtic.as_ref()
 }
 
+/// Whether there is a celtic tunes network: loaded, or (in the browser's
+/// window, where none is) one the page lists, to fetch when it is chosen.
+pub fn has_celtic() -> bool {
+    celtic().is_some() || LISTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static LISTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_arch = "wasm32")]
+pub fn listed(on: bool) {
+    LISTED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

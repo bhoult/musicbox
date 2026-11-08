@@ -2163,9 +2163,10 @@ pub fn voice_data(dir: &Path, names: &[String], step: usize) -> Result<(), Strin
 
 // The browser cannot fetch a gigabyte before it plays: `--web-pack` writes
 // the bank's tables (pack.bin) and its recordings in groups (a multisampled
-// instrument's articulations, a preset, a kit), each group one stereo stream
-// at the engine's rate (raw/N.wav: its mono recordings first, both channels
-// the same, then its stereo ones), for tools/web-samples.sh to compress.
+// instrument's articulations, a preset, a kit), each group one stream at the
+// engine's rate (raw/N.wav: its mono recordings first, then its stereo ones,
+// in stereo, the mono ones' two channels the same; mono when it has no
+// stereo ones), for tools/web-samples.sh to compress.
 // The browser loads the tables, then each group before anything plays it:
 // until its stream is in, a group's instruments have no names (the genres'
 // hooks find none, and the synthesiser plays their parts).
@@ -2508,12 +2509,15 @@ impl Bank {
             }
             gr.mono = monos[g];
             gr.frames = monos[g] + (stereo.len() / 2) as u32;
-            let pcm: Vec<f32> = mono.iter().flat_map(|&s| [s, s]).chain(stereo).collect();
+            // (all mono: a mono stream, half the browser's to decode)
+            let c = if stereo.is_empty() { 1 } else { 2 };
+            let pcm: Vec<f32> = mono.iter().flat_map(|&s| [s; 2].into_iter().take(c)).chain(stereo).collect();
             let mut w = Vec::with_capacity(44 + 2 * pcm.len());
             w.extend_from_slice(b"RIFF");
             w.extend_from_slice(&(36 + 2 * pcm.len() as u32).to_le_bytes());
             w.extend_from_slice(b"WAVEfmt ");
-            for x in [16u32, 1 | 2 << 16, RATE as u32, 4 * RATE as u32, 4 | 16 << 16] {
+            let (c, block) = (c as u32, 2 * c as u32);
+            for x in [16u32, 1 | c << 16, RATE as u32, block * RATE as u32, block | 16 << 16] {
                 w.extend_from_slice(&x.to_le_bytes());
             }
             w.extend_from_slice(b"data");
@@ -2609,9 +2613,10 @@ impl Bank {
         let mut j = String::from("{\"groups\":[\n");
         for (g, gr) in groups.iter().enumerate() {
             j += &format!(
-                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"deps\":[{}]}}{}\n",
+                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"mono\":{},\"deps\":[{}]}}{}\n",
                 esc(&gr.name),
                 gr.frames,
+                gr.mono,
                 list(&deps[g]),
                 if g + 1 < groups.len() { "," } else { "" }
             );
@@ -2662,8 +2667,10 @@ pub struct Partial {
     /// begins on there, until then)
     lens: Vec<u32>,
     srcs: Vec<u16>,
-    /// where each group's stream begins in the bank's data, once it is in
+    /// where each group's stream begins in the bank's data, once it is in;
+    /// the group being filled in, and where
     bases: Vec<Option<usize>>,
+    filling: Option<(usize, usize)>,
 }
 
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
@@ -2768,7 +2775,7 @@ impl Partial {
             return Err("pack: a recording in no group".into());
         }
         let bases = vec![None; groups.len()];
-        Ok(Partial { bank: b, groups, lens, srcs, bases })
+        Ok(Partial { bank: b, groups, lens, srcs, bases, filling: None })
     }
 
     /// An instrument by its kind and name, as an index line gives it ("multi"
@@ -2782,6 +2789,54 @@ impl Partial {
         })
     }
 
+    /// The samples group `g`'s stream comes to as the bank keeps it: its
+    /// mono part one a frame, its stereo part two (interleaved).
+    pub fn kept(&self, g: usize) -> Option<usize> {
+        self.groups.get(g).map(|gr| gr.mono as usize + 2 * (gr.frames - gr.mono) as usize)
+    }
+
+    /// Room in the bank's data for `n` samples more (`kept` of the groups
+    /// about to come), made at once rather than a group at a time.
+    pub fn reserve(&mut self, n: usize) {
+        self.bank.data.reserve_exact(n);
+    }
+
+    /// Room for group `g`'s stream at the end of the bank's data, `n`
+    /// samples (`kept`), for the page to fill before `settle`: made in place,
+    /// so that a genre's hundreds of megabytes are never copied whole.
+    pub fn room(&mut self, g: usize, n: usize) -> Result<&mut [i16], String> {
+        let want = self.kept(g).ok_or_else(|| format!("no group {g}"))?;
+        let name = &self.groups[g].name;
+        if self.bases[g].is_some() {
+            return Err(format!("{name} is in already"));
+        }
+        if n != want {
+            return Err(format!("{name}: {n} samples, not {want}"));
+        }
+        let base = self.bank.data.len();
+        self.bank.data.reserve_exact(n);
+        self.bank.data.resize(base + n, 0);
+        self.filling = Some((g, base));
+        Ok(&mut self.bank.data[base..])
+    }
+
+    /// Group `g`'s stream, in the room `room` made for it: its instruments
+    /// playable, and named. Once (later calls do nothing).
+    pub fn settle(&mut self, g: usize) -> Result<(), String> {
+        if self.bases.get(g).ok_or_else(|| format!("no group {g}"))?.is_some() {
+            return Ok(());
+        }
+        let base = match self.filling.take() {
+            Some((f, b)) if f == g => b,
+            _ => return Err(format!("{}: no room made for it", self.groups[g].name)),
+        };
+        let r = self.place(g, base);
+        if r.is_err() {
+            self.bank.data.truncate(base);
+        }
+        r
+    }
+
     /// Group `g`'s stream (stereo, 16-bit, interleaved, `frames` long):
     /// its instruments playable, and named. Once (later calls do nothing).
     pub fn add(&mut self, g: usize, pcm: &[i16]) -> Result<(), String> {
@@ -2792,6 +2847,17 @@ impl Partial {
         if pcm.len() != 2 * gr.frames as usize {
             return Err(format!("{}: {} samples, not {} frames' two", gr.name, pcm.len(), gr.frames));
         }
+        // as the bank keeps it: the mono part a channel of it, the stereo part as it is
+        let mono = gr.mono as usize;
+        let kept: Vec<i16> = pcm[..2 * mono].iter().step_by(2).chain(&pcm[2 * mono..]).copied().collect();
+        self.room(g, kept.len())?.copy_from_slice(&kept);
+        self.settle(g)
+    }
+
+    /// Group `g`'s stream in, at `base` in the bank's data: each zone's
+    /// recording in it, or in one already in; its instruments named.
+    fn place(&mut self, g: usize, base: usize) -> Result<(), String> {
+        let gr = &self.groups[g];
         let owned: Vec<u16> = gr
             .insts
             .iter()
@@ -2801,10 +2867,6 @@ impl Partial {
                 !self.groups[..g].iter().any(|o| o.insts.contains(&id))
             })
             .collect();
-        // the stream as the bank keeps it: its mono part, a channel of it,
-        // then its stereo part as it is; each zone's recording in it, or in
-        // one already in
-        let base = self.bank.data.len();
         let mut at = Vec::new();
         for &id in &owned {
             let r = self.bank.insts[id as usize - 1].zones.clone();
@@ -2826,9 +2888,6 @@ impl Partial {
                 at.push((zi, start + off));
             }
         }
-        let mono = gr.mono as usize;
-        self.bank.data.extend(pcm[..2 * mono].iter().step_by(2));
-        self.bank.data.extend_from_slice(&pcm[2 * mono..]);
         self.bases[g] = Some(base);
         for (zi, off) in at {
             self.bank.zones[zi].off = off;
@@ -3093,6 +3152,7 @@ mod tests {
         ];
         let json = b.web_pack(&out, &used).expect("pack");
         let mut p = Partial::new(&std::fs::read(out.join("pack.bin")).expect("pack.bin")).expect("tables");
+        p.reserve((0..p.groups.len()).filter_map(|g| p.kept(g)).sum());
         assert!(json.contains("\"all\":[") && json.contains("\"none\":[]"), "{json}");
         // a mix lists only what neither of its genres has
         assert!(json.contains("\"mixes\":{\n\"none+none\":[0") && !json.contains("none+all"), "{json}");
@@ -3102,9 +3162,12 @@ mod tests {
         for g in 0..p.groups.len() {
             let (pcm, rate, chans) =
                 read_wav(&std::fs::read(out.join(format!("raw/{g}.wav"))).expect("raw")).expect("wav");
-            assert_eq!((rate, chans), (48000, 2));
-            assert_eq!(pcm.len() as u32, 2 * p.groups[g].frames);
-            p.add(g, &pcm).expect("add");
+            // (all mono: a mono stream)
+            let mono = p.groups[g].mono == p.groups[g].frames;
+            assert_eq!((rate, chans), (48000, if mono { 1 } else { 2 }));
+            assert_eq!(pcm.len() as u32, chans as u32 * p.groups[g].frames);
+            let both: Vec<i16> = if mono { pcm.iter().flat_map(|&s| [s, s]).collect() } else { pcm };
+            p.add(g, &both).expect("add");
         }
         let _ = std::fs::remove_dir_all(&d);
         let w = &p.bank;
