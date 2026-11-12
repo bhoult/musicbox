@@ -140,6 +140,7 @@ mod styles;
 #[path = "music/tuned.rs"]
 mod tuned;
 /// More variety for a genre's songs (`Opts::varied`).
+#[path = "music/varied.rs"]
 mod varied;
 #[path = "music/western.rs"]
 mod western;
