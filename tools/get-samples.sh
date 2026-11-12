@@ -8,8 +8,9 @@
 # It fetches:
 #   - MuseScore General 0.2, a General MIDI SoundFont (MuseScore_General.sf2 and its License,
 #     Readme and Sample_Sources.csv) from ftp.osuosl.org: MIT license (FluidR3 by Frank Wen and
-#     others; its notices must travel with it). Used for guitars, organs, basses, pianos and keys,
-#     the synthesisers' basses, leads and pads, and the drum kits and machines.
+#     others; its notices must travel with it). Used for the guitars, basses and kit pieces the
+#     recordings below do not replace, organs, pianos and keys, the synthesisers' basses, leads
+#     and pads, and the drum machines.
 #   - Folders of Versilian Studios' VS Chamber Orchestra 2: Community Edition
 #     (github.com/sgossner/VSCO-2-CE) and Versilian Community Sample Library
 #     (github.com/sgossner/VCSL), both CC0 1.0 (public domain), as sparse, shallow, blobless git
@@ -18,18 +19,22 @@
 #     harmonica, psaltery, kalimba, vibraphone, marimba, glockenspiel, balafon, guiro, shakers,
 #     claps, cajon, congas, bongos, frame drum, tambourine, finger cymbals, snares, bass drum,
 #     cymbals, hi-hat, gong, triangle, anvil, slapstick, vibraslap, bell tree and agogo bells.
-#   - Karoryfer Samples' Big Rusty Drums and Black And Blue Basses (github.com/sfzinstruments), CC0
-#     1.0 (public domain), as their release zips pinned by size and sha256, of which the folders
-#     taken are unpacked: a drum kit (each hit's microphones mixed to stereo) and two electric
-#     basses, fingered and picked.
+#   - Karoryfer Samples' Big Rusty Drums, Black And Blue Basses, Black And Green Guitars, Meatbass
+#     and Shinyguitar (github.com/sfzinstruments), CC0 1.0 (public domain), as their release zips
+#     pinned by size and sha256, of which the folders taken are unpacked: a drum kit (each hit's
+#     microphones mixed to stereo), two electric basses, fingered and picked, a clean electric
+#     guitar and the same one damped, a double bass plucked, and an acoustic guitar.
+#   - FreePats' Spanish Classical Guitar (github.com/freepats), CC0 1.0 (public domain), as a
+#     git clone pinned to a commit like Versilian's (its releases are .7z): a nylon-strung
+#     guitar.
 # and writes into DEST: the SoundFont files; multi/<instrument>/<articulation>/*.wav (48 kHz,
 # 16-bit, trimmed); manifest.tsv (what the sampler reads); sources.tsv (each file's origin);
 # SOURCES.md; and licenses/ (each source's license and readme, verbatim).
 #
-# Disk space: about 1 GB in DEST (216 MB SoundFont, about 900 MB multi/), plus about 3 GB of git
-# clones and 1.6 GB of zips (and what is unpacked of them) in the cache (MUSICBOX_SAMPLES_SRC,
-# default ~/.cache/musicbox/samples-src), which is only needed to rebuild multi/ and can be
-# deleted afterwards.
+# Disk space: about 1.3 GB in DEST (216 MB SoundFont, about 1.1 GB multi/), plus about 3 GB of
+# git clones and 2.7 GB of zips (and what is unpacked of them) in the cache
+# (MUSICBOX_SAMPLES_SRC, default ~/.cache/musicbox/samples-src), which is only needed to rebuild
+# multi/ and can be deleted afterwards.
 #
 # Needs bash, git (2.27 or newer), curl, ffmpeg with ffprobe, and python3 (3.8 or newer,
 # standard library only). Idempotent: what is present and valid is skipped. Set
