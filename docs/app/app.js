@@ -479,8 +479,10 @@ async function sendGroups(todo, to, progress) {
   const idx = rec.index.groups;
   let done = 0;
   if (LITE) {
+    // (the engine that plays keeps room for all it may come to hold; the
+    // one that exports a song, for that song's alone)
     const all = todo.reduce((a, g) => a + idx[g].lite, 0);
-    to.postMessage({ type: 'reserve', n: to.reserved ? all : Math.max(all, LITE_MOST) });
+    to.postMessage({ type: 'reserve', n: to.reserved || to !== worker ? all : Math.max(all, LITE_MOST) });
     to.reserved = true;
     const parts = todo.flatMap((g) => {
       let at = 0;
@@ -601,7 +603,10 @@ async function loadNets() {
 async function exportSong() {
   const n = st.now;
   if (!n?.sid) return say('the song has not begun');
-  exporter ??= makeExporter();
+  // (a phone's memory: an engine of its own for each export, let go when
+  // it has saved, holding the recordings the page holds now and no others)
+  if (LITE) exporter?.terminate();
+  if (LITE || !exporter) exporter = makeExporter();
   say(`exporting ${n.sid}.mp3…`);
   // the recordings the song plays, decoded again for the exporter's engine
   if (voicesOf(n.opts) !== 'synth' && rec.index) {
@@ -639,6 +644,10 @@ function makeExporter() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     say(e.data.why ? `saved ${e.data.name} (${e.data.why})` : `saved ${e.data.name}`, e.data.why ? 'error' : 'note');
+    if (LITE && exporter === ex) {
+      ex.terminate();
+      exporter = null;
+    }
   };
   ex.postMessage({ type: 'init', module, genre: 0, seed: 1 });
   return ex;

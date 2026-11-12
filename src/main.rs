@@ -90,7 +90,7 @@ fn help(code: i32) -> ! {
     eprintln!("  keys: left/right genre, up/down drums, space next song, B back, , and . 10 s back and on,");
     eprintln!("        S stop/start, R replay, [ ] length, T type a length, D or V type (or paste) a song's id,");
     eprintln!("        C copy its id, K keep it among the favorites, - + volume, the effects' keys,");
-    eprintln!("        X export the song, O tuned, M network tunes, I instruments, E equalizer, G window, Q quit");
+    eprintln!("        X export the song, O tuned, M network tunes, I instruments, W variety, E equalizer, G window, Q quit");
     std::process::exit(code);
 }
 
@@ -249,12 +249,15 @@ fn main() {
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, Start { length, volume, effects, opts, from, touch });
+    // (the listener's own way, for the runs of songs after an id's: more unless less is asked for)
+    let vary = variety.unwrap_or(true);
+    play(id, seed, gui, eq, Start { length, volume, effects, opts, from, touch, vary });
 }
 
 /// How playing starts: the length asked of each piece, the volume, the
-/// effects, how the music is made, a song to begin on, and whether the
-/// window is laid out for a finger.
+/// effects, how the music is made, a song to begin on, whether the
+/// window is laid out for a finger, and whether the listener has songs
+/// written with more variety (a song begun on by its id is as its id says).
 struct Start {
     length: f64,
     volume: u32,
@@ -262,6 +265,7 @@ struct Start {
     opts: music::Opts,
     from: Option<music::SongId>,
     touch: bool,
+    vary: bool,
 }
 
 /// Where X saves songs: ~/Music/musicbox.
@@ -311,7 +315,7 @@ impl Deck for music::Player {
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
 fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
-    let Start { length, volume, effects, opts, from, touch } = start;
+    let Start { length, volume, effects, opts, from, touch, vary } = start;
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -333,7 +337,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
     let (primary, drums) = music::parts(id);
     let favorites = favorites::Favorites::load();
     let mut st =
-        State { primary, drums, seed, sampled, opts, eq, length, volume, effects, favorites, msg: None, note: None };
+        State { primary, drums, seed, sampled, opts, vary, eq, length, volume, effects, favorites, msg: None, note: None };
     let mut term = term::Term::start();
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {

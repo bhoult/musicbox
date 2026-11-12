@@ -84,8 +84,12 @@ pub struct State {
     pub seed: u64,
     /// the recorded instruments loaded (else the synthesiser plays everything)
     pub sampled: bool,
-    /// how the music is to be made
+    /// how the music is to be made, and whether the listener has its songs
+    /// written with more variety (`opts.varied` is the song playing's: a
+    /// song gone to by an id from before plays as it was, and the next run
+    /// of songs is the listener's way again)
     pub opts: music::Opts,
+    pub vary: bool,
     /// the terminal's equalizer rows
     pub eq: bool,
     /// the length asked of each piece (seconds; 0: as long as it was written)
@@ -243,15 +247,31 @@ pub fn go_to(deck: &impl Deck, st: &mut State, id: music::SongId) {
     deck.set_playing(true);
 }
 
+/// A new run of songs (a skip, another genre or drummer) is written the
+/// listener's way: with more variety or without, whatever the id last gone
+/// to asked for its own song. After the skip or the genre is asked, so
+/// that the run is begun before it is told how: the song playing is never
+/// written again for it.
+fn own_way(deck: &impl Deck, st: &mut State) {
+    if st.opts.varied != st.vary {
+        st.opts.varied = st.vary;
+        deck.set_opts(st.opts);
+    }
+}
+
 /// Does what `a` asks of the music and of `st` (`now`: what is playing);
 /// what the window or the terminal does itself (the clipboard, the window,
 /// its panels, the terminal's equalizer, quitting) is handed back.
 pub fn act(a: Action, now: &Now, st: &mut State, deck: &impl Deck) -> Option<Action> {
     match a {
-        // on through the songs gone back from, else a new one
+        // on through the songs gone back from, else a new one (a new run,
+        // written the listener's way)
         Action::Skip => match now.fwd {
             Some(id) => go_to(deck, st, id),
-            None => deck.skip(),
+            None => {
+                deck.skip();
+                own_way(deck, st);
+            }
         },
         Action::Back => {
             match now.back {
@@ -315,8 +335,14 @@ pub fn act(a: Action, now: &Now, st: &mut State, deck: &impl Deck) -> Option<Act
                 Action::Tuned => st.opts.tuned = !st.opts.tuned,
                 Action::NetTunes => st.opts.net_tunes = !st.opts.net_tunes,
                 Action::Voices => st.opts.voices = st.opts.voices.next(),
-                Action::Varied => st.opts.varied = !st.opts.varied,
-                Action::SetOpts(o) => st.opts = o,
+                Action::Varied => (st.opts.varied, st.vary) = (!st.opts.varied, !st.opts.varied),
+                Action::SetOpts(o) => {
+                    // (the variety chosen: the listener's from now on)
+                    if o.varied != st.opts.varied {
+                        st.vary = o.varied;
+                    }
+                    st.opts = o;
+                }
                 _ => {}
             }
             // (the song made again from its start, the new way: a stopped
@@ -327,9 +353,106 @@ pub fn act(a: Action, now: &Now, st: &mut State, deck: &impl Deck) -> Option<Act
         Action::Genre(_) | Action::Drums(_) | Action::SetGenre(_) | Action::SetDrums(_) => {
             if st.apply(a) {
                 deck.set_genre(st.id());
+                own_way(deck, st);
             }
         }
         a => return Some(a),
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A deck that writes down what it is asked.
+    #[derive(Default)]
+    struct Asked(RefCell<Vec<String>>);
+
+    impl Asked {
+        fn say(&self, s: String) {
+            self.0.borrow_mut().push(s);
+        }
+        fn taken(&self) -> Vec<String> {
+            std::mem::take(&mut *self.0.borrow_mut())
+        }
+    }
+
+    impl Deck for Asked {
+        fn skip(&self) {
+            self.say("skip".into());
+        }
+        fn replay(&self) {}
+        fn playing(&self) -> bool {
+            true
+        }
+        fn set_playing(&self, _: bool) {}
+        fn seek(&self, _: f64) {}
+        fn go(&self, id: music::SongId) {
+            self.say(format!("go {id}"));
+        }
+        fn set_genre(&self, id: usize) {
+            self.say(format!("genre {}", music::name(id).to_lowercase()));
+        }
+        fn set_length(&self, _: f64) {}
+        fn set_volume(&self, _: u32) {}
+        fn set_effects(&self, _: music::Effects) {}
+        fn set_opts(&self, o: music::Opts) {
+            self.say(format!("opts{}", if o.varied { " v" } else { "" }));
+        }
+        fn export(&self) {}
+    }
+
+    fn state() -> State {
+        let opts = music::Opts { varied: true, ..music::Opts::default() };
+        State {
+            primary: 0,
+            drums: None,
+            seed: 1,
+            sampled: false,
+            opts,
+            vary: true,
+            eq: false,
+            length: 0.0,
+            volume: 100,
+            effects: music::Effects::default(),
+            favorites: favorites::Favorites::load(),
+            msg: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn a_song_from_before_leaves_the_next_run_the_listeners_way() {
+        let (deck, now, mut st) = (Asked::default(), Now::default(), state());
+        // an id from before the variety: its song as it was
+        let old = music::SongId::parse("rock.41.0.1").expect("an id");
+        act(Action::Go(old), &now, &mut st, &deck);
+        assert!(!st.opts.varied && st.vary);
+        assert_eq!(deck.taken(), ["go rock.41.0.1"]);
+        // the next song is a new run: more variety again, told after the skip
+        act(Action::Skip, &now, &mut st, &deck);
+        assert!(st.opts.varied);
+        assert_eq!(deck.taken(), ["skip", "opts v"]);
+        // and no more is said once it is the listener's way
+        act(Action::Skip, &now, &mut st, &deck);
+        assert_eq!(deck.taken(), ["skip"]);
+        // another genre after an old id: the same
+        act(Action::Go(old), &now, &mut st, &deck);
+        deck.taken();
+        act(Action::SetGenre(6), &now, &mut st, &deck);
+        assert_eq!(deck.taken(), ["genre ska", "opts v"]);
+        // less chosen is the listener's way from then on
+        act(Action::Varied, &now, &mut st, &deck);
+        assert!(!st.opts.varied && !st.vary);
+        deck.taken();
+        act(Action::Skip, &now, &mut st, &deck);
+        assert_eq!(deck.taken(), ["skip"]);
+        // (another setting chosen while an old song plays does not make less the listener's)
+        let mut st = state();
+        act(Action::Go(old), &now, &mut st, &deck);
+        act(Action::SetOpts(music::Opts { tuned: true, ..st.opts }), &now, &mut st, &deck);
+        assert!(st.vary && !st.opts.varied && st.opts.tuned);
+    }
 }

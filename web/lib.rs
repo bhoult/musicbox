@@ -705,6 +705,8 @@ pub unsafe extern "C" fn mb_ui_new(
         seed: seed(seed_lo, seed_hi),
         sampled: true,
         opts: music::Opts::from_code(opts),
+        // (the page's own way: an address's id from before changes its song's alone)
+        vary: music::Opts::from_code(opts).varied,
         eq: false,
         length,
         volume: volume.min(100),
