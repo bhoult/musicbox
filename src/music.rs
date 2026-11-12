@@ -139,6 +139,8 @@ mod styled;
 mod styles;
 #[path = "music/tuned.rs"]
 mod tuned;
+/// More variety for a genre's songs (`Opts::varied`).
+mod varied;
 #[path = "music/western.rs"]
 mod western;
 use celtic::*;
@@ -146,6 +148,7 @@ use indonesian::*;
 use starconflict::*;
 use styled::*;
 use styles::*;
+use varied::*;
 use western::*;
 
 /// Whether `genre`'s pieces end on a final hit (its last bar its own in a mix,
@@ -3545,9 +3548,14 @@ impl Song {
     /// A progression from the genre's pool: eight bars, or sixteen with each
     /// chord held two (ambient, sometimes).
     fn draw_prog(&mut self) -> Vec<Harm> {
-        let pl = if is_styled(self.genre) { self.sy_pool() } else { pool(self.genre, self.mode) };
+        let pl = if is_styled(self.genre) { self.sy_pool() } else { self.pool_now() };
         let r = &mut self.rng;
-        let v = halves(r.pick(pl));
+        let mut row = r.pick(&pl);
+        // (written with more variety: the rows a dozen styles share, half as often)
+        if self.opts.varied && pl.len() > 2 && COMMON_ROWS.contains(&row) && r.chance(0.5) {
+            row = r.pick(&pl);
+        }
+        let v = halves(row);
         if self.genre == AMBIENT && r.chance(0.35) {
             v.chunks(2).flat_map(|c| [c[0], c[1], c[0], c[1]]).collect()
         } else {
@@ -3666,6 +3674,12 @@ impl Song {
                 _ => &[L_HAT],
             };
             self.mute = if self.rng.chance(0.5) { self.rng.pick(opt) } else { 0 };
+        }
+        if self.opts.varied && is_styled(self.genre) && sec.kind == MAIN && matches!(self.sec_bar, 0 | 4) {
+            // (written with more variety: a part's halves each with what the
+            // section drew to sit out; an eight-bar part has no phrase's
+            // start past its first for the rule above)
+            self.mute = self.sy.vary.out[(self.sec_bar / 4) as usize];
         }
         let m = sec.mask & !self.mute;
         for w in self.walk.iter_mut() {
@@ -3912,6 +3926,9 @@ impl Song {
             _ => self.piece_polka(s),
         }
         self.fuse(s);
+        if self.opts.varied {
+            self.vary_guest();
+        }
         if self.opts.tuned
             && let Some(t) = tuning(self.genre)
         {
@@ -4038,6 +4055,9 @@ impl Song {
             WESTERN => self.western_section(),
             g if is_styled(g) => self.styled_section(s),
             _ => self.polka_section(),
+        }
+        if self.opts.varied {
+            self.vary_guest_section();
         }
         self.dress(s, dress);
     }
@@ -17438,9 +17458,14 @@ const CENSUS_MIX_SONGS: usize = 8;
 fn census_of(id: usize, seed: u64, songs: usize) -> Vec<u16> {
     let mut buf = vec![0.0f32; 2 * CHUNK];
     samples::census(true);
-    let mut e = Engine::with(id, seed, Opts::default());
-    while e.song.log.len() <= songs {
-        e.render(&mut buf);
+    // (a third of them as songs first were, the rest written with more
+    // variety, as the page plays them: `Opts::varied`)
+    let plain = songs.div_ceil(3);
+    for (n, varied) in [(plain, false), (songs - plain, true)] {
+        let mut e = Engine::with(id, seed, Opts { varied, ..Opts::default() });
+        while n > 0 && e.song.log.len() <= n {
+            e.render(&mut buf);
+        }
     }
     samples::census(false)
 }
