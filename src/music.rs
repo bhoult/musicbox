@@ -10648,7 +10648,17 @@ fn ska_rec_trim(style: u8, ch: usize) -> f32 {
 fn ska_rec_more(style: u8, ch: usize, p: &Patch) -> f32 {
     let is = |key: &str| rec_is(p.samp, key);
     let lp = p.filter;
+    // (a recording standing in for a SoundFont preset, `samples::GM_RECORDED`'s:
+    // the skank's guitars, 2026-11-12, over 12 seeds' first 100 s, the
+    // channel alone. `loudness` passes over a note's first 30 ms, where the
+    // SoundFont's muted guitar had most of its sound: it was levelled 9.8 dB
+    // up, the chop's balance was set there, and a recording that speaks
+    // after 20 ms is levelled as it sounds)
+    let stands = |key: &str| is(key) && samples::stands_in(key);
     let db = match (ch, style) {
+        (CH_KEYS, _) if stands("Palm Muted Guitar") => 8.8,
+        (CH_KEYS, SKS_FIRST | SKS_TWO) if stands("Funk Guitar") => 4.0,
+        (CH_DRONE, SKS_THIRD) if stands("Distortion Guitar") || stands("Overdrive Guitar") => -1.8,
         (CH_PAD, SKS_TWO) if is("Accordion") => 2.2,
         (CH_PAD, SKS_THIRD) if is("tenor_sax:auto") => 6.5,
         (CH_LEAD, SKS_TWO) if is("harmonica:sus") => 3.8,
@@ -12657,8 +12667,11 @@ fn bass_upright_synth(r: &mut Rng) -> Patch {
     }
 }
 
+/// An upright bass, plucked: a jazz player's double bass where its
+/// recordings are in, else the orchestra's contrabass, pizzicato.
 fn bass_upright(r: &mut Rng) -> Patch {
-    rec(bass_upright_synth(r), multi_or("contrabass", "pizz", "Acoustic Bass"), 40.0)
+    let id = samples::multi("bass_upright", "pluck").or_else(|| multi_or("contrabass", "pizz", "Acoustic Bass"));
+    rec(bass_upright_synth(r), id, 40.0)
 }
 
 /// A soft synthesiser bass; recorded, Synth Bass 2 (a synthesiser's bass,

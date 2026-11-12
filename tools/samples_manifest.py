@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds musicbox's multi-sample directory from the CC0 Versilian and Karoryfer libraries.
+"""Builds musicbox's multi-sample directory from the CC0 Versilian, Karoryfer and FreePats libraries.
 
 Called by tools/get-samples.sh; Python standard library only, plus ffmpeg/ffprobe.
 
@@ -47,6 +47,13 @@ from concurrent.futures import ThreadPoolExecutor
 REPOS = {
     "VSCO-2-CE": ("https://github.com/sgossner/VSCO-2-CE", "440300901dfe9275fd84e0b7763af1f8443ae62e"),
     "VCSL": ("https://github.com/sgossner/VCSL", "c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e"),
+    # FreePats' electric guitar FSBS, through an amplifier (2026-11-12): its releases are .7z, so
+    # the repository itself (the same files, as FLAC), at the commit of its 2022-09-11 release
+    "FSBS-dist1": ("https://github.com/freepats/electric-guitar-FSBS-dist1",
+                   "bbae17f0ad16f5edd7ec22178d181f3e3f6696fa"),
+    # FreePats' Spanish classical guitar (its v1.0.0, 2019-06-18)
+    "Spanish-Classical-Guitar": ("https://github.com/freepats/spanish-classical-guitar",
+                                 "6f4eb1b092acc88f5448cea1a0001bd07b971af8"),
 }
 
 RATE = 48000
@@ -516,18 +523,151 @@ ARCHIVES = {
         1008690586, "cf77fc782abf996826fe75cfd948d356968de7c8b967c471c6a433835d2b4f55",
         ["Samples/darkblack/reg", "Samples/babyblue/reg"],
         ["license"]),
+    # -- the guitars and the upright bass (2026-11-12): three more of Karoryfer's (a zip that
+    # keeps everything in a folder of its own names it in the folders taken and the licence files)
+    "Black-And-Green-Guitars": (
+        "https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/releases/download/v1.000/"
+        "Karoryfer_Black_And_Green_Guitars_1000.zip",
+        481838512, "ba95221d32fb6386c5d0a0799b93904fd55520aca017c5f121da290075c140c0",
+        ["Samples/green/ord", "Samples/green/stac"],
+        ["LICENSE", "readme.txt"]),
+    "Meatbass": (
+        "https://github.com/sfzinstruments/karoryfer.meatbass/releases/download/v1.001/Karoryfer.Meatbass.v1.001.zip",
+        255425351, "bc053061d4f39fb76ba56bc1f323efa228d1f63757c331738812479bcf04fe96",
+        ["Meatbass/Samples/pizz"],
+        ["Meatbass/LICENSE", "Meatbass/readme.txt"]),
+    "Shinyguitar": (
+        "https://github.com/sfzinstruments/karoryfer.shinyguitar/releases/download/v1.002/"
+        "Karoryfer.Shinyguitar.v1.002.zip",
+        368411844, "23cf4030cbf9ce9e2c84d7cbb1c022fbca124bfff0ad118a14eda7cf6c921d7b",
+        ["Shinyguitar/Samples/acoustic"],
+        ["Shinyguitar/LICENSE", "Shinyguitar/readme.txt"]),
 }
+# Karoryfer's plucked instruments, their notes named in lower case with flats, between underscores
+# or at the name's start (darkblack_e2_mf_rr1.wav, eb1_vl2_rr3.wav): (instrument, articulation,
+# archive, folder, layers, semitones added to the named note, the notes taken: None for all, or
+# (a root, a step) for every step-th semitone from that root). Plucked: no loop, a note rings and
+# dies as recorded.
+#
 # The basses: the fingered hollowbody (darkblack: every note B0-E4, mp and f of its four dynamics,
-# two of its four round robins) and the picked solidbody (babyblue: f and ff, two each), plucked
-# (no loop: a note rings and dies as recorded). Their files name each note an octave above its
-# sound, in lower case with flats (darkblack_e2_mf_rr1.wav sounds E1, 41.2 Hz).
-BASS_NOTE_RE = re.compile(r"_([a-g])(b?)(\d)_")
-BASSES = [
+# two of its four round robins) and the picked solidbody (babyblue: f and ff, two each). Their
+# files name each note an octave above its sound (darkblack_e2_mf_rr1.wav sounds E1, 41.2 Hz).
+#
+# The clean electric guitar: the green hollowbody (a Gretsch Anniversary), named an octave above
+# its sound as the basses are; every other semitone of its E2-D6 (a tone apart: a note at most a
+# semitone from its recording), mf and f of its three dynamics, two takes each (p left out: its
+# high notes are 20-38 dB under f's, their peaks at -40 to -54 dBFS, past what a trim may raise).
+# Its staccato notes, damped as they are played, stand in for a guitar muted at the bridge: one
+# dynamic, all four takes (a chugged part repeats a note), a tone apart.
+#
+# The upright bass (Meatbass: a 1958 double bass in fifths, pizzicato): its 14 notes A0-C4, a
+# minor third apart and named as they sound, the two softer of its four dynamics, two takes each.
+# Its harder ones (vl3 and vl4, the string snapping) left out: with all four, as its own program
+# maps them, the taggers of tools/validate gave the styles it plays in 1.2 to 2.7 times the
+# Chiptune score they had with the orchestra's contrabass; with the softer two, 0.9 to 2.
+#
+# The acoustic guitar (Shinyguitar's microphone: an archtop, picked): its 17 notes Db2-C6, a
+# minor third apart and named as they sound; three of its four dynamics (vl2 and vl3 two takes,
+# vl4 one; vl1, softer than a strummed part plays, left out).
+LOWER_NOTE_RE = re.compile(r"(?:^|_)([a-g])(b?)(\d)_")
+PLUCKED = [
     ("bass_finger", "pluck", "Black-And-Blue-Basses", "Samples/darkblack/reg",
-     [("mp", r"_mp_rr[12]\.wav$"), ("f", r"_f_rr[12]\.wav$")], -12),
+     [("mp", r"_mp_rr[12]\.wav$"), ("f", r"_f_rr[12]\.wav$")], -12, None),
     ("bass_pick", "pluck", "Black-And-Blue-Basses", "Samples/babyblue/reg",
-     [("f", r"_f_rr[12]\.wav$"), ("ff", r"_ff_rr[12]\.wav$")], -12),
+     [("f", r"_f_rr[12]\.wav$"), ("ff", r"_ff_rr[12]\.wav$")], -12, None),
+    ("guitar_clean", "pluck", "Black-And-Green-Guitars", "Samples/green/ord",
+     [("mf", r"_mf_rr[12]\.wav$"), ("f", r"_f_rr[12]\.wav$")], -12, (40, 2)),
+    ("guitar_mute", "pluck", "Black-And-Green-Guitars", "Samples/green/stac",
+     [("mf", r"_rr[1-4]\.wav$")], -12, (40, 2)),
+    ("bass_upright", "pluck", "Meatbass", "Meatbass/Samples/pizz",
+     [("vl1", r"_vl1_rr[12]\.wav$"), ("vl2", r"_vl2_rr[12]\.wav$")], 0, None),
+    ("guitar_steel", "pluck", "Shinyguitar", "Shinyguitar/Samples/acoustic",
+     [("vl2", r"_vl2_rr[12]_1\.wav$"), ("vl3", r"_vl3_rr[12]_1\.wav$"), ("vl4", r"_vl4_rr1_1\.wav$")], 0, None),
 ]
+# FreePats' electric guitar FSBS dist1 (a Fender's bridge pickups, recorded direct, then through
+# an amplifier and effects): 19 notes C2-C#6, two to five semitones apart, named as they sound; a
+# soft and a hard dynamic for 13 of them and one for six of the top eight (lent to both), two of
+# its four takes; its stereo (an effect's, 10-28 dB under its middle) folded to one channel. It
+# holds a note for seconds at one level (10-30 s recorded); taken as plucked, 4.5 s of each. Its
+# brighter twin, dist2, left out: as the distorted guitar it tripled the Chiptune score the
+# taggers of tools/validate gave the rock styles, where this one, for the distorted and the
+# overdriven guitar alike, doubled it and cut their Video game music score by a third.
+FSBS_ONE = r"^(G4|B4|F5|G#5|A#5|C#6)_"
+FSBS_LAYERS = [("soft", r"_soft_|" + FSBS_ONE), ("hard", r"_s\d_\d\d\.")]
+PITCHED += [
+    ("guitar_dist", "pluck", "FSBS-dist1", "samples/bridge", FSBS_LAYERS, r"_0[12]\.flac$"),
+]
+# FreePats' Spanish classical guitar (a nylon-strung guitar, one microphone, 2008; filtered for
+# its noise by its maker): one dynamic, one take, 39 notes E2-C6 named as they sound, a semitone
+# apart but for six. Its nine files under E2, below a guitar's range (stretched ones), left out.
+PITCHED += [
+    ("guitar_nylon", "pluck", "Spanish-Classical-Guitar", "samples", [("mf", r"")],
+     r"^(?!(?:G|G#|A|A#|B)1\.|(?:C|C#|D|D#)2\.)"),
+]
+ROOT_FIX_FOLDER.update({("FSBS-dist1", "samples/bridge"): 0, ("Spanish-Classical-Guitar", "samples"): 0})
+# The sets whose recordings' two channels are taken as one.
+MONO = {("guitar_dist", "pluck")}
+# Tuning by note: (source, folder) -> {the note as named: cents its files sound above it}, each
+# file lowered by that much when converted, as TUNE_FILE's are. A fretted string sounds sharp
+# when it is plucked hard and low on the neck, and these instruments were not tuned to the cent:
+# the green guitar's low strings 10-28 cents sharp and its top 10 flat, the upright bass's low
+# C 40-50 flat. Measured for every file taken (the autocorrelation's peak within a semitone of the
+# note's period, 0.12-0.7 s after the onset, with numpy outside this repository, 2026-11-12):
+# each note's median over its files, or each of its dynamics' where one lies more than 3 cents
+# from it; a file is then within 6 cents of its note.
+TUNE_NOTE = {
+    # (the electric basses, in the bank since 2026-11-06 as they were recorded: half their files
+    # more than 5 cents off, the picked one's low B to E 8-23 sharp and both 15-22 flat at the
+    # top; a file is now within 3.5 cents of its note)
+    ("Black-And-Blue-Basses", "Samples/babyblue/reg"): {
+        35: 8, 36: 19, 37: {"f": 17, "ff": 23}, 38: 12, 39: 13, 40: 8, 41: 10, 42: 10, 43: 10,
+        44: 5, 45: 3, 46: 2, 47: -1, 48: -3, 49: -1, 50: 0, 51: -3, 52: -4, 53: 2, 54: 3, 55: -1,
+        56: -3, 57: -5, 58: -5, 59: -10, 60: -4, 61: -7, 62: -10, 63: -12, 64: -15, 65: -14,
+        66: -19, 67: -4, 68: -4, 69: -7, 70: -8, 71: -11, 72: -14, 73: -15, 74: -18, 75: -17,
+    },
+    ("Black-And-Blue-Basses", "Samples/darkblack/reg"): {
+        35: 1, 36: {"f": 15, "mp": 2}, 37: {"f": 5, "mp": 0}, 38: 2, 39: {"f": 9, "mp": -2},
+        40: {"f": 7, "mp": 0}, 41: {"f": 11, "mp": 0}, 42: {"f": 10, "mp": 0},
+        43: {"f": 10, "mp": -1}, 44: {"f": 4, "mp": -3}, 45: {"f": 4, "mp": -5}, 46: 4,
+        47: {"f": 11, "mp": 1}, 48: 1, 49: {"f": 4, "mp": -2}, 50: {"f": 4, "mp": -3}, 51: 1, 52: 1,
+        53: -3, 54: -4, 55: -7, 56: 0, 57: -1, 58: {"f": 3, "mp": -2}, 59: -2, 60: -3, 61: -4,
+        62: -6, 63: -6, 64: -7, 65: -7, 66: -9, 67: -9, 68: -10, 69: -10, 70: -14, 71: -15, 72: -16,
+        73: -17, 74: -20, 75: -22, 76: -20,
+    },
+    ("Black-And-Green-Guitars", "Samples/green/ord"): {
+        52: 10, 54: 26, 56: 14, 58: 12, 60: 10, 62: 5, 64: 11, 66: 8, 68: 14, 70: 12, 72: 9, 74: 8,
+        76: 5, 78: 5, 80: 3, 82: 3, 84: -1, 86: -2, 88: -6, 90: -9, 92: -9, 94: -9, 96: -10,
+        98: -13,
+    },
+    # (damped notes: over 0.03-0.25 s after the onset)
+    ("Black-And-Green-Guitars", "Samples/green/stac"): {
+        52: 23, 54: 21, 56: 28, 58: 17, 60: 14, 62: 9, 64: 13, 66: 7, 68: 18, 70: 15, 72: 7, 74: 6,
+        76: 6, 78: 3, 80: 1, 82: 1, 84: 1, 86: -2, 88: -6, 90: -9, 92: -7, 94: -9, 96: -13, 98: -9,
+    },
+    ("FSBS-dist1", "samples/bridge"): {
+        36: {"hard": -6, "soft": 3}, 40: {"hard": 3, "soft": -9}, 41: -2,
+        45: {"hard": 2, "soft": -17}, 48: 0, 50: {"hard": 1, "soft": -4}, 52: 3, 55: -1, 59: 3,
+        61: 1, 64: -1, 67: 1, 71: 1, 72: 0, 74: 4, 77: 3, 80: 1, 82: 2, 85: -3,
+    },
+    # (a string plucked harder sounds sharper: by dynamic)
+    ("Meatbass", "Meatbass/Samples/pizz"): {
+        21: {"vl1": -10, "vl2": 13}, 24: {"vl1": -53, "vl2": -42}, 27: -21, 30: -4,
+        33: {"vl1": -5, "vl2": -1}, 36: {"vl1": -22, "vl2": -13}, 39: {"vl1": -8, "vl2": 1},
+        42: {"vl1": -1, "vl2": 3}, 45: {"vl1": 1, "vl2": -12}, 48: 2, 51: {"vl1": -16, "vl2": -10},
+        54: {"vl1": -12, "vl2": -5}, 57: {"vl1": -5, "vl2": -10}, 60: {"vl1": -22, "vl2": -16},
+    },
+    ("Spanish-Classical-Guitar", "samples"): {
+        40: 1, 41: 9, 43: 10, 45: 4, 47: 7, 48: 3, 50: 5, 52: 4, 53: 4, 54: 2, 55: 1, 56: 6, 57: 10,
+        58: 13, 59: 15, 60: 8, 61: 18, 62: 8, 63: 9, 64: 0, 65: 3, 66: 3, 67: 3, 69: 4, 70: 1, 71: 14,
+        72: 10, 73: 9, 74: 11, 75: 3, 76: 6, 77: -1, 78: 1, 79: -1, 80: -2, 81: 9, 82: 5, 83: 4, 84: 7,
+    },
+    ("Shinyguitar", "Shinyguitar/Samples/acoustic"): {
+        37: {"vl2": 3, "vl3": 9, "vl4": 15}, 40: {"vl2": -3, "vl3": 1, "vl4": 9}, 42: -1, 45: 4,
+        48: {"vl2": -7, "vl3": -4, "vl4": -3}, 51: -1, 54: 2, 57: -1, 60: 0, 63: 1, 66: 6,
+        69: {"vl2": -2, "vl3": 0, "vl4": 3}, 72: {"vl2": -1, "vl3": -4, "vl4": 4}, 75: 5, 78: 3,
+        81: 1, 84: -2,
+    },
+}
 # The kit: each hit's microphones mixed to one stereo file, as the kit's own default program
 # (Programs/01-full.sfz) mixes them: the close microphones at its levels and pans (a drummer's
 # view: the high tom left, the floor tom right), the overheads as recorded; a few of its velocity
@@ -565,7 +705,9 @@ MAX_SECONDS.update({"kick": 1.5, "snare": 2.0, "stick": 1.0, "hat": 1.2, "hat_pe
 KIT_NAMES = {"kit"}
 
 UNPITCHED_NAMES = {u[0] for u in UNPITCHED} | KIT_NAMES
-LICENSE_FILES = {"VSCO-2-CE": ["LICENSE", "README.md", "Readme.txt"], "VCSL": ["LICENSE", "README.md"]}
+LICENSE_FILES = {"VSCO-2-CE": ["LICENSE", "README.md", "Readme.txt"], "VCSL": ["LICENSE", "README.md"],
+                 "FSBS-dist1": ["LICENSE.txt", "README.txt"],
+                 "Spanish-Classical-Guitar": ["LICENSE", "README.md"]}
 LICENSE_FILES.update({name: a[4] for name, a in ARCHIVES.items()})
 MUSESCORE_DOCS = ["MuseScore_General_License.md", "MuseScore_General_Readme.md"]
 
@@ -595,6 +737,20 @@ def vel_ranges(n):
     return [(round(128 * i / n), round(128 * (i + 1) / n) - 1) for i in range(n)]
 
 
+def tune_note(repo, folder, named, layer):
+    """The cents a set's files of the note `named`, in `layer`, sound above it (TUNE_NOTE): the
+    note's, or its layer's where the layers differ (a layer not listed: the middle of those that are)."""
+    c = TUNE_NOTE.get((repo, folder), {}).get(named, 0)
+    if isinstance(c, dict):
+        c = c.get(layer, sorted(c.values())[len(c) // 2])
+    return c
+
+
+def tune_cents():
+    """Every correction in TUNE_NOTE."""
+    return [x for t in TUNE_NOTE.values() for c in t.values() for x in (c.values() if isinstance(c, dict) else [c])]
+
+
 # --------------------------------------------------------------------------------------------
 def plan(src):
     """Every output file: dicts with instrument, articulation, root, layer, nlayers, rr, src."""
@@ -606,7 +762,7 @@ def plan(src):
         fix = ROOT_FIX_FOLDER[(repo, folder)]
         groups = {}
         for fn in sorted(os.listdir(d)):
-            if not fn.lower().endswith(".wav") or (keep and not re.search(keep, fn)):
+            if not fn.lower().endswith((".wav", ".flac")) or (keep and not re.search(keep, fn)):
                 continue
             if (repo, folder, fn) in EXCLUDE:
                 continue
@@ -628,8 +784,8 @@ def plan(src):
             for rr, (fn, named) in enumerate(files, 1):
                 out.append(dict(instrument=inst, articulation=art, root=root, layer=li, nlayers=len(layers),
                                 layer_name=layers[li][0], rr=rr, repo=repo, folder=folder, src=fn,
-                                named=note_name(named), pitched=True))
-    for inst, art, repo, folder, layers, fix in BASSES:
+                                named=note_name(named), named_midi=named, pitched=True))
+    for inst, art, repo, folder, layers, fix, every in PLUCKED:
         d = os.path.join(src, repo, folder)
         if not os.path.isdir(d):
             die("missing source folder %s" % d)
@@ -638,10 +794,13 @@ def plan(src):
             li = [i for i, (_, rx) in enumerate(layers) if re.search(rx, fn)]
             if not li:
                 continue
-            m = BASS_NOTE_RE.search(fn)
+            m = LOWER_NOTE_RE.search(fn)
             if not m:
                 die("no note in %s/%s" % (folder, fn))
             named = (int(m.group(3)) + 1) * 12 + "c d ef g a b".index(m.group(1)) - (1 if m.group(2) else 0)
+            # (every other note, or every third, of a set sampled closer than the budget takes)
+            if every and (named + fix - every[0]) % every[1] != 0:
+                continue
             for i in li:
                 groups.setdefault((i, named + fix), []).append((fn, named))
         if not groups:
@@ -650,7 +809,7 @@ def plan(src):
             for rr, (fn, named) in enumerate(files, 1):
                 out.append(dict(instrument=inst, articulation=art, root=root, layer=li, nlayers=len(layers),
                                 layer_name=layers[li][0], rr=rr, repo=repo, folder=folder, src=fn,
-                                named=note_name(named), pitched=True))
+                                named=note_name(named), named_midi=named, pitched=True))
     for art, repo, folder, mics, pattern, layers, rrs in KIT:
         for li, vl in enumerate(layers):
             for rr in rrs:
@@ -708,9 +867,9 @@ def resampler():
     return RESAMPLER
 
 
-def decode(path, cents=0):
+def decode(path, cents=0, mono=False):
     """The file's audio as 48 kHz 16-bit interleaved samples: (array('h'), channels); lowered by
-    `cents` (played slower) when that is not 0."""
+    `cents` (played slower) when that is not 0; its two channels as one (their mean) for `mono`."""
     p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
                         "stream=channels,sample_rate", "-of", "default=nw=1", "file:" + path],
                        capture_output=True, text=True)
@@ -722,6 +881,8 @@ def decode(path, cents=0):
     if cents:
         # (an integer rate: within 0.02 cents)
         af = "asetrate=%d," % round(int(info["sample_rate"]) * 2 ** (-cents / 1200.0)) + af
+    if mono and ch == 2:
+        af, ch = "pan=mono|c0=0.5*c0+0.5*c1," + af, 1
     p = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", "file:" + path, "-map", "0:a:0",
                         "-af", af,
                         "-ac", str(ch), "-ar", str(RATE), "-f", "s16le", "-c:a", "pcm_s16le", "-"],
@@ -830,7 +991,10 @@ def convert(job, src, stage):
         path = os.path.join(src, job["repo"], job["folder"], job["src"])
         check_wav_header(path)
         key = (job["repo"], job["folder"], job["src"])
-        a, ch = decode(path, TUNE_FILE.get(key + (job["instrument"],), TUNE_FILE.get(key, 0)))
+        cents = TUNE_FILE.get(key + (job["instrument"],), TUNE_FILE.get(key))
+        if cents is None:
+            cents = tune_note(job["repo"], job["folder"], job.get("named_midi"), job["layer_name"])
+        a, ch = decode(path, cents, (job["instrument"], job["articulation"]) in MONO)
     frames = len(a) // ch
     pk = peak_of(a)
     if frames < 480 or pk < 64:
@@ -963,12 +1127,12 @@ def build(src, dest):
                 j["file"], j["repo"], j["folder"], j["src"], j["named"], j["root"],
                 note_name(j["root"]) if j["pitched"] else "", j["layer_name"], j["channels"], j["seconds"],
                 "yes" if j["capped"] else "no", j["rms_db"], j["peak_db"], j["k_db"], j["trim_db"]))
-    # licenses, copied verbatim
+    # licenses, copied verbatim (one folder a source, whatever folder its archive keeps them in)
     lic = os.path.join(stage, "licenses")
     for repo, files in LICENSE_FILES.items():
         os.makedirs(os.path.join(lic, repo), exist_ok=True)
         for fn in files:
-            shutil.copyfile(os.path.join(src, repo, fn), os.path.join(lic, repo, fn))
+            shutil.copyfile(os.path.join(src, repo, fn), os.path.join(lic, repo, os.path.basename(fn)))
     os.makedirs(os.path.join(lic, "MuseScore_General"), exist_ok=True)
     for fn in MUSESCORE_DOCS:
         shutil.copyfile(os.path.join(dest, fn), os.path.join(lic, "MuseScore_General", fn))
@@ -1004,7 +1168,7 @@ def uptodate(dest):
             return False
     for repo, files in list(LICENSE_FILES.items()) + [("MuseScore_General", MUSESCORE_DOCS)]:
         for fn in files:
-            if not os.path.isfile(os.path.join(dest, "licenses", repo, fn)):
+            if not os.path.isfile(os.path.join(dest, "licenses", repo, os.path.basename(fn))):
                 return False
     for fn, size in st.get("files", {}).items():
         p = os.path.join(dest, fn)
@@ -1041,7 +1205,12 @@ def sources_md(jobs, gains, dest):
              " and Ivy Audio / Simon Dalzell where applicable, and a link to the VSCO: CE homepage, and that the"
              " samples not be sold on their own; recorded by Sam Gossner and Simon Dalzell, cut by Elan Hickler"
              " / Soundemote."),
-            ("VCSL", "Versilian Community Sample Library (Versilian Studios)", "CC0 1.0 Universal (`LICENSE`).")):
+            ("VCSL", "Versilian Community Sample Library (Versilian Studios)", "CC0 1.0 Universal (`LICENSE`)."),
+            ("FSBS-dist1", "Electric Guitar FSBS, bridge pickups, dist1 (FreePats)",
+             "CC0 1.0 Universal (`LICENSE.txt`; its `README.txt`: \"Published under the terms of Creative Commons"
+             " CC0 public domain dedication\")."),
+            ("Spanish-Classical-Guitar", "Spanish Classical Guitar (FreePats)",
+             "CC0 1.0 Universal (`LICENSE`).")):
         url, commit = REPOS[repo]
         w("## %s\n" % title)
         w("- URL: %s" % url)
@@ -1060,7 +1229,7 @@ def sources_md(jobs, gains, dest):
         w("## %s (Karoryfer Samples)\n" % name.replace("-", " "))
         w("- URL: %s" % url)
         w("- Size and sha256: %d bytes, `%s`" % (size, sha))
-        w("- License: CC0 1.0 Universal (`%s`)." % lic[0])
+        w("- License: CC0 1.0 Universal (`%s`)." % os.path.basename(lic[0]))
         w("- Taken (folder: instrument/articulation, files):")
         seen = {}
         for j in jobs:
@@ -1072,7 +1241,8 @@ def sources_md(jobs, gains, dest):
         w("")
     w("## Processing\n")
     w("- Decoded and resampled to 48 kHz with ffmpeg (soxr where available), 16-bit with triangular dither;"
-      " channels as recorded (stereo, but for the harmonica, recorded in mono).")
+      " channels as recorded (the Versilian libraries in stereo, but for the harmonica; Karoryfer's basses and"
+      " guitars in mono).")
     w("- Leading silence trimmed: the onset is the first sample within %g dB of the file's peak, and the file"
       " starts 1 ms before it (that 1 ms faded in)." % -ONSET_DB)
     w("- Tail cut at the end of the last 10 ms that reaches %g dB relative to the peak, with a 50 ms raised-cosine"
@@ -1098,8 +1268,15 @@ def sources_md(jobs, gains, dest):
     w("- The kit: each hit's microphones (the same file name in each microphone's folder) mixed to stereo"
       " with ffmpeg as the kit's default program mixes them, then scaled by %g; see `KIT` and `MICS_*` in"
       " `tools/samples_manifest.py`." % MIX_HEADROOM)
-    w("- The basses: their files name each note an octave above its sound (`darkblack_e2_mf_rr1.wav`"
-      " sounds E1, 41.2 Hz), so 12 is taken from the named note.")
+    w("- The basses and the green guitar: their files name each note an octave above its sound"
+      " (`darkblack_e2_mf_rr1.wav` sounds E1, 41.2 Hz), so 12 is taken from the named note; the upright bass's"
+      " and the acoustic guitar's are named as they sound.")
+    if TUNE_NOTE:
+        w("- Retuned by note (resampled, as above): the basses and the guitars, each note's files (a"
+          " dynamic's, where its dynamics differ) lowered by the cents they were measured to sound above it"
+          " (%d notes, %+d to %+d cents); see `TUNE_NOTE` in `tools/samples_manifest.py`."
+          % (sum(len(v) for v in TUNE_NOTE.values()), -max(tune_cents()), -min(tune_cents())))
+    w("- Two channels taken as one (their mean): %s." % ", ".join("%s/%s" % k for k in sorted(MONO)))
     w("- Octave fixes applied (folder: semitones added to the named note):")
     for (repo, folder), fix in sorted(ROOT_FIX_FOLDER.items()):
         w("  - %s `%s`: %+d" % (repo, folder, fix))
