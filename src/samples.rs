@@ -412,6 +412,15 @@ impl Bank {
         self.gms.iter().find(|g| g.0 == preset).map(|g| g.1)
     }
 
+    /// Whether a recording stands in for the SoundFont's `preset`
+    /// (`GM_RECORDED`): what plays under its name has no SoundFont envelope.
+    pub fn stands_in(&self, preset: &str) -> bool {
+        self.gm(preset)
+            .and_then(|id| self.insts.get(id as usize - 1))
+            .and_then(|i| self.zones.get(i.zones.start as usize))
+            .is_some_and(|z| z.hold_tc <= -32768.0)
+    }
+
     /// One key of a SoundFont kit (one of `GM_KITS`), General MIDI's
     /// numbering (36 kick, 38 snare, 42 closed hat, 46 open hat, ...).
     #[allow(dead_code)] // the genres' hook
@@ -545,14 +554,7 @@ impl Bank {
     /// a drum in its piece's choke class, so that a genre's parts keep the
     /// balance and dynamics they were set at.
     fn recorded(&mut self) {
-        for &(preset, inst, art, note, secs) in GM_RECORDED {
-            let Some(rec) = self.multi(inst, art) else { continue };
-            let Some(gi) = self.gms.iter().position(|g| g.0 == preset) else { continue };
-            let was = self.gms[gi].1;
-            let notes = [note - 12.0, note - 6.0, note, note + 6.0, note + 12.0];
-            let g = self.layer_gains(was, rec, &notes, secs);
-            self.gms[gi].1 = self.copy_inst(rec, &g, 0);
-        }
+        self.stand_in(GM_RECORDED);
         for &kit in KITS_RECORDED {
             let Some(k) = self.kits.iter().position(|x| x.0 == kit) else { continue };
             // the SoundFont's own kept, for a genre whose sound is built on it
@@ -571,6 +573,82 @@ impl Bank {
                 self.kits[k].1[key as usize] = id;
             }
         }
+    }
+
+    /// Each preset in `table` (rows as `GM_RECORDED`'s) played by its
+    /// recording from here on, where both are loaded: a copy of the
+    /// recording, its layers at the preset's levels (note by note where
+    /// the row asks: `zone_gains`).
+    fn stand_in(&mut self, table: &[Standing]) {
+        for &(preset, inst, art, note, secs, by_note) in table {
+            let Some(rec) = self.multi(inst, art) else { continue };
+            let Some(gi) = self.gms.iter().position(|g| g.0 == preset) else { continue };
+            let was = self.gms[gi].1;
+            let notes = [note - 12.0, note - 6.0, note, note + 6.0, note + 12.0];
+            let g = self.layer_gains(was, rec, &notes, secs);
+            self.gms[gi].1 = if by_note {
+                let zg = self.zone_gains(was, rec, &g, secs);
+                self.copy_zones(rec, &zg, 0)
+            } else {
+                self.copy_inst(rec, &g, 0)
+            };
+        }
+    }
+
+    /// `layer_gains`, note by note: a gain for each of `rec`'s zones, that
+    /// makes its layer as loud as `was` at the zone's own root (at the
+    /// layer's middle velocity, over the first `secs`). The recordings are
+    /// evened from note to note and a SoundFont's preset is not (its muted
+    /// guitar 5 dB weaker above middle C), and a genre levels a part by one
+    /// note of it: followed note by note, the recording is as loud as the
+    /// preset wherever that note is. Each root's gain is the middle one of
+    /// its own and its neighbours' (a single hot or weak note of the
+    /// preset's is not copied); where the preset is silent, the layer's
+    /// (`layer`).
+    fn zone_gains(&self, was: u16, rec: u16, layer: &[f32], secs: f32) -> Vec<f32> {
+        let inst = &self.insts[rec as usize - 1];
+        let zr = inst.zones.clone();
+        let mut zg: Vec<Option<f32>> = vec![None; (zr.end - zr.start) as usize];
+        for li in 0..inst.layers {
+            let vs: Vec<usize> = (0..128).filter(|&v| inst.layer[v] as usize == li).collect();
+            let v = vs.get(vs.len() / 2).map_or(1.0, |&v| v as f32 / 127.0);
+            let of_layer = |c: &(usize, &Cell)| c.0 % inst.layers == li;
+            let zones = |c: &Cell| c.first as usize..c.first as usize + c.rr as usize * c.per as usize;
+            // the layer's roots, low to high, and each one's gain (dB)
+            let mut roots: Vec<i32> = inst
+                .cells
+                .iter()
+                .enumerate()
+                .filter(of_layer)
+                .flat_map(|(_, c)| zones(c))
+                .map(|p| self.zones[self.picks[p] as usize].root.round() as i32)
+                .collect();
+            roots.sort_unstable();
+            roots.dedup();
+            let own = 20.0 * layer.get(li).copied().unwrap_or(1.0).max(1e-6).log10();
+            let raw: Vec<f32> = roots
+                .iter()
+                .map(|&r| {
+                    let (a, b) = (self.rms_at(was, r as f32, v, secs), self.rms_at(rec, r as f32, v, secs));
+                    if a > 1e-6 && b > 1e-6 { 20.0 * (a / b).log10() } else { own }
+                })
+                .collect();
+            // (the lowest and the highest root, with one neighbour, keep their own)
+            let middle = |i: usize| {
+                let mut w: Vec<f32> = raw[i.saturating_sub(1)..(i + 2).min(raw.len())].to_vec();
+                w.sort_by(f32::total_cmp);
+                if w.len() == 3 { w[1] } else { raw[i] }
+            };
+            let gains: Vec<f32> = (0..raw.len()).map(|i| 10f32.powf(middle(i) / 20.0)).collect();
+            for (_, c) in inst.cells.iter().enumerate().filter(of_layer) {
+                for p in zones(c) {
+                    let z = self.picks[p] as usize;
+                    let at = roots.binary_search(&(self.zones[z].root.round() as i32)).unwrap_or(0);
+                    zg[z - zr.start as usize].get_or_insert(gains.get(at).copied().unwrap_or(1.0));
+                }
+            }
+        }
+        zg.into_iter().map(|g| g.unwrap_or(1.0)).collect()
     }
 
     /// How much louder each velocity layer of `rec` is to be to sound as
@@ -594,22 +672,28 @@ impl Bank {
     /// the first), in choke class `excl`. Its id.
     fn copy_inst(&mut self, id: u16, g: &[f32], excl: u8) -> u16 {
         let src = &self.insts[id as usize - 1];
-        let (zr, layer, layers, key, old) = (src.zones.clone(), src.layer, src.layers, src.key, src.cells.clone());
+        let (zr, layers) = (src.zones.clone(), src.layers);
         let mut zg: Vec<Option<f32>> = vec![None; (zr.end - zr.start) as usize];
-        for (i, c) in old.iter().enumerate() {
+        for (i, c) in src.cells.iter().enumerate() {
             for k in 0..c.rr as usize * c.per as usize {
                 let z = self.picks[c.first as usize + k] - zr.start;
                 zg[z as usize].get_or_insert(g.get(i % layers).copied().unwrap_or(1.0));
             }
         }
+        let zg: Vec<f32> = zg.into_iter().map(|g| g.unwrap_or(1.0)).collect();
+        self.copy_zones(id, &zg, excl)
+    }
+
+    /// A copy of the instrument `id` (its zones' recordings shared), each
+    /// of its zones `zg[zone]` times as loud, in choke class `excl`. Its id.
+    fn copy_zones(&mut self, id: u16, zg: &[f32], excl: u8) -> u16 {
+        let src = &self.insts[id as usize - 1];
+        let (zr, layer, layers, key, old) = (src.zones.clone(), src.layer, src.layers, src.key, src.cells.clone());
         let base = self.zones.len() as u32;
         let zones: Vec<Zone> = self.zones[zr.start as usize..zr.end as usize]
             .iter()
-            .zip(&zg)
-            .map(|(z, g)| {
-                let g = g.unwrap_or(1.0);
-                Zone { gl: z.gl * g, gr: z.gr * g, excl, ..*z }
-            })
+            .zip(zg)
+            .map(|(z, &g)| Zone { gl: z.gl * g, gr: z.gr * g, excl, ..*z })
             .collect();
         self.zones.extend(zones);
         let mut cells = Vec::with_capacity(old.len());
@@ -1792,9 +1876,30 @@ pub fn load(dir: &Path) -> Result<Bank, String> {
 /// SoundFont presets played by recordings when they are loaded: the
 /// preset, the recording (a multisampled instrument and articulation), the
 /// notes their levels are matched over (an octave either side of this),
-/// and how long a note to match them over.
-const GM_RECORDED: &[(&str, &str, &str, f32, f32)] =
-    &[("Fingered Bass", "bass_finger", "pluck", 36.0, 1.0), ("Picked Bass", "bass_pick", "pluck", 36.0, 1.0)];
+/// how long a note to match them over, and whether the levels are then
+/// matched note by note (`Bank::zone_gains`).
+///
+/// The electric basses (Karoryfer's); a clean electric guitar (for the
+/// SoundFont's clean guitar and its brighter funk guitar, each at its own
+/// levels) and the same one damped as it is played, a double bass plucked
+/// and an acoustic guitar (Karoryfer's too); a nylon-strung guitar
+/// (FreePats').
+///
+/// The windows: a strummed or picked note's first 0.4 s (most are shorter
+/// than a second, and the recordings speak harder than the SoundFont's:
+/// over a whole second they would come out quieter where it matters); the
+/// damped guitar's 0.15 s (ska's chop is 0.14 s long).
+type Standing = (&'static str, &'static str, &'static str, f32, f32, bool);
+const GM_RECORDED: &[Standing] = &[
+    ("Fingered Bass", "bass_finger", "pluck", 36.0, 1.0, false),
+    ("Picked Bass", "bass_pick", "pluck", 36.0, 1.0, false),
+    ("Clean Guitar", "guitar_clean", "pluck", 57.0, 0.4, true),
+    ("Funk Guitar", "guitar_clean", "pluck", 57.0, 0.4, true),
+    ("Palm Muted Guitar", "guitar_mute", "pluck", 52.0, 0.15, true),
+    ("Acoustic Bass", "bass_upright", "pluck", 36.0, 0.4, true),
+    ("Steel String Guitar", "guitar_steel", "pluck", 57.0, 0.4, true),
+    ("Nylon String Guitar", "guitar_nylon", "pluck", 60.0, 0.4, true),
+];
 
 /// The SoundFont kits a recorded kit (the manifest's instrument "kit", a
 /// piece an articulation) plays in, and the piece for each General MIDI key.
@@ -1917,6 +2022,11 @@ pub fn multi(instrument: &str, articulation: &str) -> Option<u16> {
 #[allow(dead_code)] // the genres' hook
 pub fn gm(preset: &str) -> Option<u16> {
     bank()?.gm(preset)
+}
+
+/// `Bank::stands_in` of the installed bank.
+pub fn stands_in(preset: &str) -> bool {
+    bank().is_some_and(|b| b.stands_in(preset))
 }
 
 /// `Bank::drum` of the installed bank.
@@ -3527,5 +3637,107 @@ mod tests {
             assert!(b.drum("Standard", key).is_some(), "key {key}");
         }
         assert!(b.bytes() > 100_000);
+    }
+
+    #[test]
+    fn the_recordings_stand_in_for_presets_the_bank_loads() {
+        for (i, &(preset, inst, art, note, secs, _)) in GM_RECORDED.iter().enumerate() {
+            assert!(GM_PRESETS.contains(&preset), "{preset}: not a preset the bank loads");
+            assert!(!GM_RECORDED[..i].iter().any(|r| r.0 == preset), "{preset}: twice");
+            // (as the manifest names its instruments)
+            let named =
+                |x: &str| !x.is_empty() && x.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_');
+            assert!(named(inst) && named(art), "{preset}: {inst} {art}");
+            assert!((21.0..=96.0).contains(&note) && secs > 0.0 && secs <= 2.0, "{preset}: {note}, {secs} s");
+        }
+    }
+
+    #[test]
+    fn a_recording_stands_in_for_a_preset_at_its_level() {
+        let d = synthetic("standin");
+        std::fs::write(d.join(SF2), tiny_sf2()).expect("sf2");
+        let mut b = load(&d).expect("load");
+        let _ = std::fs::remove_dir_all(&d);
+        let (was, rec) = (b.gm("Trumpet").expect("the preset"), b.multi("sine", "sus").expect("the recording"));
+        let (zones, insts) = (b.zones.len(), b.insts.len());
+        assert!(!b.stands_in("Trumpet") && !b.stands_in("No Such Preset"));
+        // a preset or a recording that is not there: nothing changes
+        b.stand_in(&[
+            ("No Such Preset", "sine", "sus", 69.0, 0.5, false),
+            ("Trumpet", "sine", "no such", 69.0, 0.5, true),
+        ]);
+        assert_eq!((b.gm("Trumpet"), b.zones.len(), b.insts.len()), (Some(was), zones, insts));
+        b.stand_in(&[("Trumpet", "sine", "sus", 69.0, 0.5, false)]);
+        let now = b.gm("Trumpet").expect("still a preset by its name");
+        assert!(b.stands_in("Trumpet"));
+        assert!(now != was && now != rec, "a copy of the recording, the recording itself as it was");
+        assert_eq!(b.multi("sine", "sus"), Some(rec));
+        // each of the recording's layers as loud as the preset at that
+        // layer's middle velocity, over the notes they were matched on (the
+        // softer layer to the hundredth; the louder, whose lower notes'
+        // recordings are the softer one's too and keep its gain, within 1 dB)
+        let notes = [57.0, 63.0, 69.0, 75.0, 81.0];
+        let power = |b: &Bank, id: u16, v: f32| notes.iter().map(|&n| b.rms_at(id, n, v, 0.5).powi(2)).sum::<f32>();
+        for (v, within) in [(32.0 / 127.0, 0.1), (96.0 / 127.0, 1.0)] {
+            let db = 10.0 * (power(&b, now, v) / power(&b, was, v)).log10();
+            assert!(db.abs() < within, "velocity {v}: {db:+.2} dB from the preset's");
+        }
+        // it is the recording that plays: the manifest's own two takes of its top note
+        assert_eq!(
+            b.pick(now, 81.0, 1.0, 48000, 0).map(|p| p.0.len()),
+            b.pick(rec, 81.0, 1.0, 48000, 0).map(|p| p.0.len())
+        );
+        assert_ne!(
+            b.pick(now, 81.0, 1.0, 48000, 0).map(|p| p.0.to_vec()),
+            b.pick(now, 81.0, 1.0, 48000, 1).map(|p| p.0.to_vec()),
+            "its round robins kept"
+        );
+        // and no SoundFont envelope, so its notes are not `LIVELY`'s to keep alive
+        assert!(!b.lively.iter().any(|l| l.0 == now));
+    }
+
+    #[test]
+    fn a_recording_follows_a_presets_levels_note_by_note() {
+        // the recording (roots 57, 69 and 81) made uneven, as no preset is: one root's zones 12 dB up
+        let uneven = |name: &str, root: f32| {
+            let d = synthetic(name);
+            std::fs::write(d.join(SF2), tiny_sf2()).expect("sf2");
+            let mut b = load(&d).expect("load");
+            let _ = std::fs::remove_dir_all(&d);
+            let rec = b.multi("sine", "sus").expect("the recording");
+            let r = b.insts[rec as usize - 1].zones.clone();
+            for z in b.zones[r.start as usize..r.end as usize].iter_mut().filter(|z| z.root == root) {
+                z.gl *= 4.0;
+                z.gr *= 4.0;
+            }
+            b
+        };
+        let level = |b: &Bank, id: u16, n: f32| 20.0 * b.rms_at(id, n, 0.25, 0.5).max(1e-9).log10();
+        // its top root: one gain a layer leaves it as uneven as it was; a gain
+        // a root brings every root to the preset's level
+        let mut b = uneven("standin-top", 81.0);
+        let was = b.gm("Trumpet").expect("the preset");
+        b.stand_in(&[("Trumpet", "sine", "sus", 69.0, 0.5, false)]);
+        let flat = b.gm("Trumpet").expect("a preset");
+        let by =
+            |b: &Bank, id: u16| (level(b, id, 81.0) - level(b, was, 81.0)) - (level(b, id, 57.0) - level(b, was, 57.0));
+        assert!(by(&b, flat) > 5.0, "{:+.2} dB", by(&b, flat));
+        let mut b = uneven("standin-top2", 81.0);
+        let was = b.gm("Trumpet").expect("the preset");
+        b.stand_in(&[("Trumpet", "sine", "sus", 69.0, 0.5, true)]);
+        let now = b.gm("Trumpet").expect("a preset");
+        for n in [57.0, 69.0, 81.0] {
+            let db = level(&b, now, n) - level(&b, was, n);
+            assert!(db.abs() < 0.5, "note {n}: {db:+.2} dB from the preset's");
+        }
+        // a lone root between two others that agree: taken for a slip (the
+        // preset's or the recording's), and given its neighbours' gain
+        let mut b = uneven("standin-mid", 69.0);
+        let was = b.gm("Trumpet").expect("the preset");
+        b.stand_in(&[("Trumpet", "sine", "sus", 69.0, 0.5, true)]);
+        let now = b.gm("Trumpet").expect("a preset");
+        let db = level(&b, now, 69.0) - level(&b, was, 69.0);
+        assert!(db > 5.0, "the middle root: {db:+.2} dB from the preset's");
+        assert!((level(&b, now, 57.0) - level(&b, was, 57.0)).abs() < 0.5);
     }
 }
