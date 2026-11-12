@@ -244,19 +244,35 @@ The composer writes pieces of about two minutes (50 to 190 bpm). Each piece has 
 Every genre plays recordings of real instruments once `tools/get-samples.sh` has fetched them. Without them, a small synthesiser plays everything: band-limited oscillators, resonant filters, FM bells and electric piano, and synthesised drums.
 
 ```
-tools/get-samples.sh                          # about 1 GB into ~/.local/share/musicbox/samples
+tools/get-samples.sh                          # about 1.3 GB into ~/.local/share/musicbox/samples
 target/release/musicbox --samples-list        # what loads
 target/release/musicbox mariachi --no-samples # the synthesiser alone
 ```
 
-The script needs git, curl, ffmpeg and python3. It also keeps about 3 GB of git clones and 1.6 GB of zips (and what it unpacks of them) in `~/.cache/musicbox/samples-src`, which can be deleted afterwards. If fleece's samples are already in `~/.local/share/fleece/samples` and musicbox's own directory doesn't exist, musicbox reads fleece's. `--samples DIR` reads any other directory.
+The script needs git, curl, ffmpeg and python3. It also keeps about 3.5 GB of git clones and 2.7 GB of zips (and what it unpacks of them) in `~/.cache/musicbox/samples-src`, which can be deleted afterwards. Run again after an update, it adds what is new and rebuilds the bank from what it kept (under a minute here). If fleece's samples are already in `~/.local/share/fleece/samples` and musicbox's own directory doesn't exist, musicbox reads fleece's. `--samples DIR` reads any other directory.
 
-The recordings come from three sources:
+The recordings come from four sources:
 - MuseScore General 0.2: MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins.
 - Versilian Studios' VS Chamber Orchestra 2: Community Edition and Versilian Community Sample Library: CC0.
-- Karoryfer Samples' Big Rusty Drums and Black And Blue Basses: CC0. The kit (each hit's close microphones and overheads mixed as the kit's own program mixes them) plays wherever a genre asked for the SoundFont's acoustic kits (Standard, Room, Power, Jazz), and the basses wherever it asked for its fingered or picked bass: each piece and each velocity layer at the level of what it stands in for, so a genre keeps the balance it was set at.
+- Karoryfer Samples' Big Rusty Drums, Black And Blue Basses, Black And Green Guitars, Meatbass and Shinyguitar: CC0.
+- FreePats' Spanish Classical Guitar and Electric Guitar FSBS (dist1): CC0.
 
-`SOURCES.md` and `licenses/` in the samples directory list everything taken. The bank takes about 1 GB of memory and loads before the first note (0.6 s here), so every piece plays on it.
+The SoundFont plays most of the instruments, but its band instruments hold each note on a loop of a few cycles of the wave, which is what a sound chip does. So where a deeper recording could be had freely, it stands in for the SoundFont's wherever a genre asks for that instrument, at the level of what it stands in for (note by note for the guitars and the upright bass, layer by layer for the kit and the electric basses), so a genre keeps the balance it was set at:
+
+| the SoundFont's | played by | what was taken |
+| --- | --- | --- |
+| acoustic kits (Standard, Room, Power, Jazz) | Big Rusty Drums | each hit's close microphones and overheads mixed as the kit's own program mixes them; a few dynamics, two takes |
+| fingered and picked electric bass | Black And Blue Basses | every note, two dynamics, two takes; each note brought into tune (some were a quarter of a semitone out) |
+| clean and funk electric guitar | Black And Green Guitars (a Gretsch hollowbody) | two dynamics, two takes, every other fret |
+| palm-muted guitar | the same guitar, damped as it is played | four takes |
+| upright bass | Meatbass (a 1958 double bass, plucked) | its two softer dynamics, two takes |
+| steel-string guitar | Shinyguitar (an archtop, its microphone) | three dynamics |
+| nylon-string guitar | Spanish Classical Guitar | 39 notes, one dynamic, one take |
+| distorted and overdriven guitar | Electric Guitar FSBS dist1 (a Fender through an amplifier) | two dynamics, two takes |
+
+Every one was brought into tune note by note (within 5 cents now, but for two of the damped guitar's short notes at 6 and 7). The taggers ([below](#checked-against-real-music)) read the guitars and the upright bass as a little less of a chip's on the whole, better in celtic, bossa, kenyan, mariachi and tavern, and worse in the 60s' beat music, ska and lounge; on the distorted guitar they split (less video-game music in rock, more chiptune in rock and pop-punk), so that one is a row of `GM_RECORDED` in `src/samples.rs` to take out if it does not please. They measure likeness to a label, not how good it sounds.
+
+`SOURCES.md` and `licenses/` in the samples directory list everything taken. The bank takes about 1.3 GB of memory and loads before the first note (under a second here), so every piece plays on it.
 
 ## How it is made
 

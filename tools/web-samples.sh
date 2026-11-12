@@ -77,9 +77,13 @@ They come from:
   (\`licenses/VSCO-2-CE/\`).
 - **Versilian Community Sample Library** by Versilian Studios,
   https://github.com/sgossner/VCSL: CC0 1.0 (\`licenses/VCSL/\`).
-- **Big Rusty Drums** and **Black And Blue Basses** by Karoryfer Samples,
-  https://github.com/sfzinstruments: CC0 1.0 (\`licenses/Big-Rusty-Drums/\`,
-  \`licenses/Black-And-Blue-Basses/\`).
+- **Big Rusty Drums**, **Black And Blue Basses**, **Black And Green Guitars**, **Meatbass**
+  and **Shinyguitar** by Karoryfer Samples, https://github.com/sfzinstruments: CC0 1.0
+  (\`licenses/Big-Rusty-Drums/\`, \`licenses/Black-And-Blue-Basses/\`,
+  \`licenses/Black-And-Green-Guitars/\`, \`licenses/Meatbass/\`, \`licenses/Shinyguitar/\`).
+- **Spanish Classical Guitar** and **Electric Guitar FSBS (dist1)** by FreePats,
+  https://github.com/freepats: CC0 1.0 (\`licenses/Spanish-Classical-Guitar/\`,
+  \`licenses/FSBS-dist1/\`).
 
 \`SOURCES.md\` lists every file taken from each into the sample bank these were cut from.
 EOF
