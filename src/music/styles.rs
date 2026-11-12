@@ -39,7 +39,7 @@ const FULL: u32 = KIT | L_OHAT | L_PERC;
 /// SoundFont's, through the patch's low-pass about 1 kHz): bright and on
 /// its own, its recording reads as a chip's bass to the taggers
 /// (tools/validate); a fingered one has `ska_bass_flat`.
-fn bass_pick_dark(r: &mut Rng) -> Patch {
+pub(super) fn bass_pick_dark(r: &mut Rng) -> Patch {
     let p = ska_bass_pick(r);
     if p.samp == 0 {
         return p;
@@ -47,7 +47,7 @@ fn bass_pick_dark(r: &mut Rng) -> Patch {
     Patch { filter: true, cutoff: r.range(900.0, 1100.0), keytrack: 0.2, res: 0.0, env_amt: 0.0, ..p }
 }
 
-fn clav(r: &mut Rng) -> Patch {
+pub(super) fn clav(r: &mut Rng) -> Patch {
     let p = Patch {
         wave: Wave::Square,
         pw: r.range(0.18, 0.28),
@@ -67,7 +67,7 @@ fn clav(r: &mut Rng) -> Patch {
 }
 
 /// A harpsichord: a bright plucked string.
-fn harpsichord(r: &mut Rng) -> Patch {
+pub(super) fn harpsichord(r: &mut Rng) -> Patch {
     let p = Patch {
         ks: r.range(1.0, 1.4),
         ks_tone: 0.85,
@@ -83,29 +83,29 @@ fn harpsichord(r: &mut Rng) -> Patch {
 }
 
 /// Guitars: a hollow-body's mellow tone, a steel-string's, a twelve-string's.
-fn jazz_guitar(r: &mut Rng) -> Patch {
+pub(super) fn jazz_guitar(r: &mut Rng) -> Patch {
     let p = Patch { ks_tone: 0.3, cutoff: 1800.0, ..nylon_synth(r) };
     rec(p, samples::gm("Jazz Guitar"), 60.0)
 }
 
-fn steel_guitar(r: &mut Rng) -> Patch {
+pub(super) fn steel_guitar(r: &mut Rng) -> Patch {
     let p = Patch { ks_tone: 0.7, cutoff: 4500.0, ..nylon_synth(r) };
     rec(p, samples::gm("Steel String Guitar"), 60.0)
 }
 
-fn twelve_string(r: &mut Rng) -> Patch {
+pub(super) fn twelve_string(r: &mut Rng) -> Patch {
     let p = Patch { ks_tone: 0.75, cutoff: 5000.0, unison: 2, detune: 6.0, ..nylon_synth(r) };
     rec(p, samples::gm("12-String Guitar"), 60.0)
 }
 
 /// An electric guitar, clean.
-fn elec_clean(r: &mut Rng) -> Patch {
+pub(super) fn elec_clean(r: &mut Rng) -> Patch {
     let p = Patch { ks_tone: 0.65, cutoff: 3800.0, drive: 0.15, ..nylon_synth(r) };
     rec(p, samples::gm("Clean Guitar"), 60.0)
 }
 
 /// A surf guitar: clean, its tremolo on, deep in the spring.
-fn surf_guitar(r: &mut Rng) -> Patch {
+pub(super) fn surf_guitar(r: &mut Rng) -> Patch {
     let q = Patch {
         ks_tone: 0.7,
         cutoff: 4000.0,
@@ -118,40 +118,40 @@ fn surf_guitar(r: &mut Rng) -> Patch {
 }
 
 /// A brass section, playing together.
-fn brass_section(r: &mut Rng) -> Patch {
+pub(super) fn brass_section(r: &mut Rng) -> Patch {
     rec(trumpet_synth(r), samples::gm("Brass Section"), 64.0)
 }
 
 /// Strings for stabs and runs (quick to speak), and a synthesiser's.
-fn strings_fast(r: &mut Rng) -> Patch {
+pub(super) fn strings_fast(r: &mut Rng) -> Patch {
     let p = Patch { a: 0.02, r: 0.25, ..pad_strings_synth(r) };
     rec(p, samples::gm("Strings Fast"), 60.0)
 }
 
-fn synth_strings(r: &mut Rng) -> Patch {
+pub(super) fn synth_strings(r: &mut Rng) -> Patch {
     rec_through(pad_strings_synth(r), samples::gm("Synth Strings 1"), 60.0)
 }
 
 /// A church's pipe organ.
-fn church_organ(r: &mut Rng) -> Patch {
+pub(super) fn church_organ(r: &mut Rng) -> Patch {
     let p = Patch { a: 0.06, r: 0.4, trem: 0.0, ..pad_organ_synth(r) };
     rec(p, samples::gm("Church Organ"), 60.0)
 }
 
 /// A pan flute; a bansuri (the end-blown bamboo flute's recording its
 /// stand-in), sliding between its notes.
-fn pan_flute(r: &mut Rng) -> Patch {
+pub(super) fn pan_flute(r: &mut Rng) -> Patch {
     rec(flute_synth(r), samples::gm("Pan Flute"), 74.0)
 }
 
-fn bansuri(r: &mut Rng) -> Patch {
+pub(super) fn bansuri(r: &mut Rng) -> Patch {
     let p = Patch { noise: r.range(0.05, 0.08), vib: 0.18, glide: r.range(0.08, 0.14), ..flute_synth(r) };
     rec(p, samples::gm("Shakuhachi"), 72.0)
 }
 
 /// A tanpura's string: a buzzing saw through the bridge's vowel, ringing
 /// long (the synthesiser's always: there is no recording of one).
-fn tanpura(r: &mut Rng) -> Patch {
+pub(super) fn tanpura(r: &mut Rng) -> Patch {
     Patch {
         unison: 2,
         detune: r.range(3.0, 6.0),
@@ -170,7 +170,7 @@ fn tanpura(r: &mut Rng) -> Patch {
 }
 
 /// A singing bowl: inharmonic partials beating slowly, ringing for seconds.
-fn singing_bowl(r: &mut Rng) -> Patch {
+pub(super) fn singing_bowl(r: &mut Rng) -> Patch {
     Patch {
         filter: false,
         fm: r.range(0.6, 1.0),
@@ -188,13 +188,13 @@ fn singing_bowl(r: &mut Rng) -> Patch {
 }
 
 /// A harmonium: reeds and bellows.
-fn harmonium(r: &mut Rng) -> Patch {
+pub(super) fn harmonium(r: &mut Rng) -> Patch {
     rec(accordion_synth(r), samples::gm("Reed Organ"), 60.0)
 }
 
 /// Amapiano's log drum: a sine bending down onto its note, quick to die,
 /// a little driven (the synthesiser's).
-fn log_drum(r: &mut Rng) -> Patch {
+pub(super) fn log_drum(r: &mut Rng) -> Patch {
     Patch {
         wave: Wave::Sine,
         wave2: Wave::Tri,
@@ -214,7 +214,7 @@ fn log_drum(r: &mut Rng) -> Patch {
 }
 
 /// An 808's long sine bass, sliding (the synthesiser's).
-fn sub808(r: &mut Rng) -> Patch {
+pub(super) fn sub808(r: &mut Rng) -> Patch {
     Patch {
         wave: Wave::Sine,
         filter: false,
@@ -230,12 +230,12 @@ fn sub808(r: &mut Rng) -> Patch {
 }
 
 /// A bright grand (a house record's piano).
-fn bright_piano(r: &mut Rng) -> Patch {
+pub(super) fn bright_piano(r: &mut Rng) -> Patch {
     rec(piano_synth(r), samples::gm("Bright Grand Piano"), 62.0)
 }
 
 /// A sine lead with a slow slide (G-funk's whistle).
-fn sine_lead(_: &mut Rng) -> Patch {
+pub(super) fn sine_lead(_: &mut Rng) -> Patch {
     let p = Patch {
         wave: Wave::Sine,
         filter: false,
@@ -253,14 +253,14 @@ fn sine_lead(_: &mut Rng) -> Patch {
 }
 
 /// The nyatiti: a lyre, plucked, dying quicker than a harp.
-fn nyatiti(r: &mut Rng) -> Patch {
+pub(super) fn nyatiti(r: &mut Rng) -> Patch {
     let p = Patch { d: 1.2, ..harp_synth(r) };
     rec(p, multi_or("harp", "pluck", "Harp"), 66.0)
 }
 
 /// The kalimba, the marimba and the vibraphone as they are; strings
 /// pizzicato; a piano felted; FM keys.
-fn steel_drums(r: &mut Rng) -> Patch {
+pub(super) fn steel_drums(r: &mut Rng) -> Patch {
     rec(marimba_synth(r), samples::gm("Steel Drums"), 72.0)
 }
 
@@ -3565,6 +3565,93 @@ mod tests {
         if c == b'.' { 0.0 } else { 1.0 }
     }
 
+    /// What each style has more of (varied.rs): its name finds it and no
+    /// two styles share a name; its rows parse and are as long as the
+    /// style's own; its drum lines are a bar long, hit, and play only the
+    /// drums the style's own lines play (its kit has them); its other ways
+    /// are others, for parts the style has, and fit its meter; its other
+    /// players are for parts the style has, and make a sound.
+    #[test]
+    fn the_variety_is_well_formed() {
+        let mut names: Vec<&str> = Vec::new();
+        for g in CLASSICAL..NG {
+            for (k, (_, st)) in styles_of(g).iter().enumerate() {
+                let what = format!("{} style {k} ({})", GENRES[g], st.meter);
+                assert!(!names.contains(&st.meter), "{what}: a name twice");
+                names.push(st.meter);
+                let x = extra(st);
+                let some = !x.maj.is_empty() || !x.min.is_empty() || !x.grooves.is_empty() || !x.alts.is_empty();
+                assert!(some || !x.bass.is_empty() || !x.comp.is_empty() || !x.arp.is_empty(), "{what}: nothing more");
+                let bars = |p: &str| p.split_whitespace().count();
+                for (own, more) in [(st.maj, x.maj), (st.min, x.min)] {
+                    for plan in more {
+                        for tok in plan.split_whitespace().flat_map(|t| t.split('+')) {
+                            assert!(parse_harm(tok).is_some(), "{what}: {tok} in {plan}");
+                        }
+                        assert!(!own.is_empty(), "{what}: more rows for a mode it has none of: {plan}");
+                        assert_eq!(bars(plan), bars(own[0]), "{what}: {plan}");
+                        assert!(!own.contains(plan), "{what}: {plan} twice");
+                    }
+                }
+                // four rows at least for each of the modes it draws
+                let w = st.modes;
+                for (weight, own, more) in
+                    [(w[0] + w[3] + w[4], st.maj, x.maj), (w[1] + w[2] + w[5] + w[6], st.min, x.min)]
+                {
+                    assert!(weight == 0.0 || own.is_empty() || own.len() + more.len() >= 4, "{what}: a short list");
+                }
+                let has = |ch: usize, kind: u8| st.grooves.iter().any(|gr| gr.iter().any(|l| (l.0, l.1) == (ch, kind)));
+                for pair in x.grooves {
+                    for gr in pair {
+                        assert!(gr.iter().any(|l| l.2.bytes().any(|c| vel_of_test(c) > 0.0)), "{what}: no hits");
+                        for l in gr.iter() {
+                            assert_eq!(l.2.len() as u32, st.bs, "{what}: {}", l.2);
+                            assert!(has(l.0, l.1), "{what}: a drum its own lines do not play: {l:?}");
+                            assert!(l.2.bytes().all(|c| b".o-xX".contains(&c)), "{what}: {}", l.2);
+                        }
+                    }
+                }
+                for (own, more, none) in [
+                    (st.bass, x.bass, BS_NONE),
+                    (st.comp, x.comp, CP_NONE),
+                    (st.arp, x.arp, AR_NONE),
+                    (st.second, x.second, SV_NONE),
+                ] {
+                    assert!(!more.contains(&own) && !more.contains(&none), "{what}: {more:?}");
+                    assert!(more.is_empty() || own != none, "{what}: ways for a part it has not: {more:?}");
+                }
+                if st.bs != 16 {
+                    assert!(!x.bass.iter().any(|b| matches!(*b, BS_MOTOWN | BS_FUNK | BS_LOG | BS_BOSSA)), "{what}");
+                    assert!(!x.comp.contains(&CP_BOSSA) && !x.arp.contains(&AR_PLUCK), "{what}");
+                }
+                let mut r = Rng::new(7);
+                for &(ch, pal) in x.alts {
+                    assert!(st.sound.tones.iter().any(|t| t.0 == ch), "{what}: no part on channel {ch}");
+                    assert!(!pal.is_empty(), "{what}");
+                    for (name, make) in pal {
+                        let l = loudness(&make(&mut r), 60.0);
+                        assert!(l.is_finite() && l > 0.0, "{what}: {name} is silent");
+                    }
+                }
+            }
+        }
+        assert_eq!(names.len(), NAMED);
+        // the lines of a kind: a bar long, and their first the plain one
+        let r = &mut Rng::new(3);
+        for (st, bpm) in
+            [(&styles_of(ROCK)[0].1, 120.0), (&styles_of(ROCK)[2].1, 90.0), (&styles_of(SEVENTIES)[1].1, 100.0)]
+        {
+            for _ in 0..40 {
+                for gr in draw_lanes(r, st, bpm) {
+                    assert!(!gr.is_empty());
+                    for l in gr {
+                        assert_eq!(l.2.len() as u32, st.bs, "{}", l.2);
+                    }
+                }
+            }
+        }
+    }
+
     /// Each style of each genre plays: twenty seconds of each, nothing
     /// silent for long, nothing past the limiter's ceiling.
     #[test]
@@ -3587,6 +3674,110 @@ mod tests {
                 assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 0.945), "{} style {k}", GENRES[g]);
                 let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
                 assert!(rms > 0.01, "{} style {k} seed {seed}: rms {rms}", GENRES[g]);
+            }
+        }
+    }
+
+    /// What a few songs of a genre written with more variety drew (the
+    /// genre `MUSICBOX_VARIETY_GENRE` names, rock by default): each one's
+    /// style, tempo, form, keys, ways and drum lines, printed.
+    ///
+    ///     cargo test --release variety_songs -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn variety_songs() {
+        let name = std::env::var("MUSICBOX_VARIETY_GENRE").unwrap_or("rock".into());
+        let g = find(&name).expect("a genre");
+        let varied = Opts { varied: true, voices: Voices::Synth, ..Opts::default() };
+        for seed in 1..=8u64 {
+            let e = Engine::with(g, seed * 7919, varied);
+            let (song, st) = (&e.song, e.song.style());
+            let form: Vec<String> = song
+                .plan
+                .iter()
+                .zip(&song.sy.parts)
+                .zip(&song.lifts)
+                .map(|((sec, part), lift)| {
+                    let p = ["intro", "verse", "chorus", "bridge", "solo", "build", "drop", "outro"][*part as usize];
+                    if *lift != 0 { format!("{p} {} (+{lift})", sec.bars) } else { format!("{p} {}", sec.bars) }
+                })
+                .collect();
+            println!("seed {}: {} at {:.0} bpm: {}", seed * 7919, st.meter, song.bpm, form.join(", "));
+            println!(
+                "  ways (bass, chords, arpeggio, second): {:?}, the style's {:?}",
+                song.sy.vary.ways,
+                (st.bass, st.comp, st.arp, st.second)
+            );
+            for (k, side) in song.sy.vary.lanes.iter().enumerate() {
+                for l in side {
+                    let own = st.grooves[k].contains(l);
+                    println!(
+                        "  {} ch {} kind {} {}{}",
+                        ["A", "B"][k],
+                        l.0,
+                        l.1,
+                        l.2,
+                        if own { "" } else { "   (not the style's own)" }
+                    );
+                }
+            }
+        }
+    }
+
+    /// Each style plays written with more variety: several pieces of each
+    /// (whatever they draw), then each of its other ways and each of its
+    /// other pairs of drum lines in turn, a whole piece each time: nothing
+    /// silent, nothing past the limiter's ceiling, and the piece ends.
+    #[test]
+    fn every_style_plays_with_more_variety() {
+        let varied = Opts { varied: true, voices: Voices::Synth, ..Opts::default() };
+        let play = |e: &mut Engine, secs: usize, what: &str| {
+            let mut out = vec![0.0f32; 2 * secs * RATE as usize];
+            for c in out.chunks_mut(2 * CHUNK) {
+                e.render(c);
+            }
+            assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 0.945), "{what}");
+            let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+            assert!(rms > 0.01, "{what}: rms {rms}");
+        };
+        for g in CLASSICAL..NG {
+            let mut drawn = vec![0usize; styles_of(g).len()];
+            let mut seed = 0u64;
+            while drawn.iter().any(|&n| n < 3) {
+                let mut e = Engine::with(g, seed, varied);
+                let k = e.song.sy.style;
+                assert!(e.song.sy.vary.ways.is_some() && !e.song.sy.vary.lanes[0].is_empty(), "{}", GENRES[g]);
+                if drawn[k] < 3 {
+                    drawn[k] += 1;
+                    play(&mut e, 30, &format!("{} style {k} seed {seed}", GENRES[g]));
+                }
+                seed += 1;
+                assert!(seed < 600, "{} never drew each style three times", GENRES[g]);
+            }
+            for (k, (_, st)) in styles_of(g).iter().enumerate() {
+                let x = extra(st);
+                let own = (st.bass, st.comp, st.arp, st.second);
+                let mut cases: Vec<((u8, u8, u8, u8), Option<usize>)> = vec![(own, None)];
+                cases.extend(x.bass.iter().map(|&b| ((b, own.1, own.2, own.3), None)));
+                cases.extend(x.comp.iter().map(|&c| ((own.0, c, own.2, own.3), None)));
+                cases.extend(x.arp.iter().map(|&a| ((own.0, own.1, a, own.3), None)));
+                cases.extend(x.second.iter().map(|&s| ((own.0, own.1, own.2, s), None)));
+                cases.extend((0..x.grooves.len()).map(|i| (own, Some(i))));
+                let mut seed = 1000u64;
+                let mut e = loop {
+                    let e = Engine::with(g, seed, varied);
+                    if e.song.sy.style == k {
+                        break e;
+                    }
+                    seed += 1;
+                };
+                for (ways, groove) in cases {
+                    e.song.sy.vary.ways = Some(ways);
+                    if let Some(i) = groove {
+                        e.song.sy.vary.lanes = [x.grooves[i][0].to_vec(), x.grooves[i][1].to_vec()];
+                    }
+                    play(&mut e, 12, &format!("{} style {k}: ways {ways:?}, lines {groove:?}", GENRES[g]));
+                }
             }
         }
     }

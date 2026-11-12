@@ -153,6 +153,7 @@ pub(super) type Pal = &'static [(&'static str, Make)];
 pub(super) type KitPal = &'static [(&'static str, MakeKit)];
 
 /// A style's instruments and room.
+#[derive(Clone, Copy)]
 pub(super) struct Sound {
     pub(super) tones: &'static [Tone],
     pub(super) kits: &'static [KitRow],
@@ -167,6 +168,7 @@ pub(super) struct Sound {
 }
 
 /// A style (see the module's note).
+#[derive(Clone, Copy)]
 pub(super) struct Style {
     /// its meter and name, for the log ("4/4 disco")
     pub(super) meter: &'static str,
@@ -418,7 +420,7 @@ fn sy_weight(st: u32, bs: u32, beat: u32, kind: u8) -> f32 {
 /// after a leap. A cadence ends long on the tonic; a singer's cell leaves
 /// its last beat for a breath.
 #[allow(clippy::too_many_arguments)]
-fn sy_cell(
+pub(super) fn sy_cell(
     r: &mut Rng,
     bars: u32,
     bs: u32,
@@ -579,7 +581,7 @@ pub(super) fn pick_style(g: usize, r: &mut Rng) -> usize {
 }
 
 /// The note a channel's instrument is levelled at.
-fn note_of(ch: usize) -> f32 {
+pub(super) fn note_of(ch: usize) -> f32 {
     match ch {
         CH_BASS => 40.0,
         CH_DRONE => 45.0,
@@ -670,9 +672,9 @@ pub(super) struct Styled {
     pub(super) beat_steps: u32,
     pub(super) meter: &'static str,
     /// each section's part
-    parts: Vec<u8>,
+    pub(super) parts: Vec<u8>,
     /// the tunes: the verse's, the chorus's, the bridge's, the counter-line's
-    tunes: Vec<Vec<MNote>>,
+    pub(super) tunes: Vec<Vec<MNote>>,
     riff: Vec<(u16, u16, i32)>,
     arp: Vec<u8>,
     /// the tune's bar this bar, the second voice's (and the solo's) last note
@@ -680,6 +682,8 @@ pub(super) struct Styled {
     guide: i32,
     /// a mix's drummer's style (the drummer one of these)
     pub(super) dstyle: usize,
+    /// what a piece written with more variety draws for itself (varied.rs)
+    pub(super) vary: Vary,
 }
 
 /// A held chord's halves: as many as follow it unchanged, within the section.
@@ -692,19 +696,33 @@ impl Song {
         &v[self.sy.style.min(v.len() - 1)].1
     }
 
+    /// The style as this piece plays it: its ways the piece's own, when it
+    /// drew others (a piece written with more variety).
+    fn style_now(&self) -> Style {
+        let st = *self.style();
+        match self.sy.vary.ways {
+            Some((bass, comp, arp, second)) => Style { bass, comp, arp, second, ..st },
+            None => st,
+        }
+    }
+
     /// The part section `k` plays.
-    fn part_of(&self, k: usize) -> u8 {
+    pub(super) fn part_of(&self, k: usize) -> u8 {
         self.sy.parts.get(k).copied().unwrap_or(PA_VERSE)
     }
 
-    /// The style's progressions for the mode.
-    pub(super) fn sy_pool(&self) -> &'static [&'static str] {
+    /// The style's progressions for the mode (more of them for a piece
+    /// written with more variety, after its own).
+    pub(super) fn sy_pool(&self) -> Vec<&'static str> {
         let st = self.style();
         let major = matches!(self.mode, IONIAN | LYDIAN | MIXOLYDIAN);
-        match (major, st.maj.is_empty(), st.min.is_empty()) {
-            (true, false, _) | (false, _, true) => st.maj,
-            _ => st.min,
+        let maj = matches!((major, st.maj.is_empty(), st.min.is_empty()), (true, false, _) | (false, _, true));
+        let mut v = if maj { st.maj } else { st.min }.to_vec();
+        if self.opts.varied {
+            let x = extra(st);
+            v.extend(if maj { x.maj } else { x.min });
         }
+        v
     }
 
     /// The progression the section plays: the verses' (A), the choruses'
@@ -734,6 +752,8 @@ impl Song {
         self.swing = r.range(st.swing.0, st.swing.1);
         self.human = st.human;
         (self.sy.bar_steps, self.sy.beat_steps, self.sy.meter) = (st.bs, st.beat, st.meter);
+        let varied = self.opts.varied;
+        self.sy.vary = Vary::default();
         // the form: each row there by its chance
         self.plan.clear();
         self.sy.parts.clear();
@@ -751,14 +771,23 @@ impl Song {
             self.plan.push(Sec { kind, bars, mask: st.layers[part as usize], energy });
             self.sy.parts.push(part);
         }
+        if varied {
+            self.vary_form(st);
+        }
+        let r = &mut self.rng;
         let (centre, lo, hi) = st.voice;
         self.lead_center = centre;
         self.prange = (lo, hi);
         let (bs, beat, (dv, dc)) = (st.bs, st.beat, st.density);
+        // (a hook written with more variety: not one bar eight times)
+        let tune = |r: &mut Rng, d: f32, lo: i32, hi: i32| match st.tune {
+            TU_HOOK if varied => sy_hook(r, bs, beat, d, lo, hi),
+            kind => sy_melody(r, bs, beat, d, lo, hi, kind),
+        };
         self.sy.tunes = vec![
-            sy_melody(r, bs, beat, dv, lo, hi, st.tune),
-            sy_melody(r, bs, beat, dc, lo + 2, hi + 2, st.tune),
-            sy_melody(r, bs, beat, 0.5 * (dv + dc), lo, hi, st.tune),
+            tune(r, dv, lo, hi),
+            tune(r, dc, lo + 2, hi + 2),
+            tune(r, 0.5 * (dv + dc), lo, hi),
             sy_melody(r, bs, beat, (dv * 0.6).min(0.3), lo - 2, hi - 4, TU_LONG),
         ];
         self.sy.riff = sy_riff(r, bs, beat);
@@ -767,8 +796,14 @@ impl Song {
         self.ptrans = 0;
         sounds_style(st, r, s);
         self.band = band_style(st, r, s);
+        if varied {
+            self.vary_piece(st, s);
+        }
         s.dly.target = (self.step_len() * st.sound.echo.0 as f64) as f32;
         self.draw_progs();
+        if varied {
+            self.vary_keys(st);
+        }
         let major = matches!(self.mode, IONIAN | LYDIAN | MIXOLYDIAN);
         self.progs.push(halves(if major { st.cadence.0 } else { st.cadence.1 }));
     }
@@ -782,11 +817,14 @@ impl Song {
         if r.chance(0.3) {
             self.sy.arp = make_arp(r);
         }
+        if self.opts.varied {
+            self.vary_section(part);
+        }
     }
 
     /// A bar of a styled genre's music.
     pub(super) fn styled(&mut self, _s: &mut Synth, b: &mut Bar, sec: Sec, m: u32) {
-        let st = self.style();
+        let st = &self.style_now();
         let part = self.part_of(self.sec);
         let (bs, i) = (self.bar_steps(), self.sec_bar);
         if sec.kind == OUTRO && i + 1 == sec.bars {
@@ -801,8 +839,9 @@ impl Song {
         if part == PA_BUILD {
             self.sy_build(b, st, sec, m);
         } else {
-            let opens = matches!(part, PA_CHORUS | PA_DROP | PA_SOLO) && i == 0;
-            self.sy_drums(b, st, sec, m, vb as usize, fill, opens);
+            // (a part that began without its drums: their entry opens it)
+            let opens = matches!(part, PA_CHORUS | PA_DROP | PA_SOLO) && (i == 0 || (i == 4 && self.sy.vary.down));
+            self.sy_drums(b, st, sec, m, vb as usize, fill, opens, false);
         }
         if m & L_BASS != 0 {
             self.sy_bass(b, st, sec, vb);
@@ -851,21 +890,38 @@ impl Song {
         let var = (sec.energy >= 0.7 || self.var_b()) as usize;
         let fill = self.fill(sec);
         let opens = sec.kind == MAIN && self.sec_bar == 0;
-        self.sy_drums(b, st, sec, own | (m & drums), var, fill, opens);
+        self.sy_drums(b, st, sec, own | (m & drums), var, fill, opens, true);
     }
 
     /// A bar of the style `st`'s drums in this bar's meter (its lines
     /// written in its own): the A lines or the B (`var`), the layers `m`
     /// lets play, a fill closing a group, a crash opening a part.
+    /// (`guest`: a mix's drummer's lines.) A piece written with more
+    /// variety draws each fill's shape, and its even bars turn the beat a
+    /// little (`Vary::orn`).
     #[allow(clippy::too_many_arguments)]
-    fn sy_drums(&mut self, b: &mut Bar, st: &Style, sec: Sec, m: u32, var: usize, fill: u8, crash: bool) {
+    fn sy_drums(&mut self, b: &mut Bar, st: &Style, sec: Sec, m: u32, var: usize, fill: u8, crash: bool, guest: bool) {
         let (bs, beat) = (self.bar_steps(), self.beat_steps());
         let beats = (bs / beat).max(1);
         let (h, e) = (self.human, sec.energy);
+        let lanes = self.sy_lanes(st, var, guest);
+        // a fill's shape (0: as the style has it; `fill_steps`), and the
+        // bar's turn: a kick or a ghost more, the hats' rest, a kick less
+        let filled = fill > 0 && !matches!(st.fill, FI_NONE | FI_SOFT);
+        let shape = if self.opts.varied && filled { self.rng.below(5) as u8 } else { 0 };
+        let mut orn = if self.opts.varied && fill == 0 && self.sec_bar % 2 == 1 { self.sy.vary.orn } else { (0, 0) };
+        // (a kick on every beat stays on every beat)
+        let every = |l: &Lane| (0..st.bs).step_by(st.beat as usize).all(|q| vel_of(l.2.as_bytes()[q as usize]) > 0.0);
+        if orn.0 == ORN_LESS && lanes.iter().any(|l| l.0 == CH_KICK && l.2.len() as u32 == st.bs && every(l)) {
+            orn = (0, 0);
+        }
+        let orn_at = orn_step(orn, bs, beat);
         // where the fill takes over (the last beat; a big roll the last two)
         let from = match (st.fill, fill) {
             (FI_NONE | FI_SOFT, _) | (_, 0) => bs,
+            _ if shape == 3 && fill == 1 => bs,
             (FI_SNARE, 2) if beats >= 4 => bs - 2 * beat,
+            _ if shape == 3 && beats >= 4 => bs - 2 * beat,
             _ => bs.saturating_sub(beat),
         };
         let layer = |ch: usize| match ch {
@@ -876,13 +932,18 @@ impl Song {
             _ => L_OHAT,
         };
         let r = &mut self.rng;
-        for &(ch, kind, pat) in st.grooves[var] {
+        for &(ch, kind, pat) in &lanes {
             if m & layer(ch) == 0 || pat.is_empty() {
                 continue;
             }
             let p = pat.as_bytes();
             for w in 0..bs {
                 if w >= from && ch != CH_CYM && !(ch == CH_KICK && w == from) {
+                    continue;
+                }
+                if (orn.0 == ORN_REST && ch == CH_HAT && w + beat / 2 >= bs)
+                    || (orn.0 == ORN_LESS && ch == CH_KICK && w == orn_at)
+                {
                     continue;
                 }
                 let Some(q) = map_step(w, bs, beat, st.bs, st.beat) else { continue };
@@ -892,6 +953,20 @@ impl Song {
                 }
                 let late = r.range(0.0, if ch == CH_KICK { h * 0.3 } else { h });
                 b.hit(w as f32, late, ch, kind, v * (0.8 + 0.25 * e).min(1.0) * r.range(0.88, 1.0));
+            }
+        }
+        // the bar's turn: a kick more (where none is), a ghost on the snare
+        if matches!(orn.0, ORN_KICK | ORN_GHOST) && orn_at < from {
+            let ch = if orn.0 == ORN_KICK { CH_KICK } else { CH_SNARE };
+            let line = lanes.iter().find(|l| l.0 == ch && (ch == CH_KICK || l.1 == 0));
+            if let Some(&(_, kind, pat)) = line.filter(|_| m & layer(ch) != 0) {
+                let p = pat.as_bytes();
+                let there =
+                    map_step(orn_at, bs, beat, st.bs, st.beat).is_some_and(|q| vel_of(p[q as usize % p.len()]) > 0.0);
+                if !there {
+                    let v = if ch == CH_KICK { 0.7 } else { 0.3 };
+                    b.hit(orn_at as f32, r.range(0.0, h), ch, kind, v * (0.8 + 0.25 * e).min(1.0));
+                }
             }
         }
         if fill > 0 && m & (L_SNARE | L_PERC) != 0 {
@@ -906,8 +981,12 @@ impl Song {
                 _ => {
                     let n = (bs - from).max(1);
                     for (j, w) in (from..bs).enumerate() {
+                        if !fill_steps(shape, j as u32, n, beat) {
+                            continue;
+                        }
                         let x = (j as f32 + 1.0) / n as f32;
-                        if st.fill == FI_TOMS && fill == 2 && m & L_PERC != 0 {
+                        // (shape 4: the snare into the toms)
+                        if st.fill == FI_TOMS && fill == 2 && m & L_PERC != 0 && (shape != 4 || 2 * j as u32 >= n) {
                             let kind = [TOM_HI, TOM_HI, TOM_MID, TOM_MID, TOM_LO, TOM_LO][(j * 6 / n as usize).min(5)];
                             b.hit(w as f32, r.range(0.0, h), CH_PERC, kind, 0.55 + 0.35 * x);
                         } else {
@@ -943,7 +1022,7 @@ impl Song {
             }
         }
         // the beat's hats go on under it
-        self.sy_drums(b, st, sec, m & (L_HAT | L_OHAT), 0, 0, false);
+        self.sy_drums(b, st, sec, m & (L_HAT | L_OHAT), 0, 0, false, false);
     }
 
     /// The bass's bar.
@@ -960,7 +1039,8 @@ impl Song {
         let third = |x: Harm, n: i32| n + if q_iv(x.q)[1] == 3 { 3 } else { 4 };
         let fifth = |n: i32| if n + 7 > lo + 16 { n - 5 } else { n + 7 };
         let sc: Vec<i32> = MODES[self.mode].iter().map(|&x| (self.root + x).rem_euclid(12)).collect();
-        let kick: Vec<u32> = st.grooves[vb as usize]
+        let lanes = self.sy_lanes(st, vb as usize, false);
+        let kick: Vec<u32> = lanes
             .iter()
             .find(|l| l.0 == CH_KICK)
             .map(|l| {
@@ -1541,8 +1621,9 @@ impl Song {
         let vel = 0.7 + 0.25 * sec.energy;
         let legato = if st.tune == TU_LONG { 1.0 } else { 0.9 };
         let double = if m & L_CTR != 0 { st.second } else { SV_NONE };
-        for j in 0..self.sy.tunes[k].len() {
-            let n = self.sy.tunes[k][j];
+        let lift = self.sy.vary.lift;
+        let tune = self.tune_now(k);
+        for (j, &n) in tune.iter().enumerate() {
             if n.step as u32 / bs != pb {
                 continue;
             }
@@ -1554,6 +1635,10 @@ impl Song {
             let slide = st.tune == TU_LONG && j > 0 && self.rng.chance(0.3);
             let len = n.len as f32 * legato;
             b.note(w as f32, late, CH_LEAD, p, n.vel * vel, len, slide);
+            if lift && strong {
+                // the last chorus: the tune's strong notes an octave up as well
+                b.note(w as f32, late + 0.003, CH_LEAD, p + 12, n.vel * vel * 0.5, len, false);
+            }
             match double {
                 SV_THIRDS => {
                     let q = tonic + self.mel_pitch(n.deg + self.ptrans - 2, c, strong);
@@ -1648,7 +1733,7 @@ impl Song {
                 };
                 let pb = (self.sy.tune_bar + 7) % 8;
                 let mut busy = vec![false; bs as usize];
-                for n in self.sy.tunes[k].iter().filter(|n| n.step as u32 / bs == pb) {
+                for n in self.tune_now(k).iter().filter(|n| n.step as u32 / bs == pb) {
                     let w = n.step as u32 % bs;
                     for x in busy[w as usize..(w + n.len as u32).min(bs) as usize].iter_mut() {
                         *x = true;

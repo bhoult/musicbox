@@ -139,6 +139,9 @@ mod styled;
 mod styles;
 #[path = "music/tuned.rs"]
 mod tuned;
+/// More variety for a genre's songs (`Opts::varied`).
+#[path = "music/varied.rs"]
+mod varied;
 #[path = "music/western.rs"]
 mod western;
 use celtic::*;
@@ -146,6 +149,7 @@ use indonesian::*;
 use starconflict::*;
 use styled::*;
 use styles::*;
+use varied::*;
 use western::*;
 
 /// Whether `genre`'s pieces end on a final hit (its last bar its own in a mix,
@@ -3545,9 +3549,14 @@ impl Song {
     /// A progression from the genre's pool: eight bars, or sixteen with each
     /// chord held two (ambient, sometimes).
     fn draw_prog(&mut self) -> Vec<Harm> {
-        let pl = if is_styled(self.genre) { self.sy_pool() } else { pool(self.genre, self.mode) };
+        let pl = if is_styled(self.genre) { self.sy_pool() } else { self.pool_now() };
         let r = &mut self.rng;
-        let v = halves(r.pick(pl));
+        let mut row = r.pick(&pl);
+        // (written with more variety: the rows a dozen styles share, half as often)
+        if self.opts.varied && pl.len() > 2 && COMMON_ROWS.contains(&row) && r.chance(0.5) {
+            row = r.pick(&pl);
+        }
+        let v = halves(row);
         if self.genre == AMBIENT && r.chance(0.35) {
             v.chunks(2).flat_map(|c| [c[0], c[1], c[0], c[1]]).collect()
         } else {
@@ -3666,6 +3675,12 @@ impl Song {
                 _ => &[L_HAT],
             };
             self.mute = if self.rng.chance(0.5) { self.rng.pick(opt) } else { 0 };
+        }
+        if self.opts.varied && is_styled(self.genre) && sec.kind == MAIN && matches!(self.sec_bar, 0 | 4) {
+            // (written with more variety: a part's halves each with what the
+            // section drew to sit out; an eight-bar part has no phrase's
+            // start past its first for the rule above)
+            self.mute = self.sy.vary.out[(self.sec_bar / 4) as usize];
         }
         let m = sec.mask & !self.mute;
         for w in self.walk.iter_mut() {
@@ -3912,6 +3927,9 @@ impl Song {
             _ => self.piece_polka(s),
         }
         self.fuse(s);
+        if self.opts.varied {
+            self.vary_guest();
+        }
         if self.opts.tuned
             && let Some(t) = tuning(self.genre)
         {
@@ -4038,6 +4056,9 @@ impl Song {
             WESTERN => self.western_section(),
             g if is_styled(g) => self.styled_section(s),
             _ => self.polka_section(),
+        }
+        if self.opts.varied {
+            self.vary_guest_section();
         }
         self.dress(s, dress);
     }
@@ -15848,26 +15869,32 @@ impl Voices {
 
 /// How the music is made, besides its genre and seed: each genre's settings
 /// as written or as the optimiser tuned them (`tuned`), its tunes by the
-/// rules or by the network (`net_tunes`), and what plays its instruments.
+/// rules or by the network (`net_tunes`), what plays its instruments, and
+/// whether its songs are written with more variety (`varied`: more beats,
+/// chords, players and ways to draw on in each genre, tunes that change as
+/// they come round, parts that sit out; see music/varied.rs).
 /// The default is the music as written (a seed's music as it always was).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Opts {
     pub tuned: bool,
     pub net_tunes: bool,
     pub voices: Voices,
+    pub varied: bool,
 }
 
 impl Opts {
-    /// As one number (for an atomic, and the browser), and back.
+    /// As one number (for an atomic, and the browser), and back: `tuned`,
+    /// `net_tunes`, the voices in two bits, `varied`.
     pub fn code(self) -> u32 {
-        self.tuned as u32 | (self.net_tunes as u32) << 1 | (self.voices as u32) << 2
+        self.tuned as u32 | (self.net_tunes as u32) << 1 | (self.voices as u32) << 2 | (self.varied as u32) << 4
     }
 
     pub fn from_code(c: u32) -> Opts {
         Opts {
             tuned: c & 1 != 0,
             net_tunes: c & 2 != 0,
-            voices: Voices::ALL[((c >> 2) as usize).min(Voices::ALL.len() - 1)],
+            voices: Voices::ALL[((c >> 2 & 3) as usize).min(Voices::ALL.len() - 1)],
+            varied: c & 16 != 0,
         }
     }
 
@@ -15883,6 +15910,9 @@ impl Opts {
         }
         if self.voices != Voices::Recorded {
             s += &format!(" --voices {}", self.voices.name());
+        }
+        if !self.varied {
+            s += " --variety less";
         }
         s
     }
@@ -15905,9 +15935,11 @@ impl Opts {
 /// starts the next, an engine seeded `run_seed`), which song of that run
 /// (from 1), the length asked of it (0: its own) and how it is made.
 /// Written `lo-fi.2817.0.3`, then `.180s` and the settings that are not as
-/// they come (`o` optimised, `t` the network's tunes, `s` the synthesiser's
-/// instruments, `n` the network's), and `~` when the length was changed
-/// earlier in the run or as it played: its notes may then come out otherwise.
+/// the music first came (`o` optimised, `t` the network's tunes, `s` the
+/// synthesiser's instruments, `n` the network's, `v` written with more
+/// variety: an id without it is a song of before there was any, and plays
+/// as it did), and `~` when the length was changed earlier in the run or as
+/// it played: its notes may then come out otherwise.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SongId {
     pub music: usize,
@@ -15951,6 +15983,7 @@ impl SongId {
                     't' => id.opts.net_tunes = true,
                     's' => id.opts.voices = Voices::Synth,
                     'n' => id.opts.voices = Voices::Net,
+                    'v' => id.opts.varied = true,
                     _ => return None,
                 }
             }
@@ -15967,12 +16000,17 @@ impl std::fmt::Display for SongId {
             write!(f, ".{}s", self.length.round())?;
         }
         let o = self.opts;
-        let set: String =
-            [(o.tuned, 'o'), (o.net_tunes, 't'), (o.voices == Voices::Synth, 's'), (o.voices == Voices::Net, 'n')]
-                .iter()
-                .filter(|x| x.0)
-                .map(|x| x.1)
-                .collect();
+        let set: String = [
+            (o.tuned, 'o'),
+            (o.net_tunes, 't'),
+            (o.voices == Voices::Synth, 's'),
+            (o.voices == Voices::Net, 'n'),
+            (o.varied, 'v'),
+        ]
+        .iter()
+        .filter(|x| x.0)
+        .map(|x| x.1)
+        .collect();
         if !set.is_empty() {
             write!(f, ".{set}")?;
         }
@@ -17421,9 +17459,14 @@ const CENSUS_MIX_SONGS: usize = 8;
 fn census_of(id: usize, seed: u64, songs: usize) -> Vec<u16> {
     let mut buf = vec![0.0f32; 2 * CHUNK];
     samples::census(true);
-    let mut e = Engine::with(id, seed, Opts::default());
-    while e.song.log.len() <= songs {
-        e.render(&mut buf);
+    // (a third of them as songs first were, the rest written with more
+    // variety, as the page plays them: `Opts::varied`)
+    let plain = songs.div_ceil(3);
+    for (n, varied) in [(plain, false), (songs - plain, true)] {
+        let mut e = Engine::with(id, seed, Opts { varied, ..Opts::default() });
+        while n > 0 && e.song.log.len() <= n {
+            e.render(&mut buf);
+        }
     }
     samples::census(false)
 }
@@ -17678,7 +17721,7 @@ mod tests {
         p.windows(2).map(|w| w[1].0 - w[0].0).collect()
     }
 
-    const SYNTH: Opts = Opts { tuned: false, net_tunes: false, voices: Voices::Synth };
+    const SYNTH: Opts = Opts { tuned: false, net_tunes: false, voices: Voices::Synth, varied: false };
 
     /// The mix played on for `secs`.
     fn play(m: &mut Mix, secs: f64) {
@@ -17755,6 +17798,249 @@ mod tests {
         m.length = 120.0;
         play(&mut m, 0.5);
         assert!(!playing(&m).1.exact);
+    }
+
+    /// How much one genre's songs differ, written as they were and with more
+    /// variety: for each genre, over the first song of 40 seeds each way (48
+    /// with `MUSICBOX_VARIETY_SONGS`), how many different bars its drums
+    /// play, how many different progressions and sets of instruments its
+    /// songs have, how far apart their tempos are, and how much of a song is
+    /// a bar it has already played. Printed as a table (tab-separated):
+    ///
+    ///     cargo test --release variety_table -- --ignored --nocapture
+    ///
+    /// With the recordings installed an instrument is its recording, else
+    /// its synthesiser patch's shape.
+    #[test]
+    #[ignore]
+    fn variety_table() {
+        samples::configure(None, false);
+        let sampled = samples::load_now();
+        let songs: u64 = std::env::var("MUSICBOX_VARIETY_SONGS").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+        let voices = if sampled { Voices::Recorded } else { Voices::Synth };
+        let measure = |g: usize, varied: bool| {
+            let opts = Opts { varied, voices, ..Opts::default() };
+            samples::hidden(opts.synth(), opts.nets(), || {
+                let mut drums = std::collections::BTreeSet::new();
+                let mut progs = std::collections::BTreeSet::new();
+                let mut bands = std::collections::BTreeSet::new();
+                let (mut bpms, mut repeats, mut bars_all, mut secs) = (Vec::new(), 0usize, 0usize, 0.0f64);
+                for seed in 1..=songs {
+                    let mut e = Engine::with(g, seed * 7919, opts);
+                    let mut ev = Vec::new();
+                    let mut seen: Vec<Vec<u32>> = Vec::new();
+                    let mut band = std::collections::BTreeSet::new();
+                    bpms.push(e.song.bpm);
+                    for p in &e.song.progs {
+                        progs.insert(p.iter().map(|h| format!("{h:?}")).collect::<Vec<_>>().join(" "));
+                    }
+                    let mut bars = 0;
+                    while bars < 600 {
+                        let t0 = e.pos;
+                        let len = e.song.bar(&mut e.syn, t0, &mut ev);
+                        if e.song.log.len() > 1 {
+                            break;
+                        }
+                        let step = e.song.step_len();
+                        let (mut all, mut hit) = (Vec::new(), Vec::new());
+                        for &(t, x) in &ev {
+                            let st = ((t as f64 - t0) / step).round().max(0.0) as u32;
+                            match x {
+                                Ev::Note { ch, note, .. } => {
+                                    all.push(st << 16 | (ch as u32) << 8 | note as u32);
+                                    let p = e.syn.ch[ch as usize].patch;
+                                    let shape = (p.wave as u32) << 8 | (p.unison as u32) << 4 | (p.fm > 0.0) as u32;
+                                    band.insert((ch, if p.samp > 0 { p.samp as u32 } else { 1 << 20 | shape }));
+                                }
+                                Ev::Hit { ch, kind, .. } => {
+                                    let k = st << 16 | (ch as u32 + 100) << 8 | kind as u32;
+                                    all.push(k);
+                                    hit.push(k);
+                                    if let Some(d) = e.syn.ch[ch as usize].drums.get(kind as usize) {
+                                        band.insert((ch + 100, d.samp as u32));
+                                    }
+                                }
+                                Ev::Riser { .. } => {}
+                            }
+                        }
+                        for v in [&mut all, &mut hit] {
+                            v.sort_unstable();
+                            v.dedup();
+                        }
+                        if !hit.is_empty() {
+                            drums.insert(hit);
+                        }
+                        if !all.is_empty() {
+                            repeats += seen.contains(&all) as usize;
+                            bars_all += 1;
+                            seen.push(all);
+                        }
+                        e.pos += len;
+                        secs += len / SR as f64;
+                        ev.clear();
+                        bars += 1;
+                    }
+                    bands.insert(band);
+                }
+                let mean = bpms.iter().sum::<f64>() / bpms.len() as f64;
+                let sd = (bpms.iter().map(|b| (b - mean) * (b - mean)).sum::<f64>() / bpms.len() as f64).sqrt();
+                (
+                    drums.len(),
+                    progs.len(),
+                    bands.len(),
+                    sd,
+                    repeats as f64 / bars_all.max(1) as f64,
+                    secs / songs as f64,
+                )
+            })
+        };
+        println!("genre\tdrum bars\t\tprogressions\t\tbands\t\ttempo sd\t\trepeated bars\t\tseconds a song");
+        println!("\tless\tmore\tless\tmore\tless\tmore\tless\tmore\tless\tmore\tless\tmore");
+        for g in 0..NG {
+            let (a, b) = (measure(g, false), measure(g, true));
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{:.1}\t{:.0}%\t{:.0}%\t{:.0}\t{:.0}",
+                GENRES[g].to_lowercase(),
+                a.0,
+                b.0,
+                a.1,
+                b.1,
+                a.2,
+                b.2,
+                a.3,
+                b.3,
+                100.0 * a.4,
+                100.0 * b.4,
+                a.5,
+                b.5
+            );
+        }
+    }
+
+    /// Which recordings each genre's songs play, written as they were and
+    /// with more variety (40 songs of each, heard as `--web-pack` hears
+    /// them): what the variety adds to what a genre's page fetches. Needs
+    /// the recordings installed; printed, a genre a line:
+    ///
+    ///     cargo test --release variety_recordings -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn variety_recordings() {
+        samples::configure(None, false);
+        if !samples::load_now() {
+            println!("no recordings installed");
+            return;
+        }
+        let bank = samples::bank().expect("loaded");
+        let mut names: std::collections::HashMap<u16, String> = std::collections::HashMap::new();
+        for p in samples::GM_PRESETS {
+            if let Some(id) = bank.gm(p) {
+                names.insert(id, p.to_string());
+            }
+        }
+        for kit in samples::GM_KITS {
+            for kit in [kit.to_string(), format!("{kit} (SoundFont)")] {
+                for key in 0..128u8 {
+                    if let Some(id) = bank.drum(&kit, key) {
+                        names.entry(id).or_insert(format!("kit {kit}"));
+                    }
+                }
+            }
+        }
+        let manifest = std::fs::read_to_string(samples::default_dir().join("manifest.tsv")).unwrap_or_default();
+        for line in manifest.lines().filter(|l| !l.starts_with('#')) {
+            let mut f = line.split('\t');
+            if let (Some(inst), Some(art)) = (f.next(), f.next()) {
+                for art in [art, "auto"] {
+                    if let Some(id) = bank.multi(inst, art) {
+                        names.insert(id, format!("{inst} (recorded)"));
+                    }
+                }
+            }
+        }
+        let heard = |g: usize, varied: bool| {
+            let mut buf = vec![0.0f32; 2 * CHUNK];
+            samples::census(true);
+            for run in 0..4u64 {
+                let mut e = Engine::with(g, 0x5EED + g as u64 + 1000 * run, Opts { varied, ..Opts::default() });
+                while e.song.log.len() <= 10 {
+                    e.render(&mut buf);
+                }
+            }
+            let mut v: Vec<String> =
+                samples::census(false).iter().map(|id| names.get(id).cloned().unwrap_or(format!("#{id}"))).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let lines = std::sync::Mutex::new(vec![String::new(); NG]);
+        std::thread::scope(|sc| {
+            for _ in 0..7 {
+                sc.spawn(|| {
+                    loop {
+                        let g = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if g >= NG {
+                            break;
+                        }
+                        let (plain, more) = (heard(g, false), heard(g, true));
+                        let added: Vec<&String> = more.iter().filter(|n| !plain.contains(n)).collect();
+                        let gone = plain.iter().filter(|n| !more.contains(n)).count();
+                        let line = format!(
+                            "{}\t{} as they were, {} with more variety ({} of the first not heard); added: {}",
+                            GENRES[g].to_lowercase(),
+                            plain.len(),
+                            more.len(),
+                            gone,
+                            if added.is_empty() { "none".to_string() } else { format!("{added:?}") }
+                        );
+                        lines.lock().unwrap_or_else(|e| e.into_inner())[g] = line;
+                    }
+                });
+            }
+        });
+        for l in lines.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            println!("{l}");
+        }
+    }
+
+    /// A song written with more variety says so in its id (a v among its
+    /// letters), comes back from it byte for byte, and an id without the
+    /// letter is as it was.
+    #[test]
+    fn a_varied_song_comes_back_from_its_id() {
+        for (text, varied) in [
+            ("rock.41.0.1.v", true),
+            ("celtic+ska.2817.0.2.180s.tv", true),
+            ("lo-fi.7.3.2.sv", true),
+            ("rock.41.0.1", false),
+            ("techno.42.0.1.40s.s", false),
+            ("celtic+ska.2817.0.2.180s.t", false),
+        ] {
+            let id = SongId::parse(text).expect("an id");
+            assert_eq!((id.opts.varied, id.to_string().as_str()), (varied, text));
+        }
+        assert!(SongId::parse("ROCK.41.0.1.V").expect("any case").opts.varied);
+        let more = Opts { varied: true, ..SYNTH };
+        for genre in [ROCK, EIGHTIES, mix_id(SKA, Some(SEVENTIES)), mix_id(CORPORATE, Some(TECHNO)), TECHNO, WESTERN] {
+            let mut m = Mix::with(genre, 42, more);
+            m.length = 30.0;
+            play(&mut m, 3.0);
+            for song in 1..=2 {
+                let (live, id) = playing(&m);
+                assert!(id.exact && id.opts.varied && id.to_string().ends_with('v'), "{id}");
+                assert!(id.song >= song, "{id}");
+                let again = SongId::parse(&id.to_string()).expect("an id");
+                let pcm = render_piece(live, id.length);
+                assert!(render_piece(Engine::played_to(&again), again.length) == pcm, "{id} played to");
+                // and it is not the song the id without the letter names
+                let plain = SongId { opts: SYNTH, ..again };
+                if is_styled(parts(genre).0) {
+                    assert!(render_piece(Engine::played_to(&plain), plain.length) != pcm, "{id} as {plain}");
+                }
+                play(&mut m, 60.0);
+            }
+        }
     }
 
     #[test]
@@ -18023,12 +18309,21 @@ mod tests {
         for tuned in [false, true] {
             for net_tunes in [false, true] {
                 for voices in Voices::ALL {
-                    let o = Opts { tuned, net_tunes, voices };
+                    let o = Opts { tuned, net_tunes, voices, varied: false };
                     assert_eq!(Opts::from_code(o.code()), o);
                 }
             }
         }
-        assert_eq!(Opts::default().flags(), "");
+        // (the apps' default: more variety)
+        assert_eq!(Opts { varied: true, ..Opts::default() }.flags(), "");
+        assert_eq!(Opts::default().flags(), " --variety less");
+        for c in 0..32 {
+            let o = Opts::from_code(c);
+            assert_eq!(o.varied, c & 16 != 0);
+            if c >> 2 & 3 < 3 {
+                assert_eq!(o.code(), c);
+            }
+        }
         assert_eq!(Voices::parse("net"), Some(Voices::Net));
         assert_eq!(Voices::Net.next(), Voices::Synth);
     }
@@ -18093,6 +18388,26 @@ mod tests {
                 for piece in 0..3 {
                     let last = song.plan.last().expect("a plan");
                     assert_eq!(last.kind, OUTRO, "{} seed {seed} piece {piece}: ends on kind {}", name(id), last.kind);
+                    song.new_piece(&mut syn);
+                }
+            }
+        }
+        // written with more variety too (its form's turns among them): an
+        // intro first where the genre has one, a key for every section, and
+        // each section a part of its own
+        for id in (0..IDS).filter(|&id| canon(id) == id && (is_styled(parts(id).0) || parts(id).1.is_none())) {
+            for seed in 0..12u64 {
+                let mut syn = Synth::new(id);
+                let mut song = Song::with(id, seed, &mut syn, Opts { varied: true, ..Opts::default() });
+                for piece in 0..3 {
+                    let what = format!("{} seed {seed} piece {piece}", name(id));
+                    assert_eq!(song.plan.last().expect("a plan").kind, OUTRO, "{what}");
+                    if is_styled(song.genre) {
+                        assert!(song.plan.iter().all(|s| s.bars >= 4), "{what}");
+                        assert_eq!(song.lifts.len(), song.plan.len(), "{what}");
+                        assert_eq!(song.sy.parts.len(), song.plan.len(), "{what}");
+                        assert_eq!(song.plan[0].kind, INTRO, "{what}");
+                    }
                     song.new_piece(&mut syn);
                 }
             }
