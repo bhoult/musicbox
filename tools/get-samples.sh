@@ -24,14 +24,14 @@
 #     pinned by size and sha256, of which the folders taken are unpacked: a drum kit (each hit's
 #     microphones mixed to stereo), two electric basses, fingered and picked, a clean electric
 #     guitar and the same one damped, a double bass plucked, and an acoustic guitar.
-#   - FreePats' Spanish Classical Guitar (github.com/freepats), CC0 1.0 (public domain), as a
-#     git clone pinned to a commit like Versilian's (its releases are .7z): a nylon-strung
-#     guitar.
+#   - FreePats' Spanish Classical Guitar and Electric Guitar FSBS dist1 (github.com/freepats),
+#     CC0 1.0 (public domain), as git clones pinned to a commit like Versilian's (their releases
+#     are .7z): a nylon-strung guitar, and an electric guitar through an amplifier.
 # and writes into DEST: the SoundFont files; multi/<instrument>/<articulation>/*.wav (48 kHz,
 # 16-bit, trimmed); manifest.tsv (what the sampler reads); sources.tsv (each file's origin);
 # SOURCES.md; and licenses/ (each source's license and readme, verbatim).
 #
-# Disk space: about 1.3 GB in DEST (216 MB SoundFont, about 1.1 GB multi/), plus about 3 GB of
+# Disk space: about 1.3 GB in DEST (216 MB SoundFont, about 1.1 GB multi/), plus about 3.5 GB of
 # git clones and 2.7 GB of zips (and what is unpacked of them) in the cache
 # (MUSICBOX_SAMPLES_SRC, default ~/.cache/musicbox/samples-src), which is only needed to rebuild
 # multi/ and can be deleted afterwards.

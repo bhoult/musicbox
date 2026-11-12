@@ -1882,13 +1882,15 @@ pub fn load(dir: &Path) -> Result<Bank, String> {
 /// The electric basses (Karoryfer's); a clean electric guitar (for the
 /// SoundFont's clean guitar and its brighter funk guitar, each at its own
 /// levels) and the same one damped as it is played, a double bass plucked
-/// and an acoustic guitar (Karoryfer's too); a nylon-strung guitar
-/// (FreePats').
+/// and an acoustic guitar (Karoryfer's too); a nylon-strung guitar and an
+/// electric guitar through an amplifier (FreePats'), the one for the
+/// distorted guitar and the overdriven, each at its own levels.
 ///
 /// The windows: a strummed or picked note's first 0.4 s (most are shorter
 /// than a second, and the recordings speak harder than the SoundFont's:
 /// over a whole second they would come out quieter where it matters); the
-/// damped guitar's 0.15 s (ska's chop is 0.14 s long).
+/// damped guitar's 0.15 s (ska's chop is 0.14 s long); an amplifier's
+/// held notes a second.
 type Standing = (&'static str, &'static str, &'static str, f32, f32, bool);
 const GM_RECORDED: &[Standing] = &[
     ("Fingered Bass", "bass_finger", "pluck", 36.0, 1.0, false),
@@ -1899,6 +1901,8 @@ const GM_RECORDED: &[Standing] = &[
     ("Acoustic Bass", "bass_upright", "pluck", 36.0, 0.4, true),
     ("Steel String Guitar", "guitar_steel", "pluck", 57.0, 0.4, true),
     ("Nylon String Guitar", "guitar_nylon", "pluck", 60.0, 0.4, true),
+    ("Distortion Guitar", "guitar_dist", "pluck", 52.0, 1.0, true),
+    ("Overdrive Guitar", "guitar_dist", "pluck", 52.0, 1.0, true),
 ];
 
 /// The SoundFont kits a recorded kit (the manifest's instrument "kit", a

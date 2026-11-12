@@ -10637,6 +10637,7 @@ fn ska_rec_more(style: u8, ch: usize, p: &Patch) -> f32 {
     let db = match (ch, style) {
         (CH_KEYS, _) if stands("Palm Muted Guitar") => 8.8,
         (CH_KEYS, SKS_FIRST | SKS_TWO) if stands("Funk Guitar") => 4.0,
+        (CH_DRONE, SKS_THIRD) if stands("Distortion Guitar") || stands("Overdrive Guitar") => -1.8,
         (CH_PAD, SKS_TWO) if is("Accordion") => 2.2,
         (CH_PAD, SKS_THIRD) if is("tenor_sax:auto") => 6.5,
         (CH_LEAD, SKS_TWO) if is("harmonica:sus") => 3.8,

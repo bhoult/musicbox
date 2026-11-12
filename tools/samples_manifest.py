@@ -47,6 +47,10 @@ from concurrent.futures import ThreadPoolExecutor
 REPOS = {
     "VSCO-2-CE": ("https://github.com/sgossner/VSCO-2-CE", "440300901dfe9275fd84e0b7763af1f8443ae62e"),
     "VCSL": ("https://github.com/sgossner/VCSL", "c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e"),
+    # FreePats' electric guitar FSBS, through an amplifier (2026-11-12): its releases are .7z, so
+    # the repository itself (the same files, as FLAC), at the commit of its 2022-09-11 release
+    "FSBS-dist1": ("https://github.com/freepats/electric-guitar-FSBS-dist1",
+                   "bbae17f0ad16f5edd7ec22178d181f3e3f6696fa"),
     # FreePats' Spanish classical guitar (its v1.0.0, 2019-06-18)
     "Spanish-Classical-Guitar": ("https://github.com/freepats/spanish-classical-guitar",
                                  "6f4eb1b092acc88f5448cea1a0001bd07b971af8"),
@@ -580,6 +584,19 @@ PLUCKED = [
     ("guitar_steel", "pluck", "Shinyguitar", "Shinyguitar/Samples/acoustic",
      [("vl2", r"_vl2_rr[12]_1\.wav$"), ("vl3", r"_vl3_rr[12]_1\.wav$"), ("vl4", r"_vl4_rr1_1\.wav$")], 0, None),
 ]
+# FreePats' electric guitar FSBS dist1 (a Fender's bridge pickups, recorded direct, then through
+# an amplifier and effects): 19 notes C2-C#6, two to five semitones apart, named as they sound; a
+# soft and a hard dynamic for 13 of them and one for six of the top eight (lent to both), two of
+# its four takes; its stereo (an effect's, 10-28 dB under its middle) folded to one channel. It
+# holds a note for seconds at one level (10-30 s recorded); taken as plucked, 4.5 s of each. Its
+# brighter twin, dist2, left out: as the distorted guitar it tripled the Chiptune score the
+# taggers of tools/validate gave the rock styles, where this one, for the distorted and the
+# overdriven guitar alike, doubled it and cut their Video game music score by a third.
+FSBS_ONE = r"^(G4|B4|F5|G#5|A#5|C#6)_"
+FSBS_LAYERS = [("soft", r"_soft_|" + FSBS_ONE), ("hard", r"_s\d_\d\d\.")]
+PITCHED += [
+    ("guitar_dist", "pluck", "FSBS-dist1", "samples/bridge", FSBS_LAYERS, r"_0[12]\.flac$"),
+]
 # FreePats' Spanish classical guitar (a nylon-strung guitar, one microphone, 2008; filtered for
 # its noise by its maker): one dynamic, one take, 39 notes E2-C6 named as they sound, a semitone
 # apart but for six. Its nine files under E2, below a guitar's range (stretched ones), left out.
@@ -587,9 +604,9 @@ PITCHED += [
     ("guitar_nylon", "pluck", "Spanish-Classical-Guitar", "samples", [("mf", r"")],
      r"^(?!(?:G|G#|A|A#|B)1\.|(?:C|C#|D|D#)2\.)"),
 ]
-ROOT_FIX_FOLDER.update({("Spanish-Classical-Guitar", "samples"): 0})
+ROOT_FIX_FOLDER.update({("FSBS-dist1", "samples/bridge"): 0, ("Spanish-Classical-Guitar", "samples"): 0})
 # The sets whose recordings' two channels are taken as one.
-MONO = set()
+MONO = {("guitar_dist", "pluck")}
 # Tuning by note: (source, folder) -> {the note as named: cents its files sound above it}, each
 # file lowered by that much when converted, as TUNE_FILE's are. A fretted string sounds sharp
 # when it is plucked hard and low on the neck, and these instruments were not tuned to the cent:
@@ -626,6 +643,11 @@ TUNE_NOTE = {
     ("Black-And-Green-Guitars", "Samples/green/stac"): {
         52: 23, 54: 21, 56: 28, 58: 17, 60: 14, 62: 9, 64: 13, 66: 7, 68: 18, 70: 15, 72: 7, 74: 6,
         76: 6, 78: 3, 80: 1, 82: 1, 84: 1, 86: -2, 88: -6, 90: -9, 92: -7, 94: -9, 96: -13, 98: -9,
+    },
+    ("FSBS-dist1", "samples/bridge"): {
+        36: {"hard": -6, "soft": 3}, 40: {"hard": 3, "soft": -9}, 41: -2,
+        45: {"hard": 2, "soft": -17}, 48: 0, 50: {"hard": 1, "soft": -4}, 52: 3, 55: -1, 59: 3,
+        61: 1, 64: -1, 67: 1, 71: 1, 72: 0, 74: 4, 77: 3, 80: 1, 82: 2, 85: -3,
     },
     # (a string plucked harder sounds sharper: by dynamic)
     ("Meatbass", "Meatbass/Samples/pizz"): {
@@ -684,6 +706,7 @@ KIT_NAMES = {"kit"}
 
 UNPITCHED_NAMES = {u[0] for u in UNPITCHED} | KIT_NAMES
 LICENSE_FILES = {"VSCO-2-CE": ["LICENSE", "README.md", "Readme.txt"], "VCSL": ["LICENSE", "README.md"],
+                 "FSBS-dist1": ["LICENSE.txt", "README.txt"],
                  "Spanish-Classical-Guitar": ["LICENSE", "README.md"]}
 LICENSE_FILES.update({name: a[4] for name, a in ARCHIVES.items()})
 MUSESCORE_DOCS = ["MuseScore_General_License.md", "MuseScore_General_Readme.md"]
@@ -1183,6 +1206,9 @@ def sources_md(jobs, gains, dest):
              " samples not be sold on their own; recorded by Sam Gossner and Simon Dalzell, cut by Elan Hickler"
              " / Soundemote."),
             ("VCSL", "Versilian Community Sample Library (Versilian Studios)", "CC0 1.0 Universal (`LICENSE`)."),
+            ("FSBS-dist1", "Electric Guitar FSBS, bridge pickups, dist1 (FreePats)",
+             "CC0 1.0 Universal (`LICENSE.txt`; its `README.txt`: \"Published under the terms of Creative Commons"
+             " CC0 public domain dedication\")."),
             ("Spanish-Classical-Guitar", "Spanish Classical Guitar (FreePats)",
              "CC0 1.0 Universal (`LICENSE`).")):
         url, commit = REPOS[repo]
