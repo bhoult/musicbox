@@ -132,8 +132,10 @@ const EDGE: u32 = 0x3A4350;
 const PLAIN: (u32, u32) = (0x30353F, 0x4A5160);
 const LIT: (u32, u32) = (0x2A5FC1, 0x3F78E0);
 const DRUM: (u32, u32) = (0x8A5A12, 0xA8701C);
-/// How long the mouse rests on something before it says what it does.
+/// How long the mouse rests on something before it says what it does, and
+/// how long a finger stays on it (longer: a slow tap is still a tap).
 const TIP_DELAY: Duration = Duration::from_millis(450);
+const TIP_DELAY_FINGER: Duration = Duration::from_millis(600);
 
 type Rect = (i32, i32, i32, i32);
 
@@ -1507,7 +1509,8 @@ impl Gui {
             }
         };
         let held = self.drag.is_some() || self.knob_drag.is_some() || self.scrub.is_some();
-        if held || self.quiet == Some(r) || since.elapsed() < TIP_DELAY {
+        let delay = if self.finger { TIP_DELAY_FINGER } else { TIP_DELAY };
+        if held || self.quiet == Some(r) || since.elapsed() < delay {
             return;
         }
         let (w, h) = (self.w, self.h);
@@ -1820,9 +1823,18 @@ impl Gui {
             let lit = playing.as_ref() == Some(&text);
             let rw = ix1 - ix0 - xw - 2;
             self.button(ix0, ry, rw, bh, "", if lit { LIT } else { PLAIN }, None, Action::Go(*id), None);
-            // (an id too long for the row: its start, and that there is more)
-            let shown = if text.len() > cols { format!("{}..", &text[..cols - 2]) } else { text.clone() };
-            self.text(ix0 + 4, ry + (bh - 7) / 2, &shown.to_uppercase(), TEXT, 1);
+            // (an id too long for the row: on two lines where the row is
+            // tall enough for them, else its start, and that there is more)
+            let shown = text.to_uppercase();
+            let cut = |t: &str| if t.len() > cols { format!("{}..", &t[..cols - 2]) } else { t.to_string() };
+            if shown.len() > cols && bh >= 18 {
+                let (a, b) = shown.split_at(cols);
+                let ty = ry + (bh - 16) / 2;
+                self.text(ix0 + 4, ty, a, TEXT, 1);
+                self.text(ix0 + 4, ty + 9, &cut(b), TEXT, 1);
+            } else {
+                self.text(ix0 + 4, ry + (bh - 7) / 2, &cut(&shown), TEXT, 1);
+            }
             let help = if lit { "Playing now.".to_string() } else { format!("Play {text}.") };
             self.tip(Some((ix0, ry, ix0 + rw, ry + bh)), help, "");
             self.button(ix1 - xw, ry, xw, bh, "X", PLAIN, None, Action::Forget(*id), None);
@@ -2023,7 +2035,13 @@ fn halves(label: &str) -> Option<(&str, &str)> {
 /// parts, broken at its spaces.
 fn lines_of(s: &str, cols: usize) -> Vec<String> {
     if !s.contains("  /  ") {
-        return wrap(s, cols);
+        // (a word longer than a line, a mix's id: cut at the line's end)
+        return wrap(s, cols)
+            .iter()
+            .flat_map(|l| {
+                l.as_bytes().chunks(cols.max(1)).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>()
+            })
+            .collect();
     }
     let mut lines: Vec<String> = Vec::new();
     for part in s.split("  /  ") {
@@ -2098,6 +2116,8 @@ mod tests {
         assert_eq!(lines_of(line, 80), ["SONG 3 / 4/4 2-TONE / 137 BPM / A DORIAN / MAIN 1 OF 8"]);
         // a word on something else: at its spaces
         assert_eq!(lines_of("TAP TO START THE MUSIC", 12), ["TAP TO START", "THE MUSIC"]);
+        // a word longer than the line is cut at its end
+        assert_eq!(lines_of("STARCONFLICT+SYNTHWAVE.7.0.1 KEPT", 12), ["STARCONFLICT", "+SYNTHWAVE.7", ".0.1", "KEPT"]);
     }
 
     #[test]
