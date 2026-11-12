@@ -58,6 +58,12 @@ pub(super) struct Western {
     theme: Vec<Tn>,
     riff: Vec<(f32, i32)>,
     tonic: i32,
+    /// written with more variety (`Opts::varied`): the theme as this
+    /// section states it (a bar of it moved; empty: as it is), and whether
+    /// the section plays the other chords (the duel's and the lament's
+    /// fuller statement: the theme's long notes then find their chords)
+    var: Vec<Tn>,
+    other: bool,
 }
 
 impl Western {
@@ -615,6 +621,8 @@ impl Song {
             theme,
             riff,
             tonic,
+            var: Vec::new(),
+            other: false,
         };
         let r = &mut self.rng;
         wn_sounds(r, s, style);
@@ -628,9 +636,18 @@ impl Song {
     pub(super) fn western_section(&mut self) {
         let sec = self.plan[self.sec];
         let p = self.wn.map[self.sec];
-        self.prog = self.wn.progs
-            [(p.part == WP_MORE || p.part == WP_CLIMAX) as usize & (self.wn.style == WNS_RIDE) as usize]
-            .clone();
+        let later = p.part == WP_MORE || p.part == WP_CLIMAX;
+        (self.wn.var, self.wn.other) = (Vec::new(), false);
+        if self.opts.varied && later {
+            // the theme's later statements: a bar of it moved a step or two,
+            // and the duel's and the lament's fuller one over the other chords
+            let fb = self.wn.bar_steps as f32;
+            if self.rng.chance(0.7) {
+                self.wn.var = moved_bar(&mut self.rng, &self.wn.theme, fb, self.mode);
+            }
+            self.wn.other = self.wn.style != WNS_RIDE && p.part == WP_MORE && self.rng.chance(0.5);
+        }
+        self.prog = self.wn.progs[(later && (self.wn.style == WNS_RIDE || self.wn.other)) as usize].clone();
         if self.sec == 0 {
             // the piece's tempo as set (a mix's moved toward its drummer's)
             self.wn.bpm0 = self.bpm;
@@ -855,7 +872,15 @@ impl Song {
             return;
         }
         let bar = (i % 8) as f32;
-        let notes: Vec<Tn> = self.wn.theme.iter().filter(|n| (n.st / fb).floor() == bar).copied().collect();
+        let theme = if self.wn.var.is_empty() { &self.wn.theme } else { &self.wn.var };
+        let mut notes: Vec<Tn> = theme.iter().filter(|n| (n.st / fb).floor() == bar).copied().collect();
+        if self.wn.other {
+            // (over the other chords: its long notes on their tones)
+            for n in notes.iter_mut().filter(|n| n.len * 2.0 >= fb) {
+                let h = self.chord(i * 2 + ((n.st - bar * fb) * 2.0 >= fb) as u32);
+                n.p = sw_ct(h, n.p, false);
+            }
+        }
         let vel = 0.65 + 0.3 * sec.energy;
         let mut prev_end = -1.0f32;
         for n in notes {

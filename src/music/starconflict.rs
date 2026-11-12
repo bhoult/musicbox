@@ -78,9 +78,17 @@ pub(super) struct StarConflict {
     ost: u8,
     /// the brass's chord last time (voice leading)
     brass_v: Vec<i32>,
+    /// written with more variety (`Opts::varied`): the theme and the second
+    /// as this section states them (a bar moved; empty: as they are)
+    var: [Vec<Tn>; 2],
 }
 
 impl StarConflict {
+    /// The theme `k` as this section states it.
+    fn theme_now(&self, k: usize) -> &Vec<Tn> {
+        if self.var[k].is_empty() { &self.themes[k] } else { &self.var[k] }
+    }
+
     /// The 16ths in bar `k` of the section (the parent's bar_steps()).
     pub(super) fn bs_at(&self, k: u32) -> u32 {
         self.bars.get(k as usize).copied().unwrap_or(self.bar_steps).max(1)
@@ -919,6 +927,7 @@ impl Song {
             tonic,
             ost: r.below(3) as u8,
             brass_v: Vec::new(),
+            var: [Vec::new(), Vec::new()],
         };
         sw_sounds(r, s, style);
         self.band = band_starconflict(r, s, style);
@@ -939,6 +948,12 @@ impl Song {
             _ => 0,
         };
         self.prog = self.sw.progs[which].clone();
+        self.sw.var = [Vec::new(), Vec::new()];
+        if self.opts.varied && p.rep >= 1 && matches!(p.part, SP_THEME | SP_LOVE) && self.rng.chance(0.7) {
+            // a theme stated again: a bar of it moved a step or two
+            let k = (p.part == SP_LOVE) as usize;
+            self.sw.var[k] = moved_bar(&mut self.rng, &self.sw.themes[k], bs as f32, self.mode);
+        }
         let mut bars = vec![bs; sec.bars as usize];
         if self.sw.style == SWS_BATTLE && matches!(p.part, SP_SEQ | SP_THEME) {
             for k in (7..sec.bars as usize).step_by(8) {
@@ -1228,7 +1243,7 @@ impl Song {
                 }
                 // the tune harmonised: each of its notes of an eighth or more
                 // with the chord's tones under it
-                let th = &self.sw.themes[(p.part == SP_SEQ) as usize];
+                let th = self.sw.theme_now((p.part == SP_SEQ) as usize);
                 let tb = (th.len() > 0) as u32
                     * (th.last().map_or(1.0, |n| n.st / self.sw.bar_steps as f32).floor() as u32 + 1);
                 let fb = self.sw.bar_steps as f32;
@@ -1285,7 +1300,7 @@ impl Song {
                 (v, 0, 0.9)
             }
             _ => {
-                let th = &self.sw.themes[matches!(p.part, SP_LOVE | SP_MYSTERY | SP_SEQ) as usize];
+                let th = self.sw.theme_now(matches!(p.part, SP_LOVE | SP_MYSTERY | SP_SEQ) as usize);
                 let tb = th.last().map_or(1.0, |n| (n.st / fb).floor() + 1.0) as u32;
                 let bar = (i % tb.max(1)) as f32;
                 // the mystery: the second theme's first and fifth bars, alone
