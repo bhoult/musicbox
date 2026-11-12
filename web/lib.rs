@@ -679,7 +679,7 @@ pub unsafe extern "C" fn mb_ui_new(
     fav_n: u32,
 ) -> *mut Ui {
     favorites::hand_in(unsafe { text_at(fav, fav_n) });
-    let gui = match gui::Gui::open() {
+    let gui = match gui::Gui::open(false) {
         Ok(g) => g,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -737,6 +737,26 @@ pub extern "C" fn mb_ui_motion(x: i32, y: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn mb_ui_button(down: u32, x: i32, y: i32, button: u32) {
     sdl::page::button(down != 0, x, y, button as u8);
+}
+
+/// A finger down (0), lifted (1) or moved (2) at (x, y), in the page's
+/// pixels on the canvas; lifted away from it (the touch called off): out of
+/// the picture.
+#[unsafe(no_mangle)]
+pub extern "C" fn mb_ui_finger(what: u32, x: i32, y: i32) {
+    let kind = match what {
+        0 => sdl::TOUCH_DOWN,
+        1 => sdl::TOUCH_UP,
+        _ => sdl::TOUCH_MOVE,
+    };
+    sdl::page::finger(kind, x, y);
+}
+
+/// The page's device: worked by a finger (1) or a mouse (0), and whether
+/// the page can fill the screen.
+#[unsafe(no_mangle)]
+pub extern "C" fn mb_ui_device(touch: u32, fullscreen: u32) {
+    sdl::page::device(touch != 0, fullscreen != 0);
 }
 
 /// The wheel turned (positive away from the user).
@@ -891,7 +911,8 @@ pub unsafe extern "C" fn mb_ui_frame(u: *mut Ui) -> *const u8 {
     let u = unsafe { ui(u) };
     let Ui { gui, st, now, tap, page, started, .. } = u;
     if !*started {
-        st.msg = Some(("CLICK OR PRESS A KEY TO START THE MUSIC".into(), Instant::now()));
+        let how = if gui.touch() { "TAP TO START THE MUSIC" } else { "CLICK OR PRESS A KEY TO START THE MUSIC" };
+        st.msg = Some((how.into(), Instant::now()));
     }
     for a in gui.events() {
         match act(a, now, st, page) {

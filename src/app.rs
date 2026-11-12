@@ -66,6 +66,11 @@ pub enum Action {
     Keys,
     EffectsPanel,
     FavoritesPanel,
+    /// the window's own, done by it: the part of its selector shown (what a
+    /// genre chosen there sets: the music's, or the one on drums), and its
+    /// list of favorites moved by so many
+    Tab(u8),
+    Scroll(i32),
     Quit,
 }
 

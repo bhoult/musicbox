@@ -45,7 +45,7 @@ fn usage() -> ! {
 /// The usage, then exit with `code` (0 when asked for).
 fn help(code: i32) -> ! {
     eprintln!(
-        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--volume V] [--gui] [--eq] [--samples DIR] [--no-samples] [MADE] [ROOM]"
+        "usage: musicbox [GENRE[+DRUMS] | ID] [--seed N] [--length L] [--volume V] [--gui] [--touch] [--eq] [--samples DIR] [--no-samples] [MADE] [ROOM]"
     );
     eprintln!(
         "       musicbox --wav GENRE[+DRUMS] SECONDS OUT.wav [--seed N] [--length L] [--ending natural|fade|cut] [--fade SECS]"
@@ -62,6 +62,7 @@ fn help(code: i32) -> ! {
     eprintln!("         two joined with + (polka+techno): the first writes the music, the second drums it");
     eprintln!("  ID: a song's id, as the displays show it (ska.2817.0.3): that song, and on from it");
     eprintln!("  --gui: open the window (a live equalizer and the genre selector); G opens and closes it too");
+    eprintln!("  --touch: the window laid out for a finger, as the page is on a phone (opens it)");
     eprintln!("  --eq: the equalizer in the terminal as well; E turns it on and off");
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
     eprintln!("  --length L: how long each song is (3:00, 2.5m, 150s; auto, the default: as long as it was written)");
@@ -92,6 +93,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut seed: Option<u64> = None;
     let (mut gui, mut eq, mut no_samples) = (false, false, false);
+    let mut touch = false;
     let mut samples_dir: Option<String> = None;
     let mut wav: Option<Vec<String>> = None;
     let mut export: Option<Vec<String>> = None;
@@ -114,6 +116,7 @@ fn main() {
                 seed = Some(value(i).parse().unwrap_or_else(|_| usage()));
             }
             "--gui" => gui = true,
+            "--touch" => (gui, touch) = (true, true),
             "--eq" => eq = true,
             "--no-samples" => no_samples = true,
             "--samples" => {
@@ -230,17 +233,19 @@ fn main() {
         return;
     }
     let id = genre.unwrap_or((seed % music::GENRES.len() as u64) as usize);
-    play(id, seed, gui, eq, Start { length, volume, effects, opts, from });
+    play(id, seed, gui, eq, Start { length, volume, effects, opts, from, touch });
 }
 
 /// How playing starts: the length asked of each piece, the volume, the
-/// effects, how the music is made, and a song to begin on.
+/// effects, how the music is made, a song to begin on, and whether the
+/// window is laid out for a finger.
 struct Start {
     length: f64,
     volume: u32,
     effects: music::Effects,
     opts: music::Opts,
     from: Option<music::SongId>,
+    touch: bool,
 }
 
 /// Where X saves songs: ~/Music/musicbox.
@@ -290,7 +295,7 @@ impl Deck for music::Player {
 
 /// Plays until Q, Ctrl-C or the window's close (when there is no terminal).
 fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
-    let Start { length, volume, effects, opts, from } = start;
+    let Start { length, volume, effects, opts, from, touch } = start;
     unsafe {
         for sig in [1, 2, 15] {
             signal(sig, on_signal as usize);
@@ -317,7 +322,7 @@ fn play(id: usize, seed: u64, gui: bool, eq: bool, start: Start) {
     let mut win: Option<gui::Gui> = None;
     let toggle_window = |win: &mut Option<gui::Gui>, st: &mut State| {
         if win.take().is_none() {
-            match gui::Gui::open() {
+            match gui::Gui::open(touch) {
                 Ok(g) => *win = Some(g),
                 Err(e) => st.msg = Some((format!("no window: {e}"), Instant::now())),
             }

@@ -2170,8 +2170,18 @@ pub fn voice_data(dir: &Path, names: &[String], step: usize) -> Result<(), Strin
 // The browser loads the tables, then each group before anything plays it:
 // until its stream is in, a group's instruments have no names (the genres'
 // hooks find none, and the synthesiser plays their parts).
+// A phone cannot hold a genre's half a gigabyte either: a lighter copy goes
+// with it (lite/: its own tables and streams), every recording at half the
+// engine's rate and in one channel, a quarter of the memory or less. Its
+// zones say their rate, and are played as the SoundFont's recordings at
+// rates of their own are.
 
+/// The tables' first bytes: as they were (every recording at the engine's
+/// rate), or followed by the recordings' rate over the engine's.
 const PACK_MAGIC: &[u8; 4] = b"MBP2";
+const PACK_MAGIC_AT: &[u8; 4] = b"MBP3";
+/// The lighter copy's rate over the engine's.
+pub const PACK_LITE: f32 = 0.5;
 /// Silence between a group's recordings (frames): a lossy codec's smear
 /// kept off the next one's attack.
 const PACK_GAP: usize = 2048;
@@ -2375,17 +2385,22 @@ impl Bank {
     }
 
     /// A zone's recording as the browser's copy has it: its channels as
-    /// recorded (one, or two interleaved), at the engine's rate, cut where it
-    /// falls silent; its loop (start, end) there. A loop without a crossfade
-    /// (the SoundFont's, a few periods long) is played out a few times more
-    /// first, so that its seam lands inside the compressed stream (its error
-    /// the codec's noise, not a click), and looped over as many repeats as
-    /// come to a whole number of frames.
-    fn pack_zone(&self, z: &Zone) -> (Vec<f32>, u32, u32) {
+    /// recorded (one, or two interleaved), at `tr` times the engine's rate
+    /// (1: the engine's; less: the lighter copy's, its two channels as one),
+    /// cut where it falls silent; its loop (start, end) there. A loop
+    /// without a crossfade (the SoundFont's, a few periods long) is played
+    /// out a few times more first, so that its seam lands inside the
+    /// compressed stream (its error the codec's noise, not a click), and
+    /// looped over as many repeats as come to a whole number of frames.
+    fn pack_zone(&self, z: &Zone, tr: f32) -> (Vec<f32>, u32, u32) {
         let c = z.chans as usize;
         let mut chans: Vec<Vec<f32>> =
             (0..c).map(|ch| self.frames(z).chunks_exact(c).map(|f| f[ch] as f32).collect()).collect();
-        let k = 1.0 / z.rate as f64;
+        if tr < 1.0 && c == 2 {
+            let both: Vec<f32> = chans[0].iter().zip(&chans[1]).map(|(a, b)| (a + b) * 0.5).collect();
+            chans = vec![both];
+        }
+        let k = tr as f64 / z.rate as f64;
         let all = chans[0].len();
         let (ls, le) = (z.ls as usize, (z.le as usize).min(all));
         let (mut lsx, mut lex) = (ls as f64 * k, le as f64 * k);
@@ -2408,17 +2423,20 @@ impl Bank {
             lex = lsx + (m * n) as f64 * k;
             ring = n as f64 * k;
         }
-        if (z.rate - 1.0).abs() > 1e-6 {
+        if (z.rate / tr - 1.0).abs() > 1e-6 {
             for x in chans.iter_mut() {
-                *x = resample(x, z.rate);
+                *x = resample(x, z.rate / tr);
             }
         }
         let (ls2, le2) = (lsx.round() as u32, lsx.round() as u32 + (lex - lsx).round() as u32);
         // to where it falls under -60 dB of its peak (all of a release, a
         // piano's or a gong's whole ring); a loop held for ever, to its end
         let peak = chans.iter().flatten().fold(0.0f32, |m, &s| m.max(s.abs()));
-        let quiet =
-            chans.iter().filter_map(|x| x.iter().rposition(|&s| s.abs() > peak * 1e-3)).max().map_or(0, |i| i + 480);
+        let quiet = chans
+            .iter()
+            .filter_map(|x| x.iter().rposition(|&s| s.abs() > peak * 1e-3))
+            .max()
+            .map_or(0, |i| i + (480.0 * tr) as usize);
         let looped = (le2 as f64 + ring).ceil() as usize + 4;
         let keep = match z.mode {
             1 => looped,
@@ -2433,11 +2451,70 @@ impl Bank {
         (x, ls2, le2)
     }
 
-    /// Writes the browser's copy into `dir` (pack.bin, raw/N.wav), and
-    /// returns its index (pack.json): the groups, those each genre in `used`
-    /// (its name, the ids it picked) loads, and those each mix ("a+b")
-    /// loads beyond its two genres'.
+    /// Writes the browser's copy into `dir` (pack.bin, raw/N.wav) and its
+    /// lighter copy into `dir`/lite, and returns their index (pack.json): the
+    /// groups (each one's frames in both), those each genre in `used` (its
+    /// name, the ids it picked) loads, and those each mix ("a+b") loads
+    /// beyond its two genres'.
     pub fn web_pack(&self, dir: &Path, used: &[(String, Vec<u16>)]) -> Result<String, String> {
+        let (groups, owner, deps) = self.pack_at(dir, 1.0)?;
+        let (lite, ..) = self.pack_at(&dir.join("lite"), PACK_LITE)?;
+        // the index: each group's file and the groups it needs; each genre's groups
+        let list = |v: &[usize]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+        let mut j = String::from("{\"groups\":[\n");
+        for (g, gr) in groups.iter().enumerate() {
+            j += &format!(
+                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"mono\":{},\"lite\":{},\"deps\":[{}]}}{}\n",
+                esc(&gr.name),
+                gr.frames,
+                gr.mono,
+                lite[g].frames,
+                list(&deps[g]),
+                if g + 1 < groups.len() { "," } else { "" }
+            );
+        }
+        // each genre's groups and those they need; each mix's that neither
+        // of its genres has (most have none)
+        let need = |ids: &[u16]| {
+            let mut gs: Vec<usize> =
+                ids.iter().filter_map(|&id| owner.get((id as usize).checked_sub(1)?).copied().flatten()).collect();
+            let mut i = 0;
+            while i < gs.len() {
+                let more = deps[gs[i]].clone();
+                gs.extend(more);
+                i += 1;
+            }
+            gs.sort_unstable();
+            gs.dedup();
+            gs
+        };
+        let genres: Vec<(&String, Vec<usize>)> =
+            used.iter().filter(|(name, _)| !name.contains('+')).map(|(name, ids)| (name, need(ids))).collect();
+        let mut mixes = Vec::new();
+        for (name, ids) in used.iter().filter(|(name, _)| name.contains('+')) {
+            let has = |part: &str| genres.iter().find(|(g, _)| g.as_str() == part).map_or(&[][..], |(_, gs)| &gs[..]);
+            let (a, b) = name.split_once('+').expect("a mix");
+            let gs: Vec<usize> = need(ids).into_iter().filter(|g| !has(a).contains(g) && !has(b).contains(g)).collect();
+            if !gs.is_empty() {
+                mixes.push((name, gs));
+            }
+        }
+        let entries = |v: &[(&String, Vec<usize>)]| {
+            let lines: Vec<String> = v.iter().map(|(name, gs)| format!("\"{}\":[{}]", esc(name), list(gs))).collect();
+            lines.join(",\n")
+        };
+        j += &format!("],\"genres\":{{\n{}\n}},\"mixes\":{{\n{}\n}}}}\n", entries(&genres), entries(&mixes));
+        Ok(j)
+    }
+
+    /// The browser's copy at `tr` times the engine's rate, written into
+    /// `dir` (pack.bin, raw/N.wav): its groups, each instrument's group, and
+    /// the groups each needs first.
+    #[allow(clippy::type_complexity)]
+    fn pack_at(&self, dir: &Path, tr: f32) -> Result<(Vec<Group>, Vec<Option<usize>>, Vec<Vec<usize>>), String> {
+        let lite = tr < 1.0;
+        let gap = (PACK_GAP as f32 * tr) as usize;
         let raw = dir.join("raw");
         std::fs::create_dir_all(&raw).map_err(|e| format!("{}: {e}", raw.display()))?;
         let (mut groups, owner) = self.groups();
@@ -2473,13 +2550,14 @@ impl Bank {
                     let (h, chans, off, len, ls, le) = match done.get(&key) {
                         Some(&d) => d,
                         None => {
-                            let (x, ls, le) = self.pack_zone(&z);
-                            let part = if z.chans == 2 { &mut stereo } else { &mut mono };
-                            let c = z.chans as usize;
+                            let (x, ls, le) = self.pack_zone(&z, tr);
+                            let pc = if lite { 1 } else { z.chans };
+                            let part = if pc == 2 { &mut stereo } else { &mut mono };
+                            let c = pc as usize;
                             if !part.is_empty() {
-                                part.resize(part.len() + c * PACK_GAP, 0.0);
+                                part.resize(part.len() + c * gap, 0.0);
                             }
-                            let d = (g, z.chans, (part.len() / c) as u32, (x.len() / c) as u32, ls, le);
+                            let d = (g, pc, (part.len() / c) as u32, (x.len() / c) as u32, ls, le);
                             part.extend_from_slice(&x);
                             done.insert(key, d);
                             d
@@ -2490,18 +2568,18 @@ impl Bank {
                         deps[g].push(h);
                     }
                     placed.push((zi, h, chans, off));
-                    let mut nz = Zone { len, chans, rate: 1.0, ls, le, ..z };
+                    let mut nz = Zone { len, chans, rate: tr, ls, le, ..z };
                     if z.mode != 0 && le <= ls {
                         nz.mode = 0;
                     }
-                    nz.xf = (z.xf as f32 / z.rate).round() as u32;
+                    nz.xf = (z.xf as f32 * tr / z.rate).round() as u32;
                     zones[zi] = nz;
                 }
             }
             // the stream: the mono part (each frame's two channels the same),
             // then the stereo part; each zone where its recording is in it
             if !mono.is_empty() && !stereo.is_empty() {
-                mono.resize(mono.len() + PACK_GAP, 0.0);
+                mono.resize(mono.len() + gap, 0.0);
             }
             monos[g] = mono.len() as u32;
             for (zi, h, chans, off) in placed {
@@ -2516,8 +2594,8 @@ impl Bank {
             w.extend_from_slice(b"RIFF");
             w.extend_from_slice(&(36 + 2 * pcm.len() as u32).to_le_bytes());
             w.extend_from_slice(b"WAVEfmt ");
-            let (c, block) = (c as u32, 2 * c as u32);
-            for x in [16u32, 1 | c << 16, RATE as u32, block * RATE as u32, block | 16 << 16] {
+            let (c, block, rate) = (c as u32, 2 * c as u32, (RATE * tr) as u32);
+            for x in [16u32, 1 | c << 16, rate, block * rate, block | 16 << 16] {
                 w.extend_from_slice(&x.to_le_bytes());
             }
             w.extend_from_slice(b"data");
@@ -2528,7 +2606,10 @@ impl Bank {
             let path = raw.join(format!("{g}.wav"));
             std::fs::write(&path, w).map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        let mut o = Out(PACK_MAGIC.to_vec());
+        let mut o = Out(if lite { PACK_MAGIC_AT } else { PACK_MAGIC }.to_vec());
+        if lite {
+            o.f32(tr);
+        }
         o.u32(zones.len() as u32);
         for (z, &h) in zones.iter().zip(&src) {
             o.u16(h);
@@ -2607,52 +2688,7 @@ impl Bank {
         }
         let path = dir.join("pack.bin");
         std::fs::write(&path, &o.0).map_err(|e| format!("{}: {e}", path.display()))?;
-        // the index: each group's file and the groups it needs; each genre's groups
-        let list = |v: &[usize]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
-        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-        let mut j = String::from("{\"groups\":[\n");
-        for (g, gr) in groups.iter().enumerate() {
-            j += &format!(
-                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"mono\":{},\"deps\":[{}]}}{}\n",
-                esc(&gr.name),
-                gr.frames,
-                gr.mono,
-                list(&deps[g]),
-                if g + 1 < groups.len() { "," } else { "" }
-            );
-        }
-        // each genre's groups and those they need; each mix's that neither
-        // of its genres has (most have none)
-        let need = |ids: &[u16]| {
-            let mut gs: Vec<usize> =
-                ids.iter().filter_map(|&id| owner.get((id as usize).checked_sub(1)?).copied().flatten()).collect();
-            let mut i = 0;
-            while i < gs.len() {
-                let more = deps[gs[i]].clone();
-                gs.extend(more);
-                i += 1;
-            }
-            gs.sort_unstable();
-            gs.dedup();
-            gs
-        };
-        let genres: Vec<(&String, Vec<usize>)> =
-            used.iter().filter(|(name, _)| !name.contains('+')).map(|(name, ids)| (name, need(ids))).collect();
-        let mut mixes = Vec::new();
-        for (name, ids) in used.iter().filter(|(name, _)| name.contains('+')) {
-            let has = |part: &str| genres.iter().find(|(g, _)| g.as_str() == part).map_or(&[][..], |(_, gs)| &gs[..]);
-            let (a, b) = name.split_once('+').expect("a mix");
-            let gs: Vec<usize> = need(ids).into_iter().filter(|g| !has(a).contains(g) && !has(b).contains(g)).collect();
-            if !gs.is_empty() {
-                mixes.push((name, gs));
-            }
-        }
-        let entries = |v: &[(&String, Vec<usize>)]| {
-            let lines: Vec<String> = v.iter().map(|(name, gs)| format!("\"{}\":[{}]", esc(name), list(gs))).collect();
-            lines.join(",\n")
-        };
-        j += &format!("],\"genres\":{{\n{}\n}},\"mixes\":{{\n{}\n}}}}\n", entries(&genres), entries(&mixes));
-        Ok(j)
+        Ok((groups, owner, deps))
     }
 }
 
@@ -2677,8 +2713,13 @@ pub struct Partial {
 impl Partial {
     pub fn new(meta: &[u8]) -> Result<Partial, String> {
         let mut r = In { b: meta, at: 0 };
-        if r.take(4)? != PACK_MAGIC {
-            return Err("not a musicbox pack".into());
+        let rate = match r.take(4)? {
+            m if m == PACK_MAGIC => 1.0,
+            m if m == PACK_MAGIC_AT => r.f32()?,
+            _ => return Err("not a musicbox pack".into()),
+        };
+        if !(rate > 0.01 && rate <= 1.0) {
+            return Err(format!("pack: recordings at {rate} of the engine's rate"));
         }
         let mut b = Bank::new();
         let n = r.count(73)?;
@@ -2705,7 +2746,7 @@ impl Partial {
                 root,
                 tune,
                 scale,
-                rate: 1.0,
+                rate,
                 ls,
                 le,
                 mode,
@@ -3169,6 +3210,21 @@ mod tests {
             let both: Vec<i16> = if mono { pcm.iter().flat_map(|&s| [s, s]).collect() } else { pcm };
             p.add(g, &both).expect("add");
         }
+        // the lighter copy: every group one channel at half the rate, a
+        // quarter of what the stereo ones hold (a half of the mono ones)
+        let mut lite = Partial::new(&std::fs::read(out.join("lite/pack.bin")).expect("lite pack.bin")).expect("tables");
+        for g in 0..lite.groups.len() {
+            let (pcm, rate, chans) =
+                read_wav(&std::fs::read(out.join(format!("lite/raw/{g}.wav"))).expect("raw")).expect("wav");
+            assert_eq!((rate, chans), (24000, 1));
+            assert_eq!(lite.groups[g].mono, lite.groups[g].frames, "all in one channel");
+            assert_eq!(pcm.len() as u32, lite.groups[g].frames);
+            assert!(json.contains(&format!("\"lite\":{},", lite.groups[g].frames)), "{json}");
+            let (full, kept) = (p.kept(g).expect("a group"), lite.kept(g).expect("a group"));
+            assert!(kept * 2 <= full + 4096, "{}: {kept} samples of {full}", lite.groups[g].name);
+            let both: Vec<i16> = pcm.iter().flat_map(|&s| [s, s]).collect();
+            lite.add(g, &both).expect("add");
+        }
         let _ = std::fs::remove_dir_all(&d);
         let w = &p.bank;
         let rms =
@@ -3186,6 +3242,12 @@ mod tests {
         for (inst, art, note) in [("sine", "sus", 69.0), ("sine", "sus", 57.0), ("sine", "stac", 69.0)] {
             let (ia, ic) = (b.multi(inst, art).expect("bank"), w.multi(inst, art).expect("copy"));
             same(&format!("{inst} {art} {note}"), &play(&b, ia, note, 0.9, 0.18), &play(w, ic, note, 0.9, 0.18));
+            let il = lite.bank.multi(inst, art).expect("lighter copy");
+            same(
+                &format!("lite {inst} {art} {note}"),
+                &play(&b, ia, note, 0.9, 0.18),
+                &play(&lite.bank, il, note, 0.9, 0.18),
+            );
         }
         // a stereo recording stays stereo: each side its own tune and level
         let (ia, ic) = (b.multi("wide", "sus").expect("bank"), w.multi("wide", "sus").expect("copy"));
@@ -3201,6 +3263,11 @@ mod tests {
         // the SoundFont's looped sine, at 32 kHz: two seconds, round its loop
         let (ia, ic) = (b.gm("Trumpet").expect("bank"), w.gm("Trumpet").expect("copy"));
         same("Trumpet", &play(&b, ia, 69.0, 0.9, 2.0), &play(w, ic, 69.0, 0.9, 2.0));
+        let il = lite.bank.gm("Trumpet").expect("lighter copy");
+        same("lite Trumpet", &play(&b, ia, 69.0, 0.9, 2.0), &play(&lite.bank, il, 69.0, 0.9, 2.0));
+        // (its stereo recording: both sides in one, still sounding)
+        let il = lite.bank.multi("wide", "sus").expect("lighter copy");
+        assert!(rms(&play(&lite.bank, il, 69.0, 0.9, 0.5)) > 0.3 * rms(&a), "the stereo recording, in one channel");
         let (ka, kc) = (b.drum("Standard", 42).expect("bank"), w.drum("Standard", 42).expect("copy"));
         assert!(rms(&play(w, kc, 60.0, 0.9, 0.3)) > 0.5 * rms(&play(&b, ka, 60.0, 0.9, 0.3)), "the kit's key");
     }

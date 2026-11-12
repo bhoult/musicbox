@@ -6,7 +6,7 @@
 # it after changing anything in docs/app or docs/samples.
 set -e
 cd "$(dirname "$0")/../docs"
-v=$(cat app/*.js app/musicbox.wasm app/models/* app/mp3/* samples/pack.json samples/pack.bin | sha256sum | cut -c1-10)
-r=$(cat samples/*.opus | sha256sum | cut -c1-10)
+v=$(cat app/*.js app/musicbox.wasm app/models/* app/mp3/* samples/pack.json samples/pack.bin samples/lite/pack.bin | sha256sum | cut -c1-10)
+r=$(cat samples/*.opus samples/lite/*.opus | sha256sum | cut -c1-10)
 sed -i "s|<script src=\"app/app.js[^\"]*\">|<script src=\"app/app.js?v=$v\&r=$r\">|" index.html
 grep -o 'app/app.js?[^"]*' index.html

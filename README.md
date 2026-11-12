@@ -4,9 +4,9 @@
 
 Made by Claude Opus 5.5, instigated by [Brandon Hoult](https://hoult.co).
 
-Music made up as it plays, without end, in 28 genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser, the same window in the page.
+Music made up as it plays, without end, in 28 genres and any pair of them. It plays from the command line, can open a window with a live equalizer and a genre selector, and runs in a browser, the same window in the page: laid out for a mouse at a desk, and for a finger on a phone.
 
-**[Play it in your browser](https://bhoult.github.io/musicbox/)**: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
+**[Play it in your browser](https://bhoult.github.io/musicbox/)**, or on your phone: no install; it plays recordings of real instruments, fetched as each genre needs them, or a synthesiser with nothing to fetch.
 
 [![The browser version, the desktop's window drawn in the page: celtic music with ska drums, its tunes by the network and its instruments recorded; the song's id with COPY, PASTE, the favorite's star and FAVORITES, the song's bar, the equalizer, the transport, the length, the three settings, the genre selector, the effects and the volume](docs/web.png)](https://bhoult.github.io/musicbox/)
 
@@ -22,6 +22,7 @@ target/release/musicbox                    # a random genre, from a random seed
 target/release/musicbox celtic             # a genre by name (or number, 0-11)
 target/release/musicbox polka+techno       # polka's music with techno's drums
 target/release/musicbox western --gui      # with the window open
+target/release/musicbox western --touch    # the window laid out for a finger, as on a phone
 target/release/musicbox lo-fi --eq         # with an equalizer in the terminal
 target/release/musicbox ska --length 3:00  # each song three minutes long
 target/release/musicbox techno --volume 60 # quieter (0 to 100)
@@ -94,13 +95,31 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
 - **The transport and the length:** BACK, STOP / START, NEXT SONG and EXPORT MP3 (R replays the song, as BACK does after its first seconds), then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
 - **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
-- **The genre selector:** all 28 genres in one grid: click one to write the music, or right-click it to put it on drums (it is underlined there). DRUMS BY, at the right of the grid's heading, steps the drummer with its arrows, as Up and Down do; it says ITS OWN when the genre writing the music plays its own drums, and a click on the drummer's name goes back to them. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q), KEYS (? or F1) and EFFECTS (A: underlined when one is turned), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
+- **The genre selector:** all 28 genres in one grid, under a switch for what a click on one sets: MUSIC BY (the genre that writes the music, lit blue in the grid) or DRUMS BY (the genre on drums, lit amber). Click DRUMS BY, then any genre, and it drums for the music; the music's own genre there gives it its own drums back. Whichever is not being chosen is underlined in the grid. A right-click on a genre puts it on drums either way, and Up and Down step the drummer. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q), KEYS (? or F1) and EFFECTS (A: underlined when one is turned), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
 
 EFFECTS opens the six [effects](#effects) over the top of the equalizer, a slider each with ALL 100% to put them back; FAVORITES opens the list of favorites in its place, a click on one playing it and its X letting it go. Esc puts either away.
 
 The keys work in the window too. The buttons leave them out: rest the mouse on anything and it says what it does and its keys, and ? lists them all. Closing the window leaves the music playing in the terminal. Without a terminal (a launcher, say), closing it quits.
 
 The picture is drawn on the CPU and scaled up by a whole number, so its pixel font stays sharp at any size. It is never smaller than 480 by 300, which everything fits; a smaller window (or a narrow one) wraps the settings onto two lines.
+
+### In a hand
+
+![The page on a phone: celtic with ska on drums, the song's bar, the transport, the tabs and the grid of genres with DRUMS chosen](docs/phone.png)
+
+`--touch` opens the window laid out for a finger, as the page lays itself out on a phone or a tablet (and in any window too narrow for the desk's). Nothing in it needs a right button, a wheel or a keyboard:
+
+- **What is playing**, at the top: the genre and its drummer, the song's line, a star that keeps the song among the favorites, and the song's bar to drag.
+- **The equalizer**, where the screen has room for one (a phone held on its side shows it beside the selector).
+- **BACK, STOP and NEXT SONG**, a row of their own.
+- **Five tabs**, and under them the one chosen:
+  - MUSIC: the grid of genres; a tap has one write the music.
+  - DRUMS: the same grid; a tap puts one on drums (the music's own genre: its own drums again).
+  - SOUND: the volume and the six effects, a slider each, and ALL EFFECTS 100%.
+  - SONG: the song's id (a tap copies it), COPY, PASTE and KEEP, the FAVORITES, EXPORT MP3, and the songs' length (AUTO, 15 s shorter or longer, or the slider).
+  - MORE: how the music is made, and FULLSCREEN where there is one.
+
+Rows are a finger's height: the picture is scaled so that one of its pixels is one and a half to two of the screen's own (CSS) pixels, which makes a button 36 to 48 of them tall. A button acts when the finger lifts on it, so a finger that slides off does nothing; a finger held on anything for half a second is told what it does (and lifting then does nothing more), as a mouse resting on it is at a desk.
 
 ## Song length
 
@@ -158,7 +177,9 @@ target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L]
 
 ## In the browser
 
-[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the desktop app compiled to WebAssembly (1.6 MB): its composer, its synthesiser and its window. The page draws the window with the window's own code (`src/gui.rs`), pixel for pixel as the desktop draws it, at the same whole scale for the page's size, and takes the same keys, clicks, wheel and panels. What the window's actions do is the desktop's code too (`src/app.rs`). The one difference is that a page has no window to close and no program to quit: CLOSE and QUIT are not there, and Esc, G and Q do nothing. A browser plays nothing until asked, so the first key or click starts the music. EXPORT MP3 (X) downloads an MP3 of the song playing, named by its id, with the desktop's tag. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound; the window is a second copy of the module on the page's own thread, handing the worker what its actions ask, and the equalizer is drawn from what the worklet plays.
+[bhoult.github.io/musicbox](https://bhoult.github.io/musicbox/) is the desktop app compiled to WebAssembly (1.6 MB): its composer, its synthesiser and its window. The page draws the window with the window's own code (`src/gui.rs`), pixel for pixel as the desktop draws it, at the same whole scale for the page's size, and takes the same keys, clicks, wheel and panels. What the window's actions do is the desktop's code too (`src/app.rs`). The one difference is that a page has no window to close and no program to quit: CLOSE and QUIT are not there, and Esc, G and Q do nothing. A browser plays nothing until asked, so the first key, click or tap starts the music.
+
+On a phone or a tablet (wherever a finger is the pointer) the page lays the window out [for a hand](#in-a-hand), upright or on its side, and can be put on the home screen to open without the browser's bars around it. `?touch` in the address asks for that layout anywhere, and `?desk` for the desk's on a phone. EXPORT MP3 (X) downloads an MP3 of the song playing, named by its id, with the desktop's tag. The page encodes it with LAME too, compiled to WebAssembly (`docs/app/mp3/`, 133 kB, fetched with the first export), at a constant 192 kb/s: that build writes no info frame, which a VBR file needs for players to tell its length. The engine runs in a Web Worker a few tenths of a second ahead of an AudioWorklet that plays it, so writing a bar or starting a song never stalls the sound; the window is a second copy of the module on the page's own thread, handing the worker what its actions ask, and the equalizer is drawn from what the worklet plays.
 
 It plays recorded instruments, as the desktop does: before the first song it fetches the recordings its genre plays, and on a change of genre or drummer those of the new one, before it comes in. SYNTH (or I) plays the synthesiser instead, with nothing to fetch, and so does the page when the recordings will not load. They are the desktop's recordings at 48 kHz, in stereo where they were recorded in stereo and to the end of each note's ring, compressed to Opus at 128 kb/s, near enough to the desktop's that they are hard to tell apart: 11 to 88 MB a genre, and 174 MB for all 28, against the desktop's 1.2 GB. Decoded, a genre's take up to 600 MB of the browser's memory (ska's, the most). NETWORK instruments fetch their networks as well (4.2 MB), and network tunes fetch celtic's (0.8 MB). Each is fetched once, when it is first needed. The recordings are in this repository, in `docs/samples/`, with their sources and licences (`README.md`, `SOURCES.md`, `licenses/`).
 

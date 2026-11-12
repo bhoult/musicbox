@@ -1,0 +1,14 @@
+{
+  "name": "musicbox",
+  "short_name": "musicbox",
+  "description": "Music made up as it plays, without end, in 28 genres and any pair of them.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

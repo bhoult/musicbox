@@ -31,6 +31,12 @@ pub const SDL_WINDOWEVENT_LEAVE: u8 = 11;
 pub const SDL_WINDOWEVENT_CLOSE: u8 = 14;
 pub const SDL_BUTTON_LEFT: u8 = 1;
 pub const SDL_BUTTON_RIGHT: u8 = 3;
+/// A finger on the page's canvas, down, lifted and moved (the page's own
+/// events, in SDL's own numbers for a program's: where, as a mouse's): a
+/// finger acts when it lifts, and one that stays says what it is on.
+pub const TOUCH_DOWN: u32 = 0x8001;
+pub const TOUCH_UP: u32 = 0x8002;
+pub const TOUCH_MOVE: u32 = 0x8003;
 
 pub const K_BACKSPACE: i32 = 8;
 pub const K_RETURN: i32 = 13;
@@ -52,12 +58,33 @@ const SDL_WINDOW_FULLSCREEN_DESKTOP: u32 = 0x1001;
 const MIN_W: i32 = 480;
 const MIN_H: i32 = 300;
 
-/// The picture for an output `ow` x `oh` pixels: the largest whole scale
-/// that leaves it at least `MIN_W` x `MIN_H`, and its size at that scale.
-fn picture(ow: i32, oh: i32) -> (u32, u32, u32) {
+/// A hand's window's least (a phone's, held upright: the picture's parts
+/// one above the other), and its least on its side (the parts side by side).
+pub const HAND_W: i32 = 208;
+pub const HAND_H: i32 = 360;
+const SIDE_W: i32 = 416;
+const SIDE_H: i32 = 196;
+
+/// The picture for an output `ow` x `oh` pixels, `dpr` of them to one of
+/// the window's own (the page's): its size, how many output pixels each of
+/// its pixels takes (a whole number), and whether it is a hand's (`touch`:
+/// a finger works it; or it is too narrow for a desk's). A desk's: the
+/// largest scale that leaves it at least `MIN_W` x `MIN_H`. A hand's: the
+/// largest that leaves `HAND_W` x `HAND_H` upright or `SIDE_W` x `SIDE_H` on
+/// its side, a pixel at most two of the window's own (rows a finger's
+/// height, letters a comfortable size, on a phone as on a tablet).
+pub fn picture(ow: i32, oh: i32, dpr: f32, touch: bool) -> (u32, u32, u32, bool) {
     let (ow, oh) = (ow.max(1), oh.max(1));
-    let scale = (ow / MIN_W).min(oh / MIN_H).max(1);
-    ((ow / scale) as u32, (oh / scale) as u32, scale as u32)
+    let dpr = if dpr.is_finite() && dpr > 0.1 { dpr } else { 1.0 };
+    if !touch && ow as f32 / dpr >= MIN_W as f32 - 0.5 {
+        let scale = (ow / MIN_W).min(oh / MIN_H).max(1);
+        return ((ow / scale) as u32, (oh / scale) as u32, scale as u32, false);
+    }
+    let most = ((2.0 * dpr + 0.01) as i32).max(1);
+    let upright = (ow / HAND_W).min(oh / HAND_H);
+    let side = (ow / SIDE_W).min(oh / SIDE_H);
+    let scale = upright.max(side).min(most).max(1);
+    ((ow / scale) as u32, (oh / scale) as u32, scale as u32, true)
 }
 
 #[repr(C)]
@@ -247,11 +274,15 @@ pub struct Window {
     h: u32,
     scale: u32,
     fullscreen: bool,
+    /// worked by a finger (`--touch`): a hand's window, whatever its size;
+    /// and whether the picture is a hand's (`picture`)
+    touch: bool,
+    compact: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Window {
-    pub fn open(title: &str, w: u32, h: u32) -> Result<Window, String> {
+    pub fn open(title: &str, w: u32, h: u32, touch: bool) -> Result<Window, String> {
         unsafe {
             // nearest-neighbour scaling, and no compositor bypass for a small window
             SDL_SetHint(c"SDL_RENDER_SCALE_QUALITY".as_ptr(), c"0".as_ptr());
@@ -274,7 +305,8 @@ impl Window {
                 SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
                 return Err(e);
             }
-            SDL_SetWindowMinimumSize(win, MIN_W as c_int, MIN_H as c_int);
+            let (min_w, min_h) = if touch { (HAND_W, HAND_H) } else { (MIN_W, MIN_H) };
+            SDL_SetWindowMinimumSize(win, min_w as c_int, min_h as c_int);
             let mut ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
             if ren.is_null() {
                 // no GPU: SDL's software renderer
@@ -286,19 +318,32 @@ impl Window {
                 SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
                 return Err(e);
             }
-            let mut w = Window { win, ren, tex: std::ptr::null_mut(), w: 0, h: 0, scale: 1, fullscreen: false };
+            let mut w = Window {
+                win,
+                ren,
+                tex: std::ptr::null_mut(),
+                w: 0,
+                h: 0,
+                scale: 1,
+                fullscreen: false,
+                touch,
+                compact: touch,
+            };
             w.fit()?;
             Ok(w)
         }
     }
 
     /// Sizes the texture to the renderer's output: the largest whole scale
-    /// that leaves it at least `MIN_W` x `MIN_H` (the window's least, which
-    /// all the genres' buttons, the settings and the transport fit).
+    /// that leaves it at least the window's least (`picture`).
     fn fit(&mut self) -> Result<(), String> {
-        let (mut ow, mut oh) = (0, 0);
-        unsafe { SDL_GetRendererOutputSize(self.ren, &mut ow, &mut oh) };
-        let (w, h, scale) = picture(ow, oh);
+        let (mut ow, mut oh, mut ww, mut wh) = (0, 0, 0, 0);
+        unsafe {
+            SDL_GetRendererOutputSize(self.ren, &mut ow, &mut oh);
+            SDL_GetWindowSize(self.win, &mut ww, &mut wh);
+        }
+        let (w, h, scale, compact) = picture(ow, oh, ow as f32 / ww.max(1) as f32, self.touch);
+        self.compact = compact;
         if (w, h, scale) == (self.w, self.h, self.scale) && !self.tex.is_null() {
             return Ok(());
         }
@@ -325,6 +370,20 @@ impl Window {
     pub fn size(&mut self) -> (u32, u32) {
         let _ = self.fit();
         (self.w, self.h)
+    }
+
+    /// Whether the picture is a hand's (as `size` last found), whether a
+    /// finger works the window, and whether it can fill the screen.
+    pub fn compact(&self) -> bool {
+        self.compact
+    }
+
+    pub fn touch(&self) -> bool {
+        self.touch
+    }
+
+    pub fn can_fullscreen(&self) -> bool {
+        true
     }
 
     /// Shows `px` (0xAARRGGBB, `size()` of them), stretched over the whole
@@ -423,6 +482,9 @@ pub mod page {
         static EVENTS: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
         /// the canvas's size: in the screen's pixels, and in the page's
         static SIZE: Cell<(i32, i32, f32, f32)> = const { Cell::new((1280, 720, 1280.0, 720.0)) };
+        /// the page's device: a finger works it (not a mouse), and it can
+        /// fill the screen
+        static DEVICE: Cell<(bool, bool)> = const { Cell::new((false, true)) };
         /// what was last pasted, and whether it has not been read since
         static PASTED: RefCell<(String, bool)> = const { RefCell::new((String::new(), false)) };
         static ASKS: RefCell<Vec<Ask>> = const { RefCell::new(Vec::new()) };
@@ -478,6 +540,21 @@ pub mod page {
         });
     }
 
+    /// A finger down, lifted or moved (`TOUCH_DOWN`, `TOUCH_UP`,
+    /// `TOUCH_MOVE`) at (x, y), the page's pixels on the canvas.
+    pub fn finger(kind: u32, x: i32, y: i32) {
+        event(kind, |r| {
+            put(r, 20, x);
+            put(r, 24, y);
+        });
+    }
+
+    /// The page's device: whether a finger works it, and whether the page
+    /// can fill the screen.
+    pub fn device(touch: bool, fullscreen: bool) {
+        DEVICE.with(|d| d.set((touch, fullscreen)));
+    }
+
     /// The wheel turned (positive away from the user).
     pub fn wheel(by: i32) {
         event(SDL_MOUSEWHEEL, |r| put(r, 20, by));
@@ -524,19 +601,32 @@ pub mod page {
     pub struct Window {
         w: u32,
         h: u32,
+        compact: bool,
     }
 
     impl Window {
-        pub fn open(title: &str, _w: u32, _h: u32) -> Result<Window, String> {
+        pub fn open(title: &str, _w: u32, _h: u32, _touch: bool) -> Result<Window, String> {
             ask(Ask::Title(title.to_string()));
-            Ok(Window { w: 0, h: 0 })
+            Ok(Window { w: 0, h: 0, compact: false })
         }
 
         pub fn size(&mut self) -> (u32, u32) {
-            let (ow, oh, ..) = SIZE.with(|s| s.get());
-            let (w, h, _) = picture(ow, oh);
-            (self.w, self.h) = (w, h);
+            let (ow, oh, css_w, _) = SIZE.with(|s| s.get());
+            let (w, h, _, compact) = picture(ow, oh, ow as f32 / css_w.max(1.0), self.touch());
+            (self.w, self.h, self.compact) = (w, h, compact);
             (w, h)
+        }
+
+        pub fn compact(&self) -> bool {
+            self.compact
+        }
+
+        pub fn touch(&self) -> bool {
+            DEVICE.with(|d| d.get().0)
+        }
+
+        pub fn can_fullscreen(&self) -> bool {
+            DEVICE.with(|d| d.get().1)
         }
 
         /// `px` (0xAARRGGBB) as the canvas takes it (R, G, B, A).
@@ -581,5 +671,41 @@ pub mod page {
         pub fn poll(&self) -> Option<Event> {
             EVENTS.with(|v| v.borrow_mut().pop_front())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_desks_picture_is_as_it_was() {
+        // (a window of 1280 x 720, and one on a screen of twice the pixels)
+        assert_eq!(picture(1280, 720, 1.0, false), (640, 360, 2, false));
+        assert_eq!(picture(2560, 1440, 2.0, false), (640, 360, 4, false));
+        assert_eq!(picture(480, 300, 1.0, false), (480, 300, 1, false));
+        assert_eq!(picture(1920, 1080, 1.0, false), (640, 360, 3, false));
+    }
+
+    #[test]
+    fn a_hands_picture_has_rows_a_finger_can_hit() {
+        // phones upright (the page's size, the screen's pixels to one of its own)
+        for (w, h, dpr) in
+            [(390.0, 664.0, 3.0), (360.0, 640.0, 3.0), (375.0, 553.0, 2.0), (412.0, 780.0, 2.625), (430.0, 740.0, 3.0)]
+        {
+            let (ow, oh) = ((w * dpr) as i32, (h * dpr) as i32);
+            let (pw, ph, scale, hand) = picture(ow, oh, dpr, true);
+            assert!(hand);
+            assert!(pw as i32 >= HAND_W && ph as i32 >= HAND_H, "{w} x {h}: {pw} x {ph}");
+            // a picture pixel 1.3 to 2 of the page's: a row of 24 is 32 to 48
+            let css = scale as f32 / dpr;
+            assert!((1.3..=2.01).contains(&css), "{w} x {h}: {css}");
+        }
+        // on its side: the parts side by side
+        let (pw, ph, _, hand) = picture(2532, 1170, 3.0, true);
+        assert!(hand && pw as i32 >= SIDE_W && ph as i32 >= SIDE_H && (ph as i32) < HAND_H, "{pw} x {ph}");
+        // a window too narrow for a desk's, with a mouse: a hand's too
+        assert!(picture(420, 700, 1.0, false).3);
+        assert!(!picture(480, 700, 1.0, false).3);
     }
 }

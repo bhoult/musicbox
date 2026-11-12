@@ -10,8 +10,10 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('window');
 const g2d = canvas.getContext('2d');
 
-// where the recordings are (tools/web-samples.sh makes them)
+// where the recordings are (tools/web-samples.sh makes them), and their
+// lighter copy (one channel, half the rate: a quarter of the memory or less)
 const SAMPLES = 'samples/';
+const LITE_RATE = 24000;
 // the stamps tools/stamp-page.sh puts on this script's address, one for the
 // page's files and one for the recordings: each file is asked for with its
 // stamp, so an older copy a browser kept of one is never used with the rest
@@ -23,6 +25,10 @@ const IMPORTS = { env: { now_ms: () => performance.now() } };
 // the equalizer's window (spectrum.rs's N)
 const TAP = 4096;
 const VOICES = ['synth', 'recorded', 'network'];
+// how the music is made, as one number (the engine's Opts::code): what
+// plays the instruments is its bits 2 and 3, the rest its other settings
+const voicesOf = (code) => VOICES[(code >> 2) & 3] ?? 'recorded';
+const onSynth = (code) => code & ~12;
 
 let module = null;
 let ui = null; // the window's module
@@ -119,13 +125,31 @@ function uiState() {
   return JSON.parse(readText(p, ui.mb_ui_text_len(u)));
 }
 
-// ---- the canvas: its size, the keys and the mouse
+// ---- the canvas: its size, the keys, the mouse and the fingers
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const [w, h] = [canvas.clientWidth, canvas.clientHeight];
   ui?.mb_ui_resize(Math.round(w * dpr), Math.round(h * dpr), w, h);
 }
+
+// the device: whether a finger works it rather than a mouse (the window
+// then lays itself out for one: ?touch asks for that anywhere, ?desk for
+// the desk's on a phone), and whether the page can fill the screen
+const ASKED = new URLSearchParams(location.search);
+const coarse = matchMedia('(pointer: coarse)');
+
+function device() {
+  const touch = ASKED.has('touch') || (coarse.matches && !ASKED.has('desk'));
+  ui?.mb_ui_device(touch ? 1 : 0, document.fullscreenEnabled ? 1 : 0);
+}
+coarse.addEventListener?.('change', device);
+
+// a phone, a tablet, or a computer short of memory holds the recordings'
+// lighter copy (a genre's full ones come to half a gigabyte and more);
+// ?lite asks for it anywhere, ?full for the full ones on a phone
+const LITE = ASKED.has('lite') || (!ASKED.has('full') && (coarse.matches || (navigator.deviceMemory ?? 8) <= 4));
+const PACK = LITE ? `${SAMPLES}lite/` : SAMPLES;
 
 const KEYS = {
   Enter: 13,
@@ -165,26 +189,58 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   ui.mb_ui_key(code, 0);
   if ([...e.key].length === 1) withText(e.key, (p, n) => ui.mb_ui_text(p, n));
+  step();
 });
 
 document.addEventListener('paste', (e) => {
   e.preventDefault();
   if (!start()) return;
   withText(e.clipboardData?.getData('text/plain') ?? '', (p, n) => ui.mb_ui_paste(p, n));
+  step();
 });
 
+// A mouse acts as its button goes down, a finger (or a pen) as it lifts:
+// each is the moment a browser lets a page begin its sound, copy, read what
+// was copied or fill the screen, so the window is stepped there and then
+// (step), while that moment lasts, not at the next frame.
 const BUTTONS = { 0: 1, 2: 3 };
+const finger = (e) => e.pointerType !== 'mouse';
+const where = (e) => [Math.round(e.offsetX), Math.round(e.offsetY)];
 canvas.addEventListener('pointerdown', (e) => {
-  if (!start() || !(e.button in BUTTONS)) return;
+  if (!u || !e.isPrimary) return;
+  if (finger(e)) {
+    ui.mb_ui_finger(0, ...where(e));
+    step();
+    return;
+  }
+  if (!(e.button in BUTTONS) || !start()) return;
   canvas.setPointerCapture(e.pointerId);
-  ui.mb_ui_motion(e.offsetX, e.offsetY);
-  ui.mb_ui_button(1, e.offsetX, e.offsetY, BUTTONS[e.button]);
+  ui.mb_ui_motion(...where(e));
+  ui.mb_ui_button(1, ...where(e), BUTTONS[e.button]);
+  step();
 });
 canvas.addEventListener('pointerup', (e) => {
-  if (ui && e.button in BUTTONS) ui.mb_ui_button(0, e.offsetX, e.offsetY, BUTTONS[e.button]);
+  if (!u || !e.isPrimary) return;
+  if (finger(e)) {
+    start();
+    ui.mb_ui_finger(1, ...where(e));
+    step();
+  } else if (e.button in BUTTONS) {
+    ui.mb_ui_button(0, ...where(e), BUTTONS[e.button]);
+  }
 });
-canvas.addEventListener('pointermove', (e) => ui?.mb_ui_motion(e.offsetX, e.offsetY));
-canvas.addEventListener('pointerleave', () => ui?.mb_ui_leave());
+// (a touch the browser took for itself: lifted nowhere)
+canvas.addEventListener('pointercancel', (e) => {
+  if (u && e.isPrimary && finger(e)) ui.mb_ui_finger(1, -1, -1);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!u || !e.isPrimary) return;
+  if (finger(e)) ui.mb_ui_finger(2, ...where(e));
+  else ui.mb_ui_motion(...where(e));
+});
+canvas.addEventListener('pointerleave', (e) => {
+  if (!finger(e)) ui?.mb_ui_leave();
+});
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener(
   'wheel',
@@ -195,6 +251,7 @@ canvas.addEventListener(
   { passive: false },
 );
 addEventListener('resize', resize);
+window.visualViewport?.addEventListener('resize', resize);
 
 // ---- each frame: the sound to the equalizer, the window acted on and
 // drawn, what it asks done
@@ -203,6 +260,10 @@ const tapped = new Float32Array(TAP);
 
 function frame() {
   requestAnimationFrame(frame);
+  step();
+}
+
+function step() {
   if (!u) return;
   if (analyser) {
     analyser.getFloatTimeDomainData(tapped);
@@ -232,12 +293,20 @@ function perform(a) {
       document.title = a.text;
       return;
     case 'copy':
-      navigator.clipboard.writeText(a.text).catch(() => say('this browser would not copy it: choose the address and copy that', 'error'));
+      (navigator.clipboard?.writeText(a.text) ?? Promise.reject(new Error('no clipboard'))).catch(() =>
+        say('this browser would not copy it: copy the address instead', 'error'),
+      );
       return;
     case 'paste':
-      navigator.clipboard.readText().then(
+      (navigator.clipboard?.readText?.() ?? Promise.reject(new Error('no clipboard'))).then(
         (t) => withText(t, (p, n) => ui.mb_ui_paste(p, n)),
-        () => say('this browser keeps its clipboard to itself: press ctrl-V', 'error'),
+        () =>
+          say(
+            coarse.matches
+              ? 'this browser keeps what was copied to itself: open the link to the song instead'
+              : 'this browser keeps its clipboard to itself: press ctrl-V',
+            'error',
+          ),
       );
       return;
     case 'fullscreen':
@@ -283,7 +352,7 @@ async function toWorker(a) {
       return exportSong();
     case 'genre': {
       Object.assign(cur, { primary: a.primary, drums: a.drums < 0 ? null : a.drums });
-      if (VOICES[cur.opts >> 2] !== 'synth') await loadRecordings(cur.primary, cur.drums).catch(() => {});
+      if (voicesOf(cur.opts) !== 'synth') await loadRecordings(cur.primary, cur.drums).catch(() => {});
       worker.postMessage({ type: 'genre', primary: a.primary, drums: a.drums < 0 ? null : a.drums });
       return;
     }
@@ -309,14 +378,14 @@ async function toWorker(a) {
 // drummer: the recordings, the network's instruments, the tunes networks;
 // how it can be made (on the synthesiser when the recordings will not load)
 async function fetched(primary, drums, code) {
-  const voices = VOICES[code >> 2] ?? 'recorded';
+  const voices = voicesOf(code);
   if (voices !== 'synth') {
     try {
       await loadRecordings(primary, drums);
       if (voices === 'network') await loadNets();
     } catch (e) {
       say(`no recordings (${e.message}): the synthesiser plays`, 'error');
-      code &= 3;
+      code = onSynth(code);
       ui.mb_ui_made(u, code, 0);
     }
   }
@@ -345,7 +414,7 @@ function loadRecordings(primary, drums) {
 
 async function tables() {
   if (rec.index) return;
-  const [j, b] = await Promise.all([fetch(`${SAMPLES}pack.json${V}`), fetch(`${SAMPLES}pack.bin${V}`)]);
+  const [j, b] = await Promise.all([fetch(`${SAMPLES}pack.json${V}`), fetch(`${PACK}pack.bin${V}`)]);
   if (!j.ok || !b.ok) throw new Error(`the tables did not load (${j.status} ${b.status})`);
   rec.index = await j.json();
   rec.meta = await b.arrayBuffer();
@@ -356,6 +425,26 @@ async function tables() {
 // interleaved (empty for a group whose recordings are all in groups before it)
 async function decodeGroup(g) {
   const info = rec.index.groups[g];
+  const s16 = (x) => Math.max(-32768, Math.min(32767, Math.round(x * 32768)));
+  if (LITE) {
+    // the lighter copy: one channel at its own rate, decoded at that rate
+    // where the browser will (half the memory while it is decoded), else
+    // at the engine's and every other frame taken
+    const pcm = new Int16Array(info.lite);
+    if (!info.lite) return pcm;
+    const r = await fetch(`${PACK}${info.file}${R}`);
+    if (!r.ok) throw new Error(`${info.name}: ${r.status}`);
+    const bytes = await r.arrayBuffer();
+    let d = null;
+    try {
+      d = await new OfflineAudioContext(1, 1, LITE_RATE).decodeAudioData(bytes.slice(0));
+    } catch {}
+    if (!d || d.sampleRate % LITE_RATE) d = await audio.decodeAudioData(bytes);
+    const [l, step] = [d.getChannelData(0), Math.round(d.sampleRate / LITE_RATE)];
+    const n = Math.min(Math.floor(l.length / step), info.lite);
+    for (let k = 0; k < n; k++) pcm[k] = s16(l[k * step]);
+    return pcm;
+  }
   const mono = info.mono;
   const pcm = new Int16Array(mono + 2 * (info.frames - mono));
   if (!info.frames) return pcm;
@@ -364,7 +453,6 @@ async function decodeGroup(g) {
   const d = await audio.decodeAudioData(await r.arrayBuffer());
   const [l, rt] = [d.getChannelData(0), d.getChannelData(d.numberOfChannels > 1 ? 1 : 0)];
   const n = Math.min(l.length, info.frames);
-  const s16 = (x) => Math.max(-32768, Math.min(32767, Math.round(x * 32768)));
   for (let k = 0; k < Math.min(n, mono); k++) pcm[k] = s16(l[k]);
   for (let k = mono; k < n; k++) {
     pcm[2 * k - mono] = s16(l[k]);
@@ -373,12 +461,15 @@ async function decodeGroup(g) {
   return pcm;
 }
 
-// the groups `todo` (in order) decoded four at a time, each handed to `to`
-// once those before it are (a group's recordings may be in one before it),
-// so that no more than a few are held here at once; room for them all made
-// first
+// the groups `todo` (in order) decoded four at a time (two of the lighter
+// copy's: a phone's memory), each handed to `to` once those before it are
+// (a group's recordings may be in one before it), so that no more than a
+// few are held here at once; room for them all made first
 async function sendGroups(todo, to, progress) {
-  const kept = (g) => rec.index.groups[g].mono + 2 * (rec.index.groups[g].frames - rec.index.groups[g].mono);
+  const kept = (g) => {
+    const i = rec.index.groups[g];
+    return LITE ? i.lite : i.mono + 2 * (i.frames - i.mono);
+  };
   to.postMessage({ type: 'reserve', n: todo.map(kept).reduce((a, b) => a + b, 0) });
   const got = new Map();
   const left = [...todo];
@@ -392,7 +483,7 @@ async function sendGroups(todo, to, progress) {
     }
   };
   await Promise.all(
-    [0, 1, 2, 3].map(async () => {
+    (LITE ? [0, 1] : [0, 1, 2, 3]).map(async () => {
       while (left.length) {
         const g = left.shift();
         got.set(g, await decodeGroup(g));
@@ -410,7 +501,7 @@ async function fetchRecordings(primary, drums) {
   }
   const todo = groupsFor(primary, drums).filter((g) => !rec.have.has(g));
   if (!todo.length) return;
-  const mb = todo.map((g) => rec.index.groups[g].bytes ?? 0).reduce((a, b) => a + b, 0) / 1e6;
+  const mb = todo.map((g) => rec.index.groups[g][LITE ? 'lite_bytes' : 'bytes'] ?? 0).reduce((a, b) => a + b, 0) / 1e6;
   const of = `${todo.length} groups${mb ? `, ${mb.toFixed(1)} MB` : ''}`;
   say(`loading recordings: 0 of ${of}`);
   await sendGroups(todo, worker, (n) => say(`loading recordings: ${n} of ${of}`));
@@ -461,7 +552,7 @@ async function exportSong() {
   exporter ??= makeExporter();
   say(`exporting ${n.sid}.mp3…`);
   // the recordings the song plays, decoded again for the exporter's engine
-  if (n.opts >> 2 !== 0 && rec.index) {
+  if (voicesOf(n.opts) !== 'synth' && rec.index) {
     if (!exporter.meta) {
       exporter.postMessage({ type: 'pack', meta: rec.meta.slice(0) });
       exporter.meta = true;
@@ -518,6 +609,7 @@ async function open() {
   const primary = seed % x.mb_genre_count();
   Object.assign(cur, { primary, drums: null, opts: VOICES.indexOf('recorded') << 2 });
   u = withText(savedFavorites(), (p, n) => x.mb_ui_new(primary, -1, seed >>> 0, 0, cur.opts, 0, savedVolume(), lo, hi, p, n));
+  device();
   resize();
   // the networks there are to fetch (the window underlines NETWORK where
   // one plays): the instruments, and celtic's tunes
@@ -538,7 +630,11 @@ async function open() {
 // click that begun it
 function start() {
   if (!u) return false;
-  if (started) return true;
+  if (started) {
+    // (the sound a phone stopped, for a call or its lock screen: on again)
+    if (audio && audio.state !== 'running') audio.resume().catch(() => {});
+    return true;
+  }
   started = true;
   ui.mb_ui_started(u);
   begin().catch((e) => say(`could not start: ${e.message}`, 'error'));
@@ -547,6 +643,13 @@ function start() {
 
 async function begin() {
   const ctx = (audio = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' }));
+  // asked at once, while the key or the tap that began it is still being
+  // handled: a phone lets sound begin only then (and plays it as music,
+  // whatever its ring switch says, where it can be told to)
+  ctx.resume().catch(() => {});
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+  } catch {}
   await ctx.audioWorklet.addModule(`app/worklet.js${V}`);
   const node = new AudioWorkletNode(ctx, 'musicbox', { numberOfInputs: 0, outputChannelCount: [2] });
   // the equalizer's analyser before the volume (it shows the music as made,
@@ -583,14 +686,13 @@ async function begin() {
     module,
     genre: ui.mb_mix_id(s.primary, s.drums),
     seed: s.seed,
-    opts: s.opts & 3,
+    opts: onSynth(s.opts),
     paused: true,
   };
   worker.postMessage({ ...init, port: ch.port1 }, [ch.port1]);
   worker.postMessage({ type: 'effects', fx: s.fx });
   worker.postMessage({ type: 'length', secs: s.length });
   node.port.postMessage({ port: ch.port2 }, [ch.port2]);
-  await ctx.resume();
   st.genres = await genres;
   if (!goAsked) {
     const code = await fetched(cur.primary, cur.drums, s.opts);

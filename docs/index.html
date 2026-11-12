@@ -5,18 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>musicbox</title>
 <meta name="description" content="Music made up as it plays, without end, in 28 genres and any pair of them: musicbox's composer, synthesiser and window in the browser.">
+<meta name="theme-color" content="#0e1116">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   /* the window, as the desktop draws it: the canvas over the whole page,
      its picture scaled up by a whole number, as SDL scales it */
-  html, body { margin: 0; height: 100%; background: #0e1116; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: #0e1116; overflow: hidden; overscroll-behavior: none; }
+  /* (a finger held on it is the window's: no text chosen, no menu) */
   canvas {
     position: fixed;
     inset: 0;
     width: 100%;
     height: 100%;
+    height: 100dvh;
     image-rendering: pixelated;
     touch-action: none;
     outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
   }
   .failed, noscript p {
     position: fixed;
@@ -29,7 +42,7 @@
 </style>
 </head>
 <body>
-<canvas id="window" aria-label="musicbox: music made up as it plays. Click or press a key to start it; arrows change the genre and drummer, space plays the next song, question mark lists every key."></canvas>
+<canvas id="window" aria-label="musicbox: music made up as it plays. Click, tap or press a key to start it; arrows change the genre and drummer, space plays the next song, question mark lists every key."></canvas>
 <noscript><p>musicbox plays in the browser with JavaScript, or on the desktop: <a href="https://github.com/bhoult/musicbox">github.com/bhoult/musicbox</a>.</p></noscript>
 <script src="app/app.js?v=35ab127a7c&r=f312e33079"></script>
 </body>
