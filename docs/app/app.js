@@ -659,7 +659,8 @@ async function open() {
   const [lo, hi] = savedEffects();
   // (the genre the seed's, among them all, as the desktop picks one)
   const primary = seed % x.mb_genre_count();
-  Object.assign(cur, { primary, drums: null, opts: VOICES.indexOf('recorded') << 2 });
+  // (recorded instruments, and songs written with more variety: 16)
+  Object.assign(cur, { primary, drums: null, opts: (VOICES.indexOf('recorded') << 2) | 16 });
   u = withText(savedFavorites(), (p, n) => x.mb_ui_new(primary, -1, seed >>> 0, 0, cur.opts, 0, savedVolume(), lo, hi, p, n));
   device();
   resize();

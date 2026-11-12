@@ -352,6 +352,13 @@ impl Term {
             v => v.name().to_string(),
         };
         l.push(&voices, lit(o.voices != music::Voices::Recorded));
+        l.push("  w variety ", "2");
+        let variety = match (o.varied, music::has_variety(st.id())) {
+            (false, _) => "less",
+            (true, true) => "more",
+            (true, false) => "more (no more for this genre yet)",
+        };
+        l.push(variety, lit(!o.varied));
         lines.push(l);
 
         let text: String = lines.iter().map(|l| l.out.as_str()).collect::<Vec<_>>().join("\n");
@@ -495,6 +502,7 @@ fn parse_key(b: &[u8]) -> (Option<Action>, usize) {
         b'o' | b'O' => Some(Action::Tuned),
         b'm' | b'M' => Some(Action::NetTunes),
         b'i' | b'I' => Some(Action::Voices),
+        b'w' | b'W' => Some(Action::Varied),
         b'g' | b'G' => Some(Action::Window),
         c => fx_key(c as char),
     };

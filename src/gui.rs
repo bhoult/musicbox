@@ -237,7 +237,7 @@ fn wrap(s: &str, cols: usize) -> Vec<String> {
 }
 
 /// The keys, as the list of them shows them.
-const KEYS: [(&str, &str); 29] = [
+const KEYS: [(&str, &str); 30] = [
     ("LEFT RIGHT", "GENRE"),
     ("UP DOWN", "DRUMS"),
     ("SPACE", "NEXT SONG"),
@@ -263,6 +263,7 @@ const KEYS: [(&str, &str); 29] = [
     ("O", "TUNING"),
     ("M", "TUNES"),
     ("I", "INSTRUMENTS"),
+    ("W", "VARIETY"),
     ("F  F11", "FULLSCREEN"),
     ("ESC  G", "CLOSE THE WINDOW"),
     ("Q", "QUIT"),
@@ -673,6 +674,7 @@ impl Gui {
                             Ok('o') => Some(Action::Tuned),
                             Ok('m') => Some(Action::NetTunes),
                             Ok('i') => Some(Action::Voices),
+                            Ok('w') => Some(Action::Varied),
                             Ok('g') => Some(Action::Window),
                             Ok('f') => Some(Action::Fullscreen),
                             Ok('q') => Some(Action::Quit),
@@ -1402,7 +1404,8 @@ impl Gui {
     fn more_tab(&mut self, st: &State, r: Rect) {
         let (x0, y0, x1, y1) = r;
         let touch = self.win.touch();
-        let bh = ((y1 - y0 - 69) / 4).clamp(14, ROW - 2);
+        // (four choices a line and a row each, the window's own row, two lines' word)
+        let bh = ((y1 - y0 - 87) / 5).clamp(13, ROW - 2);
         let mut y = self.made_stacked(st, (x0, y0 + 2, x1, y1), bh);
         let mut own: Vec<(&str, Action, &str, &'static str)> = Vec::new();
         if self.win.can_fullscreen() {
@@ -1570,7 +1573,7 @@ impl Gui {
         self.text(x + 12, y + bh - 13, "ANY KEY OR CLICK PUTS THIS AWAY", FAINT, 1);
     }
 
-    /// How the music is made, a row of three choices, each a name and its
+    /// How the music is made, a row of four choices, each a name and its
     /// options side by side, the one chosen lit: the settings as written
     /// or tuned, the tunes by the rules or the network, the instruments. An
     /// option underlined does something for the music playing (the
@@ -1630,9 +1633,9 @@ impl Gui {
     }
 }
 
-/// How the music is made, as three choices: each its name, what it is, its
+/// How the music is made, as four choices: each its name, what it is, its
 /// key, and its options.
-fn made_groups(st: &State) -> [(&'static str, &'static str, &'static str, Vec<Choice>); 3] {
+fn made_groups(st: &State) -> [(&'static str, &'static str, &'static str, Vec<Choice>); 4] {
     use music::Voices;
     let (o, id) = (st.opts, st.id());
     let g = music::GENRES[music::parts(id).0];
@@ -1651,7 +1654,26 @@ fn made_groups(st: &State) -> [(&'static str, &'static str, &'static str, Vec<Ch
             (false, false) => format!("Celtic has one alone: {g} keeps to the rules."),
         }
     );
-    let groups: [(&str, &str, &str, Vec<Choice>); 3] = [
+    let varied = music::has_variety(id);
+    let variety = format!(
+        "Each song has more to draw on: other beats, chords and players for its genre, tunes that change as they come round, parts that sit out a phrase, a last chorus a key up. {}",
+        if varied { format!("{g} has more.") } else { format!("{g} has no more yet: its songs are as they were.") }
+    );
+    let groups: [(&str, &str, &str, Vec<Choice>); 4] = [
+            (
+                "VARIETY",
+                "How alike a genre's songs are. A change writes this song again, the other way: another song.",
+                "W",
+                vec![
+                    (
+                        "LESS",
+                        music::Opts { varied: false, ..o },
+                        false,
+                        "Each genre's songs as they were first written: a style keeps one beat, one band and a short list of chords. A song's id without a V among its letters is one of these.".into(),
+                    ),
+                    ("MORE", music::Opts { varied: true, ..o }, varied, variety),
+                ],
+            ),
             (
                 "TUNING",
                 "Each genre's mix: the level of each part, the tone, reverb, tempo, swing and stereo width. A change plays this song again from its start.",
@@ -2059,7 +2081,8 @@ fn lines_of(s: &str, cols: usize) -> Vec<String> {
 /// The settings' row's width on one line: its groups' labels and buttons
 /// (as `made` draws them).
 fn made_width() -> i32 {
-    const MADE: [(&str, &[&str]); 3] = [
+    const MADE: [(&str, &[&str]); 4] = [
+        ("VARIETY", &["LESS", "MORE"]),
         ("TUNING", &["AS WRITTEN", "OPTIMISED"]),
         ("TUNES", &["RULES", "NETWORK"]),
         ("INSTRUMENTS", &["SYNTH", "RECORDED", "NETWORK"]),

@@ -52,10 +52,13 @@ pub enum Action {
     /// the piece playing saved as an MP3
     Export,
     /// how the music is made: the optimiser's settings on or off, the
-    /// network's tunes on or off, the next to play the instruments; all three as given
+    /// network's tunes on or off, the next to play the instruments, the
+    /// songs written with more variety or as they first were; all four as
+    /// given
     Tuned,
     NetTunes,
     Voices,
+    Varied,
     SetOpts(music::Opts),
     /// the terminal's equalizer on or off, the window open or closed,
     /// fullscreen, the window's list of the keys, its effects and its
@@ -307,11 +310,12 @@ pub fn act(a: Action, now: &Now, st: &mut State, deck: &impl Deck) -> Option<Act
             }
         }
         Action::Export => deck.export(),
-        Action::Tuned | Action::NetTunes | Action::Voices | Action::SetOpts(_) => {
+        Action::Tuned | Action::NetTunes | Action::Voices | Action::Varied | Action::SetOpts(_) => {
             match a {
                 Action::Tuned => st.opts.tuned = !st.opts.tuned,
                 Action::NetTunes => st.opts.net_tunes = !st.opts.net_tunes,
                 Action::Voices => st.opts.voices = st.opts.voices.next(),
+                Action::Varied => st.opts.varied = !st.opts.varied,
                 Action::SetOpts(o) => st.opts = o,
                 _ => {}
             }

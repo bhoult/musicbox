@@ -16057,6 +16057,14 @@ pub fn has_tuning(id: usize) -> bool {
     tuning(parts(id).0).is_some()
 }
 
+/// Whether the music `id`'s writer has more to draw on when its songs are
+/// written with more variety (`Opts::varied`): the styled genres, and the
+/// three older ones whose songs were the most alike.
+pub fn has_variety(id: usize) -> bool {
+    let g = parts(id).0;
+    is_styled(g) || matches!(g, TECHNO | STARCONFLICT | WESTERN)
+}
+
 /// Whether a network writes tunes for the music `id`'s writer.
 pub fn has_net_tunes(id: usize) -> bool {
     parts(id).0 == CELTIC && crate::tunes::has_celtic()
