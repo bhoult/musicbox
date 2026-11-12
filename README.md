@@ -14,7 +14,7 @@ As it comes, no AI model makes any of the sound or the music, and no song is sam
 
 Three settings, each off until chosen, bring in what was learned from real music ([below](#how-it-is-made)): six genres' mixes as an optimiser tuned them against real recordings, celtic tunes written by a small network that learned O'Neill's *Music of Ireland*, and 18 instruments played by small networks that learned their recordings.
 
-It was extracted from fleece, a fractal flame animator, whose videos in [flock](https://experiments.galedra.org/flock/) it scored. The composer, synthesiser and sampler are fleece's code, since tuned against recordings of the real genres ([below](#checked-against-real-music)): polka, synthwave, tavern, lo-fi, starconflict, gamelan and mariachi now sound different from fleece's, as do mixes with any of them in either part; the other genres, and mixes of them alone, played on the synthesiser (`--voices synth`, the other two settings as they come), still write fleece's bytes for a given genre and seed. On the recordings they have moved since: notes kept alive on the recordings that hold a note on a loop of a few cycles, and a recorded drum kit and electric basses in place of the SoundFont's.
+It was extracted from fleece, a fractal flame animator, whose videos in [flock](https://experiments.galedra.org/flock/) it scored. The composer, synthesiser and sampler are fleece's code, since tuned against recordings of the real genres ([below](#checked-against-real-music)): polka, synthwave, tavern, lo-fi, starconflict, gamelan and mariachi now sound different from fleece's, as do mixes with any of them in either part; the other genres, and mixes of them alone, played on the synthesiser as songs were first written (`--voices synth --variety less`, the other two settings as they come), still write fleece's bytes for a given genre and seed. On the recordings they have moved since: notes kept alive on the recordings that hold a note on a loop of a few cycles, and a recorded drum kit and electric basses in place of the SoundFont's.
 
 ```
 cargo build --release
@@ -49,7 +49,7 @@ The terminal shows what is playing and the keys, redrawn in place:
   [ ] length 3:00  - + volume 100%  t type a length  e equalizer  g window
   7 8 reverb 100%  9 0 echo 100%  ; ' chorus 100%  (100%: as the genre has it)
   5 6 width 100%  1 2 bass 100%  3 4 treble 100%
-  o tuning as written  m tunes rules  i instruments recorded
+  o tuning as written  m tunes rules  i instruments recorded  w variety more
 ```
 
 The top line ends with the song's id ([below](#song-ids)), a ★ before it when the song is one of your [favorites](#copy-paste-and-favorites). The third line is the genre selector: the genre writing the music is lit, and the drummer is underlined. A terminal too narrow for all 28 shows a window of them about the genre playing, ‹ marking that some come before. The song line gives the piece's number, meter and form, tempo, key and mode, its section and bar, how long it has played, and the length asked of it. The last line is how the music is made ([below](#how-it-is-made)), with a note where a choice does nothing for the genre playing (celtic alone has network tunes, for one).
@@ -77,6 +77,7 @@ The top line ends with the song's id ([below](#song-ids)), a ★ before it when 
 | O | tuning: as written, or optimised |
 | M | tunes: by the rules, or by the network |
 | I | instruments: the synthesiser, the recordings, or the networks |
+| W | variety: each genre's songs written with more to draw on, or as they first were ([below](#how-it-is-made)) |
 | E | the equalizer in the terminal, on or off (`--eq` starts with it on) |
 | G | open or close the window (`--gui` opens it at the start) |
 | ? (also F1) | every key, in one list, in the window and on the page |
@@ -94,7 +95,7 @@ A change waits for the next bar line, or the next beat when bars are long, and t
 - **Where in the song:** a bar to click, or drag and let go, to go to a point in the song, between buttons 10 s back and on, and the time played of the song's length.
 - **The equalizer:** what the speakers are playing, in LED bars from 35 Hz to 16 kHz with peak markers. Each bar is the loudest part of its band in an 85 ms window, tilted up 3 dB an octave so the highs show.
 - **The transport and the length:** BACK, STOP / START, NEXT SONG and EXPORT MP3 (R replays the song, as BACK does after its first seconds), then the songs' length: AUTO (each song as long as it was written), a slider from 0:30 to 10:00 (drag it, click it, or turn the mouse wheel over it), and a field to type a length into (click it, or press T).
-- **How it is made:** TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
+- **How it is made:** VARIETY (LESS, MORE), TUNING (AS WRITTEN, OPTIMISED), TUNES (RULES, NETWORK) and INSTRUMENTS (SYNTH, RECORDED, NETWORK), as W, O, M and I have them. A choice that does something for the genre playing is underlined in the accent colour.
 - **The genre selector:** all 28 genres in one grid, under a switch for what a click on one sets: MUSIC BY (the genre that writes the music, lit blue in the grid) or DRUMS BY (the genre on drums, lit amber). Click DRUMS BY, then any genre, and it drums for the music; the music's own genre there gives it its own drums back. Whichever is not being chosen is underlined in the grid. A right-click on a genre puts it on drums either way, and Up and Down step the drummer. Below are buttons for FULLSCREEN (F or F11), CLOSE (Esc), QUIT (Q), KEYS (? or F1) and EFFECTS (A: underlined when one is turned), and the VOLUME: a slider from 0 to 100% (drag it, click it, or turn the mouse wheel over it).
 
 EFFECTS opens the six [effects](#effects) over the top of the equalizer, a slider each with ALL 100% to put them back; FAVORITES opens the list of favorites in its place, a click on one playing it and its X letting it go. Esc puts either away.
@@ -152,7 +153,7 @@ They change the room, not the music: a song's id stays the same, and an export (
 
 ## Song ids
 
-Every song has an id, shown at the top of the terminal, the window and the page: `ska.2817.1.2` is ska from seed 2817, the run of songs begun by its first skip or genre change (0 is the first run), and that run's second song. A length asked is added in seconds (`.180s`), and the settings that are not as they come in letters: `o` optimised, `t` network tunes, `s` the synthesiser's instruments, `n` the network's (`celtic.5.0.2.180s.tn`). The id plays the song again, later or elsewhere: `musicbox ska.2817.1.2`, D and typing it (in the window or the page), or the page's address (`bhoult.github.io/musicbox/#ska.2817.1.2`, which follows the song playing). It sets the genre, the length and the settings it gives, and the music goes on from that song as it would have.
+Every song has an id, shown at the top of the terminal, the window and the page: `ska.2817.1.2` is ska from seed 2817, the run of songs begun by its first skip or genre change (0 is the first run), and that run's second song. A length asked is added in seconds (`.180s`), and how it is made in letters: `v` written with more variety (as new songs are; an id without it is a song as songs were first written, and still plays as that song), `o` optimised, `t` network tunes, `s` the synthesiser's instruments, `n` the network's (`celtic.5.0.2.180s.tnv`). The id plays the song again, later or elsewhere: `musicbox ska.2817.1.2`, D and typing it (in the window or the page), or the page's address (`bhoult.github.io/musicbox/#ska.2817.1.2`, which follows the song playing). It sets the genre, the length and the settings it gives, and the music goes on from that song as it would have.
 
 **How exactly.** The networks have fixed weights and their own seeded dice, so nothing in the music is left to chance: a song from its id has the same notes, form, instruments and settings, on the desktop and in the browser alike. The first song of a run comes back to the byte. A later one has the same notes, with small differences in the sound (which recording of a drum plays, the noise) when gone to from its id; an export from its id (`--export ID`, or the page's EXPORT MP3) plays the songs before it in its run to get there, and is the same to the byte as the song as it first played, in the same build. An id ending in `~` was made after the length changed earlier in its run, or while it played: the songs before it were steered to another length, so its notes may come out otherwise.
 
@@ -170,7 +171,7 @@ X (or the window's EXPORT MP3) saves the song playing, on its own, from its star
 
 ```
 target/release/musicbox --export ID OUT.mp3
-target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L] [--tuned] [--net-tunes] [--voices V]
+target/release/musicbox --export GENRE OUT.mp3 --seed SEED --song K [--length L] [--tuned] [--net-tunes] [--voices V] [--variety less]
 ```
 
 `--export` renders a song by its id, or the Kth song (1 by default) of a genre and seed, alone; a name ending in .wav writes a WAV instead (no LAME needed).
@@ -234,7 +235,7 @@ The names `indonesian`, `keltic`, `spaghetti-western`, `space-opera`, `orchestra
 
 The sixteen genres from classical on are each two to four styles, and one composer plays them (`src/music/styled.rs`): a style is a table in `src/music/styles.rs` of its meter, tempo, swing and modes, its chords, its form, its drums' lines, how its bass, chords, arpeggio, tune and second voice go, and its instruments. The tanpura, the singing bowl, the log drum and the 808 are the synthesiser's; every other instrument they play is a recording the first twelve use too.
 
-The composer writes pieces of about two minutes (50 to 190 bpm). Each piece has its own key, mode, tempo, chord progressions, drum patterns, bassline, melody and a second voice answering it, laid out in sections with something changing every four bars. Within a piece the bass mutates at phrase ends, the melody comes back varied, and filters drift. The next piece usually moves to a neighbouring key. It never loops, though each genre keeps its style.
+The composer writes pieces of about two minutes (50 to 190 bpm). Each piece has its own key, mode, tempo, chord progressions, drum patterns, bassline, melody and a second voice answering it, laid out in sections with something changing every four bars. Within a piece the bass mutates at phrase ends, the melody comes back varied, and filters drift. The next piece usually moves to a neighbouring key. It never loops, though each genre keeps its style. Written with more variety, as new songs are ([below](#how-it-is-made)), a piece also draws its beat, its players, how its bass and chords go and the turns of its form, from more than its style first had.
 
 **Mixes.** Two genres joined with `+` (or chosen with the drummer keys) make a mix. The first writes the music: its form, meter, chords and tunes. The second drums it: its beat fitted to the first's meter, its kits and effects, and a tempo 60% of the way to its own. Each part gets an instrument from each genre. Any of the 756 pairs plays.
 
@@ -259,14 +260,44 @@ The recordings come from three sources:
 
 ## How it is made
 
-Three settings change how the music is made. Each is in every interface: a key in the terminal and the window, a row of buttons in the window and the page, and a flag for playing, `--wav` and `--export`. Changing one plays the song playing again from its start, made the new way, so the two can be heard one after the other. As they come, the music is as written, its tunes are the rules' and its instruments are recorded.
+Four settings change how the music is made. Each is in every interface: a key in the terminal and the window, a row of buttons in the window and the page, and a flag for playing, `--wav` and `--export`. Changing one plays the song playing again from its start, made the new way, so the two can be heard one after the other (the variety writes it again: another song). As they come, songs are written with more variety, tuned as written, their tunes the rules' and their instruments recorded.
 
 | setting | choices | key | flag |
 | --- | --- | --- | --- |
+| variety | less, more | W | `--variety more\|less` |
 | tuning | as written, optimised | O | `--tuned` |
 | tunes | rules, network | M | `--net-tunes` |
 | instruments | synth, recorded, network | I | `--voices synth\|recorded\|network` |
 
+- **More variety:** what a song has to draw on besides its style's own, so that a genre's songs are less alike and a song changes more as it goes (`src/music/varied.rs`). It is how songs are written unless less is asked for; an id says which with its `v`, so every id from before still plays the song it named, to the byte. For the sixteen genres from classical on, a piece draws:
+  - its drums: the style's lines, or one of 34 pairs written for the styles, any plain line maybe another of its kind (a kick, a backbeat with ghost notes, hats to suit the tempo, a ride, a shaker); each fill one of four shapes; and on the odd bars of a section a turn of the beat (a kick more, a ghost on the snare, the hats resting, a kick left out);
+  - who plays some of its parts (41 styles have other players for one to four of them, each brought to the level of the one it stands in for), and how its bass, chords, arpeggio and second voice go, from one or two other ways that suit the style;
+  - its chords from longer lists (every list at least four rows; 112 were added), the three rows a dozen styles shared half as often;
+  - its form's turns: a long first verse or a half second one, a longer intro, a build or a breath before the last choruses, those choruses a key up or opening without their drums, a part sitting out half a section;
+  - and its tunes as they come round: a verse or chorus come again has a cell written anew or its close changed, a hook is no longer one bar eight times, and the last choruses may double the tune an octave up.
+
+  Of the first twelve, the western's and the space opera's themes are not stated the same way twice (the duel and the lament also get a second progression), and techno has more chords by mode; the other nine are as they were. Over 40 songs a genre, less against more (`cargo test --release variety_table -- --ignored --nocapture`):
+
+  | genre | different drum bars | chord progressions | bands | bars a song repeats |
+  | --- | --- | --- | --- | --- |
+  | rock | 21 → 431 | 20 → 28 | 5 → 19 | 7% → 7% |
+  | 60s | 35 → 637 | 20 → 25 | 10 → 33 | 8% → 2% |
+  | 70s | 26 → 256 | 22 → 29 | 18 → 30 | 15% → 5% |
+  | 80s | 25 → 230 | 19 → 27 | 27 → 33 | 7% → 6% |
+  | 90s | 27 → 300 | 19 → 26 | 11 → 26 | 24% → 14% |
+  | 2000s | 33 → 320 | 14 → 22 | 13 → 19 | 26% → 13% |
+  | 2010s | 27 → 123 | 15 → 22 | 14 → 28 | 31% → 20% |
+  | 2020s | 25 → 135 | 21 → 28 | 23 → 33 | 9% → 4% |
+  | kenyan | 23 → 250 | 16 → 22 | 4 → 16 | 9% → 7% |
+  | elevator | 19 → 124 | 10 → 11 | 13 → 28 | 5% → 3% |
+  | corporate | 21 → 161 | 10 → 15 | 15 → 31 | 14% → 6% |
+  | worship | 17 → 147 | 11 → 14 | 22 → 29 | 15% → 8% |
+  | praise | 32 → 333 | 17 → 26 | 14 → 31 | 9% → 3% |
+  | classical | none | 29 → 31 | 7 → 15 | 20% → 16% |
+  | orchestra | 4 → 18 | 19 → 21 | 25 → 31 | 15% → 11% |
+  | yoga | 3 → 4 | 16 → 20 | 19 → 27 | 22% → 11% |
+
+  Tempo ranges, drum kits and the songs' loudness (within 0.7 dB) are as they were.
 - **Optimised tuning:** each genre's mix as an optimiser set it, so that its songs sound more like the genre's real recordings to the taggers that checked them ([below](#checked-against-real-music)): each channel's level and stereo width, the low and high shelves, the reverb, the tempo (within 12%), the swing, and how late the hits come. The notes stay as written. Six genres have a setting: ambient, techno, lo-fi, ska, gamelan and starconflict. The other 22 play as written either way, and a mix takes the setting of its first genre. The taggers turned out to like a brighter, more melody-forward mix than the recordings have, so a setting was kept only where the songs' loudness and brightness, measured directly, stayed near the recordings'.
 - **Network tunes:** celtic's reels, jigs, hornpipes, marches and airs written by a small network (a GRU, 0.8 MB) that learned 1,061 tunes from O'Neill's *Music of Ireland* (1903), as the O'Neill's Project transcribed them. The rest of the piece (its chords, form and instruments) is the rules' either way, so only the tunes change. On the statistics of real tunes, the network's are much closer than the rules': the rules repeat the same note a third of the time, where O'Neill's tunes do so 5 to 14% of the time. Other genres keep their rules' tunes.
 - **Network instruments:** 18 held-note instruments (violin, violins, violas, cellos, contrabass, trumpet, trombone, horn, tuba, tenor sax, flute, clarinet, oboe, bassoon, recorder, ocarina and harmonica, with trumpet both held and with vibrato) played by small networks in the manner of DDSP. 250 times a second, a network of 234 KB gives a note's loudness, how it is shared among 48 harmonics, its noise in 16 bands and its vibrato, and oscillators and filtered noise play that. Each learned from its own recordings and plays within half a dB of their level. Everything else plays from the recordings, so the networks need them installed. SYNTH is the synthesiser alone, as `--no-samples` has it.
@@ -280,7 +311,7 @@ target/release/musicbox --wav celtic 120 celtic.wav --seed 7
 target/release/musicbox --wav western+celtic 90 ride.wav --ending natural --fade 3
 ```
 
-`--wav GENRE SECONDS OUT.wav` renders 16-bit stereo at 48 kHz, faster than real time. It then prints the pieces it holds and some statistics about the composition. `--ending natural` winds the music down to an ending of its own; `fade` fades it over the last 4 s; `cut` (the default) stops where the time runs out. `--fade SECS` fades it in over half of SECS. The settings' flags (`--tuned`, `--net-tunes`, `--voices`) apply here too.
+`--wav GENRE SECONDS OUT.wav` renders 16-bit stereo at 48 kHz, faster than real time. It then prints the pieces it holds and some statistics about the composition. `--ending natural` winds the music down to an ending of its own; `fade` fades it over the last 4 s; `cut` (the default) stops where the time runs out. `--fade SECS` fades it in over half of SECS. The settings' flags (`--variety`, `--tuned`, `--net-tunes`, `--voices`) apply here too.
 
 ## Checked against real music
 
@@ -304,7 +335,7 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 
 | file | contents |
 | --- | --- |
-| `src/music.rs`, `src/music/` | the composer, the synthesiser and the player (fleece's); the later genres each in a file of their own; the styled genres' composer (`styled.rs`) and their styles (`styles.rs`) |
+| `src/music.rs`, `src/music/` | the composer, the synthesiser and the player (fleece's); the later genres each in a file of their own; the styled genres' composer (`styled.rs`) and their styles (`styles.rs`); what a song written with more variety draws on (`varied.rs`) |
 | `src/samples.rs` | the sampler: SoundFont and multisample loading (fleece's) |
 | `src/tap.rs` | what the player hands the displays: the last second of sound and what is playing |
 | `src/spectrum.rs` | the equalizer's FFT and bars |
@@ -320,6 +351,7 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 | `models/` | the networks (`index.tsv` lists them); `docs/app/models/` is the page's copy |
 | `src/time.rs` | the clock the displays read: std's, or in the browser the page's |
 | `web/lib.rs`, `docs/index.html`, `docs/app/` | the browser version: the WebAssembly build (the engine for the worker, the window for the page), and the page, its worker and its audio worklet; `docs/app/mp3/`, its MP3 encoder |
+| `docs/manifest.webmanifest`, `docs/icon-*.png`, `tools/page-icons.py` | the page on a phone's home screen: its name and icons, and what draws them |
 | `tools/get-samples.sh`, `tools/samples_manifest.py` | fetch and prepare the recorded instruments |
 | `tools/web-samples.sh` | the recorded instruments for the page, as Opus |
 | `tools/stamp-page.sh` | puts a hash of the page's files on the addresses it loads them from |
@@ -327,9 +359,9 @@ uv run tools/validate/balance.py             # the band styles' balance, a chann
 | `docs/samples/` | what it made: the page's recordings, with their sources and licences |
 | `tools/neural/` | the networks' training: `tunes.py` and `TUNES.md` (its sources and credits), `voices.py` |
 | `tools/tune/` | the optimiser |
-| `tools/validate/` | the measuring against real music: the taggers, the renders, the comparison, the references' list, the band styles' balance |
+| `tools/validate/` | the measuring against real music: the taggers, the renders, the comparison, the references' list, the band styles' balance, and how alike a genre's songs are (`variety.py`) |
 | `docs/validation.md` | what was measured, and what changed |
-| `docs/neural.md` | the three settings: how each was made, and what it measured |
+| `docs/neural.md` | the three settings learned from real music: how each was made, and what it measured |
 
 ## Requirements and licence
 
