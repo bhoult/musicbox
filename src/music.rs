@@ -15848,26 +15848,32 @@ impl Voices {
 
 /// How the music is made, besides its genre and seed: each genre's settings
 /// as written or as the optimiser tuned them (`tuned`), its tunes by the
-/// rules or by the network (`net_tunes`), and what plays its instruments.
+/// rules or by the network (`net_tunes`), what plays its instruments, and
+/// whether its songs are written with more variety (`varied`: more beats,
+/// chords, players and ways to draw on in each genre, tunes that change as
+/// they come round, parts that sit out; see music/varied.rs).
 /// The default is the music as written (a seed's music as it always was).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Opts {
     pub tuned: bool,
     pub net_tunes: bool,
     pub voices: Voices,
+    pub varied: bool,
 }
 
 impl Opts {
-    /// As one number (for an atomic, and the browser), and back.
+    /// As one number (for an atomic, and the browser), and back: `tuned`,
+    /// `net_tunes`, the voices in two bits, `varied`.
     pub fn code(self) -> u32 {
-        self.tuned as u32 | (self.net_tunes as u32) << 1 | (self.voices as u32) << 2
+        self.tuned as u32 | (self.net_tunes as u32) << 1 | (self.voices as u32) << 2 | (self.varied as u32) << 4
     }
 
     pub fn from_code(c: u32) -> Opts {
         Opts {
             tuned: c & 1 != 0,
             net_tunes: c & 2 != 0,
-            voices: Voices::ALL[((c >> 2) as usize).min(Voices::ALL.len() - 1)],
+            voices: Voices::ALL[((c >> 2 & 3) as usize).min(Voices::ALL.len() - 1)],
+            varied: c & 16 != 0,
         }
     }
 
@@ -15883,6 +15889,9 @@ impl Opts {
         }
         if self.voices != Voices::Recorded {
             s += &format!(" --voices {}", self.voices.name());
+        }
+        if !self.varied {
+            s += " --variety less";
         }
         s
     }
@@ -15905,9 +15914,11 @@ impl Opts {
 /// starts the next, an engine seeded `run_seed`), which song of that run
 /// (from 1), the length asked of it (0: its own) and how it is made.
 /// Written `lo-fi.2817.0.3`, then `.180s` and the settings that are not as
-/// they come (`o` optimised, `t` the network's tunes, `s` the synthesiser's
-/// instruments, `n` the network's), and `~` when the length was changed
-/// earlier in the run or as it played: its notes may then come out otherwise.
+/// the music first came (`o` optimised, `t` the network's tunes, `s` the
+/// synthesiser's instruments, `n` the network's, `v` written with more
+/// variety: an id without it is a song of before there was any, and plays
+/// as it did), and `~` when the length was changed earlier in the run or as
+/// it played: its notes may then come out otherwise.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SongId {
     pub music: usize,
@@ -15951,6 +15962,7 @@ impl SongId {
                     't' => id.opts.net_tunes = true,
                     's' => id.opts.voices = Voices::Synth,
                     'n' => id.opts.voices = Voices::Net,
+                    'v' => id.opts.varied = true,
                     _ => return None,
                 }
             }
@@ -15967,12 +15979,17 @@ impl std::fmt::Display for SongId {
             write!(f, ".{}s", self.length.round())?;
         }
         let o = self.opts;
-        let set: String =
-            [(o.tuned, 'o'), (o.net_tunes, 't'), (o.voices == Voices::Synth, 's'), (o.voices == Voices::Net, 'n')]
-                .iter()
-                .filter(|x| x.0)
-                .map(|x| x.1)
-                .collect();
+        let set: String = [
+            (o.tuned, 'o'),
+            (o.net_tunes, 't'),
+            (o.voices == Voices::Synth, 's'),
+            (o.voices == Voices::Net, 'n'),
+            (o.varied, 'v'),
+        ]
+        .iter()
+        .filter(|x| x.0)
+        .map(|x| x.1)
+        .collect();
         if !set.is_empty() {
             write!(f, ".{set}")?;
         }
@@ -17678,7 +17695,7 @@ mod tests {
         p.windows(2).map(|w| w[1].0 - w[0].0).collect()
     }
 
-    const SYNTH: Opts = Opts { tuned: false, net_tunes: false, voices: Voices::Synth };
+    const SYNTH: Opts = Opts { tuned: false, net_tunes: false, voices: Voices::Synth, varied: false };
 
     /// The mix played on for `secs`.
     fn play(m: &mut Mix, secs: f64) {
@@ -18023,12 +18040,21 @@ mod tests {
         for tuned in [false, true] {
             for net_tunes in [false, true] {
                 for voices in Voices::ALL {
-                    let o = Opts { tuned, net_tunes, voices };
+                    let o = Opts { tuned, net_tunes, voices, varied: false };
                     assert_eq!(Opts::from_code(o.code()), o);
                 }
             }
         }
-        assert_eq!(Opts::default().flags(), "");
+        // (the apps' default: more variety)
+        assert_eq!(Opts { varied: true, ..Opts::default() }.flags(), "");
+        assert_eq!(Opts::default().flags(), " --variety less");
+        for c in 0..32 {
+            let o = Opts::from_code(c);
+            assert_eq!(o.varied, c & 16 != 0);
+            if c >> 2 & 3 < 3 {
+                assert_eq!(o.code(), c);
+            }
+        }
         assert_eq!(Voices::parse("net"), Some(Voices::Net));
         assert_eq!(Voices::Net.next(), Voices::Synth);
     }

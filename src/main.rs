@@ -53,7 +53,9 @@ fn help(code: i32) -> ! {
     eprintln!("       musicbox --export GENRE[+DRUMS] OUT.mp3 [--seed N] [--song K] [--length L] [ROOM]");
     eprintln!("       musicbox --export ID OUT.mp3 [ROOM]");
     eprintln!("       musicbox --list | --samples-list | --web-pack DIR");
-    eprintln!("  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network], for any of the above");
+    eprintln!(
+        "  MADE: [--tuned] [--net-tunes] [--voices synth|recorded|network] [--variety more|less], for any of the above"
+    );
     eprintln!(
         "  ROOM: [--reverb R] [--echo E] [--chorus C] [--width W] [--bass B] [--treble T], 0 to 500 per cent (100, the default: as the genre has them)"
     );
@@ -64,6 +66,9 @@ fn help(code: i32) -> ! {
     eprintln!("  --gui: open the window (a live equalizer and the genre selector); G opens and closes it too");
     eprintln!("  --eq: the equalizer in the terminal as well; E turns it on and off");
     eprintln!("  --seed N: the music the same every time for a genre and N (random by default)");
+    eprintln!("  --variety more|less: each genre's songs written with more to draw on (more, the default: other");
+    eprintln!("         beats, chords and players, tunes that change as they come round), or as they first were");
+    eprintln!("         (less); an ID says which itself (a v among its letters: more)");
     eprintln!("  --length L: how long each song is (3:00, 2.5m, 150s; auto, the default: as long as it was written)");
     eprintln!("  --volume V: how loud it plays, 0 to 100 (100 by default); - and + turn it down and up");
     eprintln!("  --reverb, --echo, --chorus: more or less of the genre's own, 0 (none) to 500 per cent; past 100");
@@ -104,6 +109,7 @@ fn main() {
     let mut genre: Option<usize> = None;
     let mut from: Option<music::SongId> = None;
     let mut opts = music::Opts::default();
+    let mut variety: Option<bool> = None;
     let mut voices: Option<music::Voices> = None;
     let mut i = 0;
     let value = |i: usize| args.get(i).cloned().unwrap_or_else(|| usage());
@@ -155,6 +161,14 @@ fn main() {
             }
             "--tuned" => opts.tuned = true,
             "--net-tunes" => opts.net_tunes = true,
+            "--variety" => {
+                i += 1;
+                variety = Some(match value(i).as_str() {
+                    "more" => true,
+                    "less" => false,
+                    _ => usage(),
+                });
+            }
             "--voices" => {
                 i += 1;
                 voices = Some(music::Voices::parse(&value(i)).unwrap_or_else(|| usage()));
@@ -218,6 +232,8 @@ fn main() {
     samples::configure(samples_dir, no_samples);
     // without the recordings, the synthesiser plays (as it would anyway)
     opts.voices = voices.unwrap_or(if no_samples { music::Voices::Synth } else { music::Voices::Recorded });
+    // more variety unless less is asked for; a song's id says which itself
+    opts.varied = variety.unwrap_or(from.is_none_or(|id| id.opts.varied));
     let seed = seed.unwrap_or_else(|| {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u32 as u64)
     });
