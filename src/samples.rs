@@ -2180,8 +2180,11 @@ pub fn voice_data(dir: &Path, names: &[String], step: usize) -> Result<(), Strin
 /// rate), or followed by the recordings' rate over the engine's.
 const PACK_MAGIC: &[u8; 4] = b"MBP2";
 const PACK_MAGIC_AT: &[u8; 4] = b"MBP3";
-/// The lighter copy's rate over the engine's.
+/// The lighter copy's rate over the engine's, and the most its streams run
+/// to (seconds): a longer group's is cut into parts between its
+/// recordings, so that a phone decodes and hands on a little at a time.
 pub const PACK_LITE: f32 = 0.5;
+const PACK_PART: f32 = 90.0;
 /// Silence between a group's recordings (frames): a lossy codec's smear
 /// kept off the next one's attack.
 const PACK_GAP: usize = 2048;
@@ -2203,6 +2206,9 @@ pub struct Group {
     /// recordings'
     pub frames: u32,
     pub mono: u32,
+    /// the frames of each part its stream was written in (the lighter
+    /// copy's: one file a part)
+    pub parts: Vec<u32>,
 }
 
 thread_local! {
@@ -2464,12 +2470,14 @@ impl Bank {
         let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
         let mut j = String::from("{\"groups\":[\n");
         for (g, gr) in groups.iter().enumerate() {
+            let parts: Vec<usize> = lite[g].parts.iter().map(|&n| n as usize).collect();
             j += &format!(
-                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"mono\":{},\"lite\":{},\"deps\":[{}]}}{}\n",
+                "{{\"name\":\"{}\",\"file\":\"{g}.opus\",\"frames\":{},\"mono\":{},\"lite\":{},\"parts\":[{}],\"deps\":[{}]}}{}\n",
                 esc(&gr.name),
                 gr.frames,
                 gr.mono,
                 lite[g].frames,
+                list(&parts),
                 list(&deps[g]),
                 if g + 1 < groups.len() { "," } else { "" }
             );
@@ -2535,6 +2543,7 @@ impl Bank {
             // once (in the first group to have it, which the others then need)
             let (mut mono, mut stereo): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
             let mut placed: Vec<(usize, usize, u8, u32)> = Vec::new();
+            let mut cuts: Vec<usize> = Vec::new();
             for &id in &gr.insts {
                 let o = owner[id as usize - 1].expect("an owner");
                 if o != g {
@@ -2559,6 +2568,10 @@ impl Bank {
                             }
                             let d = (g, pc, (part.len() / c) as u32, (x.len() / c) as u32, ls, le);
                             part.extend_from_slice(&x);
+                            if lite {
+                                // (where the stream may be cut: the middle of the gap after it)
+                                cuts.push(part.len() + gap / 2);
+                            }
                             done.insert(key, d);
                             d
                         }
@@ -2590,21 +2603,46 @@ impl Bank {
             // (all mono: a mono stream, half the browser's to decode)
             let c = if stereo.is_empty() { 1 } else { 2 };
             let pcm: Vec<f32> = mono.iter().flat_map(|&s| [s; 2].into_iter().take(c)).chain(stereo).collect();
-            let mut w = Vec::with_capacity(44 + 2 * pcm.len());
-            w.extend_from_slice(b"RIFF");
-            w.extend_from_slice(&(36 + 2 * pcm.len() as u32).to_le_bytes());
-            w.extend_from_slice(b"WAVEfmt ");
-            let (c, block, rate) = (c as u32, 2 * c as u32, (RATE * tr) as u32);
-            for x in [16u32, 1 | c << 16, rate, block * rate, block | 16 << 16] {
-                w.extend_from_slice(&x.to_le_bytes());
+            // the lighter copy's stream in parts, cut between recordings
+            // (raw/G.K.wav); the full one whole (raw/G.wav)
+            let total = pcm.len() / c;
+            let mut ends: Vec<usize> = Vec::new();
+            if lite {
+                let most = (PACK_PART * RATE * tr) as usize;
+                let (mut start, mut last) = (0, 0);
+                for &at in cuts.iter().filter(|&&at| at < total) {
+                    if at - start > most && last > start {
+                        ends.push(last);
+                        start = last;
+                    }
+                    last = at;
+                }
+                if total - start > most && last > start {
+                    ends.push(last);
+                }
             }
-            w.extend_from_slice(b"data");
-            w.extend_from_slice(&(2 * pcm.len() as u32).to_le_bytes());
-            for s in &pcm {
-                w.extend_from_slice(&(s.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
+            ends.push(total);
+            gr.parts = ends.iter().scan(0, |from, &to| Some((to - std::mem::replace(from, to)) as u32)).collect();
+            let (cw, block, rate) = (c as u32, 2 * c as u32, (RATE * tr) as u32);
+            let mut from = 0;
+            for (k, &to) in ends.iter().enumerate() {
+                let part = &pcm[from * c..to * c];
+                from = to;
+                let mut w = Vec::with_capacity(44 + 2 * part.len());
+                w.extend_from_slice(b"RIFF");
+                w.extend_from_slice(&(36 + 2 * part.len() as u32).to_le_bytes());
+                w.extend_from_slice(b"WAVEfmt ");
+                for x in [16u32, 1 | cw << 16, rate, block * rate, block | 16 << 16] {
+                    w.extend_from_slice(&x.to_le_bytes());
+                }
+                w.extend_from_slice(b"data");
+                w.extend_from_slice(&(2 * part.len() as u32).to_le_bytes());
+                for s in part {
+                    w.extend_from_slice(&(s.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
+                }
+                let path = raw.join(if lite { format!("{g}.{k}.wav") } else { format!("{g}.wav") });
+                std::fs::write(&path, w).map_err(|e| format!("{}: {e}", path.display()))?;
             }
-            let path = raw.join(format!("{g}.wav"));
-            std::fs::write(&path, w).map_err(|e| format!("{}: {e}", path.display()))?;
         }
         let mut o = Out(if lite { PACK_MAGIC_AT } else { PACK_MAGIC }.to_vec());
         if lite {
@@ -2703,6 +2741,9 @@ pub struct Partial {
     /// begins on there, until then)
     lens: Vec<u32>,
     srcs: Vec<u16>,
+    /// the frame each zone's recording begins on in its group's stream (as
+    /// `Zone::off` has it until the group is in, and again once it is let go)
+    offs: Vec<usize>,
     /// where each group's stream begins in the bank's data, once it is in;
     /// the group being filled in, and where
     bases: Vec<Option<usize>>,
@@ -2816,7 +2857,26 @@ impl Partial {
             return Err("pack: a recording in no group".into());
         }
         let bases = vec![None; groups.len()];
-        Ok(Partial { bank: b, groups, lens, srcs, bases, filling: None })
+        let offs = b.zones.iter().map(|z| z.off).collect();
+        Ok(Partial { bank: b, groups, lens, srcs, offs, bases, filling: None })
+    }
+
+    /// Every group's recordings let go, for the page to hand in again those
+    /// the music now needs (a phone cannot hold every genre's it has
+    /// played): the bank's room emptied and kept for them, each zone silent
+    /// and each instrument nameless until its group comes again. A note
+    /// still sounding on one falls silent.
+    pub fn forget(&mut self) {
+        for (z, &off) in self.bank.zones.iter_mut().zip(&self.offs) {
+            (z.off, z.len) = (off, 0);
+        }
+        self.bank.data.clear();
+        self.bank.multis.clear();
+        self.bank.gms.clear();
+        self.bank.kits.clear();
+        self.bank.lively.clear();
+        self.bases.iter_mut().for_each(|b| *b = None);
+        self.filling = None;
     }
 
     /// An instrument by its kind and name, as an index line gives it ("multi"
@@ -2838,8 +2898,8 @@ impl Partial {
 
     /// Room in the bank's data for `n` samples more (`kept` of the groups
     /// about to come), made at once rather than a group at a time.
-    pub fn reserve(&mut self, n: usize) {
-        self.bank.data.reserve_exact(n);
+    pub fn reserve(&mut self, n: usize) -> bool {
+        self.bank.data.try_reserve_exact(n).is_ok()
     }
 
     /// Room for group `g`'s stream at the end of the bank's data, `n`
@@ -2855,7 +2915,9 @@ impl Partial {
             return Err(format!("{name}: {n} samples, not {want}"));
         }
         let base = self.bank.data.len();
-        self.bank.data.reserve_exact(n);
+        if self.bank.data.try_reserve_exact(n).is_err() {
+            return Err(format!("{name}: no memory for it ({} MB)", 2 * n / 1_000_000));
+        }
         self.bank.data.resize(base + n, 0);
         self.filling = Some((g, base));
         Ok(&mut self.bank.data[base..])
@@ -3214,9 +3276,19 @@ mod tests {
         // quarter of what the stereo ones hold (a half of the mono ones)
         let mut lite = Partial::new(&std::fs::read(out.join("lite/pack.bin")).expect("lite pack.bin")).expect("tables");
         for g in 0..lite.groups.len() {
-            let (pcm, rate, chans) =
-                read_wav(&std::fs::read(out.join(format!("lite/raw/{g}.wav"))).expect("raw")).expect("wav");
-            assert_eq!((rate, chans), (24000, 1));
+            // (its stream in the parts the index lists, one file each)
+            let at = json.find(&format!("\"file\":\"{g}.opus\"")).expect("the group's line");
+            let line = &json[at..at + json[at..].find('\n').expect("its end")];
+            let list = line.split("\"parts\":[").nth(1).and_then(|x| x.split(']').next()).expect("its parts");
+            let parts: Vec<usize> =
+                list.split(',').filter(|x| !x.is_empty()).map(|x| x.parse().expect("frames")).collect();
+            let mut pcm = Vec::new();
+            for (k, &n) in parts.iter().enumerate() {
+                let (part, rate, chans) =
+                    read_wav(&std::fs::read(out.join(format!("lite/raw/{g}.{k}.wav"))).expect("raw")).expect("wav");
+                assert_eq!((rate, chans, part.len()), (24000, 1, n), "group {g} part {k}");
+                pcm.extend(part);
+            }
             assert_eq!(lite.groups[g].mono, lite.groups[g].frames, "all in one channel");
             assert_eq!(pcm.len() as u32, lite.groups[g].frames);
             assert!(json.contains(&format!("\"lite\":{},", lite.groups[g].frames)), "{json}");
@@ -3225,6 +3297,31 @@ mod tests {
             let both: Vec<i16> = pcm.iter().flat_map(|&s| [s, s]).collect();
             lite.add(g, &both).expect("add");
         }
+        // let go and handed in again: nothing named or sounding between, then as before
+        let streams: Vec<Vec<i16>> = (0..p.groups.len())
+            .map(|g| {
+                let (pcm, _, chans) =
+                    read_wav(&std::fs::read(out.join(format!("raw/{g}.wav"))).expect("raw")).expect("wav");
+                if chans == 1 { pcm.iter().flat_map(|&s| [s, s]).collect() } else { pcm }
+            })
+            .collect();
+        let sine = p.bank.multi("sine", "sus").expect("in");
+        let before = play(&p.bank, sine, 69.0, 0.9, 0.18);
+        p.forget();
+        assert_eq!(p.bank.multi("sine", "sus"), None, "let go: nothing named");
+        assert_eq!(
+            p.bank.bytes(),
+            p.bank.zones.len() * std::mem::size_of::<Zone>()
+                + p.bank.picks.len() * 4
+                + p.bank.insts.iter().map(|i| i.cells.len() * std::mem::size_of::<Cell>() + 160).sum::<usize>(),
+            "no samples held"
+        );
+        assert!(play(&p.bank, sine, 69.0, 0.9, 0.18).iter().all(|x| x[0] == 0.0 && x[1] == 0.0), "and nothing sounds");
+        for (g, pcm) in streams.iter().enumerate() {
+            p.add(g, pcm).expect("add again");
+        }
+        assert_eq!(p.bank.multi("sine", "sus"), Some(sine));
+        assert_eq!(play(&p.bank, sine, 69.0, 0.9, 0.18), before, "handed in again: as it was");
         let _ = std::fs::remove_dir_all(&d);
         let w = &p.bank;
         let rms =

@@ -3,15 +3,16 @@
 # bank's tables and each group's recordings (48 kHz: its mono recordings,
 # then those recorded in stereo, in stereo; mono when it has none in
 # stereo), and a lighter copy of them for a phone (lite/: every group in one
-# channel at 24 kHz, a quarter of the memory or less), and this compresses
-# each group of both to Opus.
+# channel at 24 kHz, half the memory or less, a long group's stream in
+# parts of a minute and a half), and this compresses each group of both to
+# Opus.
 #
 #   tools/web-samples.sh OUT [KBPS [LITE_KBPS]]
 #
 # OUT gets pack.bin (the tables), pack.json (the groups, and those each
 # genre plays), N.opus for each group, the same again in lite/ (pack.bin and
-# N.opus), and README.md, SOURCES.md and licenses/ (the samples' sources and
-# licences, which go with them).
+# N.K.opus, a group's Kth part), and README.md, SOURCES.md and licenses/
+# (the samples' sources and licences, which go with them).
 # KBPS: Opus's bit rate (128 by default: the desktop's recordings, near enough
 # that no one hears the difference); LITE_KBPS: the lighter copy's (40).
 # Needs ffmpeg with libopus, and the samples (tools/get-samples.sh).
@@ -47,9 +48,9 @@ python3 - "$out" <<'PY'
 import json, os, sys
 out = sys.argv[1]
 j = json.load(open(f"{out}/pack.json"))
-for g in j["groups"]:
+for i, g in enumerate(j["groups"]):
     g["bytes"] = os.path.getsize(f"{out}/{g['file']}")
-    g["lite_bytes"] = os.path.getsize(f"{out}/lite/{g['file']}")
+    g["lite_bytes"] = sum(os.path.getsize(f"{out}/lite/{i}.{k}.opus") for k in range(len(g["parts"])))
 json.dump(j, open(f"{out}/pack.json", "w"), separators=(",", ":"))
 PY
 cat > "$out/README.md" <<EOF
@@ -62,7 +63,8 @@ stereo; a group with none in stereo, in mono), compressed to Opus at $kbps kb/s
 (\`N.opus\`), the sampler's
 tables (\`pack.bin\`), and which groups each genre and mix plays (\`pack.json\`).
 \`lite/\` is a lighter copy of the same for a phone, which cannot hold them all: every
-group in one channel at 24 kHz, at $lite kb/s, with tables of its own.
+group in one channel at 24 kHz, at $lite kb/s (\`N.K.opus\`: a group's stream in parts
+of a minute and a half, cut between recordings), with tables of its own.
 
 They come from:
 

@@ -253,15 +253,30 @@ pub unsafe extern "C" fn mb_pack(w: *mut Web, p: *const u8, n: u32) -> u32 {
 }
 
 /// Room for `n` samples of recordings more (the groups about to come, as
-/// the bank keeps them), made at once.
+/// the bank keeps them), made at once: 1, or 0 when there is no memory for
+/// it (each group's room is then made as it comes, or not at all).
 ///
 /// # Safety
 /// `w` is a handle from `mb_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mb_reserve(_w: *mut Web, n: u32) {
+pub unsafe extern "C" fn mb_reserve(_w: *mut Web, n: u32) -> u32 {
+    // SAFETY: between calls: nothing holds the bank
+    match unsafe { samples::web() } {
+        Some(pt) => pt.reserve(n as usize) as u32,
+        None => 0,
+    }
+}
+
+/// Every recording let go (a phone's memory), for the page to hand in again
+/// those the music now needs.
+///
+/// # Safety
+/// `w` is a handle from `mb_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mb_forget(_w: *mut Web) {
     // SAFETY: between calls: nothing holds the bank
     if let Some(pt) = unsafe { samples::web() } {
-        pt.reserve(n as usize);
+        pt.forget();
     }
 }
 

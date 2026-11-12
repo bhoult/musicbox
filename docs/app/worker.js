@@ -12,6 +12,8 @@ const IMPORTS = { env: { now_ms: () => performance.now() } };
 let x = null;
 let w = 0;
 let port = null;
+// the room made for the group whose recordings are coming a part at a time
+let room = 0;
 
 function text(p) {
   return new TextDecoder().decode(new Uint8Array(x.memory.buffer, p, x.mb_text_len(w)));
@@ -168,10 +170,26 @@ async function handle(m) {
       if (!ok) postMessage({ type: 'error', error: `tunes: ${text(x.mb_text(w))}` });
       break;
     }
+    // every recording let go (the page hands in again what the music needs)
+    case 'forget':
+      x.mb_forget(w);
+      break;
     // room for the groups about to come, made at once
     case 'reserve':
       x.mb_reserve(w, m.n);
       break;
+    // a part of a group's recordings (the lighter copy's come so): the
+    // group's room made with its first, each written where it goes in it,
+    // the group in with its last
+    case 'part': {
+      if (m.at === 0) room = x.mb_group_room(w, m.g, m.total);
+      if (room) new Int16Array(x.memory.buffer, room + 2 * m.at, m.pcm.length).set(m.pcm);
+      if (m.last) {
+        if (!room || !x.mb_group_in(w, m.g)) postMessage({ type: 'error', error: `recordings: ${text(x.mb_text(w))}` });
+        room = 0;
+      }
+      break;
+    }
     // a group's recordings, as the engine keeps them, written straight
     // into the room it makes for them
     case 'group': {

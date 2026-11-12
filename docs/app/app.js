@@ -150,6 +150,10 @@ coarse.addEventListener?.('change', device);
 // ?lite asks for it anywhere, ?full for the full ones on a phone
 const LITE = ASKED.has('lite') || (!ASKED.has('full') && (coarse.matches || (navigator.deviceMemory ?? 8) <= 4));
 const PACK = LITE ? `${SAMPLES}lite/` : SAMPLES;
+// the most of them such a device holds at once (16-bit samples): past it,
+// those of genres no longer playing are let go before the next genre's
+// are fetched
+const LITE_MOST = 150e6;
 
 const KEYS = {
   Enter: 13,
@@ -426,25 +430,6 @@ async function tables() {
 async function decodeGroup(g) {
   const info = rec.index.groups[g];
   const s16 = (x) => Math.max(-32768, Math.min(32767, Math.round(x * 32768)));
-  if (LITE) {
-    // the lighter copy: one channel at its own rate, decoded at that rate
-    // where the browser will (half the memory while it is decoded), else
-    // at the engine's and every other frame taken
-    const pcm = new Int16Array(info.lite);
-    if (!info.lite) return pcm;
-    const r = await fetch(`${PACK}${info.file}${R}`);
-    if (!r.ok) throw new Error(`${info.name}: ${r.status}`);
-    const bytes = await r.arrayBuffer();
-    let d = null;
-    try {
-      d = await new OfflineAudioContext(1, 1, LITE_RATE).decodeAudioData(bytes.slice(0));
-    } catch {}
-    if (!d || d.sampleRate % LITE_RATE) d = await audio.decodeAudioData(bytes);
-    const [l, step] = [d.getChannelData(0), Math.round(d.sampleRate / LITE_RATE)];
-    const n = Math.min(Math.floor(l.length / step), info.lite);
-    for (let k = 0; k < n; k++) pcm[k] = s16(l[k * step]);
-    return pcm;
-  }
   const mono = info.mono;
   const pcm = new Int16Array(mono + 2 * (info.frames - mono));
   if (!info.frames) return pcm;
@@ -461,19 +446,76 @@ async function decodeGroup(g) {
   return pcm;
 }
 
-// the groups `todo` (in order) decoded four at a time (two of the lighter
-// copy's: a phone's memory), each handed to `to` once those before it are
-// (a group's recordings may be in one before it), so that no more than a
-// few are held here at once; room for them all made first
+// a part of a group's stream in the lighter copy (`n` frames of one channel
+// at its own rate), decoded at that rate where the browser will (half the
+// memory while it is decoded), else at the engine's and every other frame
+// taken
+async function decodePart(t) {
+  const pcm = new Int16Array(t.n);
+  if (!t.n) return pcm;
+  const r = await fetch(`${PACK}${t.g}.${t.k}.opus${R}`);
+  if (!r.ok) throw new Error(`${rec.index.groups[t.g].name}: ${r.status}`);
+  const bytes = await r.arrayBuffer();
+  let d = null;
+  try {
+    d = await new OfflineAudioContext(1, 1, LITE_RATE).decodeAudioData(bytes.slice(0));
+  } catch {}
+  if (!d || d.sampleRate % LITE_RATE) d = await audio.decodeAudioData(bytes);
+  const [l, step] = [d.getChannelData(0), Math.round(d.sampleRate / LITE_RATE)];
+  const n = Math.min(Math.floor(l.length / step), t.n);
+  for (let k = 0; k < n; k++) pcm[k] = Math.max(-32768, Math.min(32767, Math.round(l[k * step] * 32768)));
+  return pcm;
+}
+
+// the groups `todo` (in order) handed to `to`, room for them all made
+// first. The full recordings: a group's stream whole, four decoded at a
+// time, each handed on once those before it are (a group's recordings may
+// be in one before it), so that no more than a few are held here at once.
+// The lighter copy: each stream a part at a time (a minute and a half of
+// it), two decoded at a time, written into the group's room as they come;
+// and the room, the first time, for all such a device is to hold, so that
+// it is never made again larger.
 async function sendGroups(todo, to, progress) {
-  const kept = (g) => {
-    const i = rec.index.groups[g];
-    return LITE ? i.lite : i.mono + 2 * (i.frames - i.mono);
-  };
+  const idx = rec.index.groups;
+  let done = 0;
+  if (LITE) {
+    const all = todo.reduce((a, g) => a + idx[g].lite, 0);
+    to.postMessage({ type: 'reserve', n: to.reserved ? all : Math.max(all, LITE_MOST) });
+    to.reserved = true;
+    const parts = todo.flatMap((g) => {
+      let at = 0;
+      return idx[g].parts.map((n, k, list) => {
+        const t = { g, k, n, at, total: idx[g].lite, last: k === list.length - 1 };
+        at += n;
+        return t;
+      });
+    });
+    const got = new Map();
+    let [next, taken] = [0, 0];
+    const hand = () => {
+      while (next < parts.length && got.has(next)) {
+        const [t, pcm] = [parts[next], got.get(next)];
+        got.delete(next++);
+        to.postMessage({ type: 'part', g: t.g, at: t.at, total: t.total, last: t.last, pcm }, [pcm.buffer]);
+        if (t.last) progress?.(++done);
+      }
+    };
+    await Promise.all(
+      [0, 1].map(async () => {
+        while (taken < parts.length) {
+          const i = taken++;
+          got.set(i, await decodePart(parts[i]));
+          hand();
+        }
+      }),
+    );
+    return;
+  }
+  const kept = (g) => idx[g].mono + 2 * (idx[g].frames - idx[g].mono);
   to.postMessage({ type: 'reserve', n: todo.map(kept).reduce((a, b) => a + b, 0) });
   const got = new Map();
   const left = [...todo];
-  let [next, done] = [0, 0];
+  let next = 0;
   const hand = () => {
     while (next < todo.length && got.has(todo[next])) {
       const g = todo[next++];
@@ -483,7 +525,7 @@ async function sendGroups(todo, to, progress) {
     }
   };
   await Promise.all(
-    (LITE ? [0, 1] : [0, 1, 2, 3]).map(async () => {
+    [0, 1, 2, 3].map(async () => {
       while (left.length) {
         const g = left.shift();
         got.set(g, await decodeGroup(g));
@@ -499,8 +541,18 @@ async function fetchRecordings(primary, drums) {
     await tables();
     worker.postMessage({ type: 'pack', meta: rec.meta.slice(0) });
   }
-  const todo = groupsFor(primary, drums).filter((g) => !rec.have.has(g));
+  const need = groupsFor(primary, drums);
+  let todo = need.filter((g) => !rec.have.has(g));
   if (!todo.length) return;
+  // a phone's memory: with these it would hold too much, so everything is
+  // let go and what the music now needs fetched again (the browser kept
+  // the files; what was playing falls quiet till it is in)
+  const held = (gs) => gs.reduce((a, g) => a + rec.index.groups[g].lite, 0);
+  if (LITE && held([...rec.have]) + held(todo) > LITE_MOST && [...rec.have].some((g) => !need.includes(g))) {
+    worker.postMessage({ type: 'forget' });
+    rec.have.clear();
+    todo = need;
+  }
   const mb = todo.map((g) => rec.index.groups[g][LITE ? 'lite_bytes' : 'bytes'] ?? 0).reduce((a, b) => a + b, 0) / 1e6;
   const of = `${todo.length} groups${mb ? `, ${mb.toFixed(1)} MB` : ''}`;
   say(`loading recordings: 0 of ${of}`);
